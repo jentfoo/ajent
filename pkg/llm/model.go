@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"slices"
 	"strings"
 )
 
@@ -50,9 +49,6 @@ func (m Model) ShortName() string {
 	}
 	return m.Key()
 }
-
-// Accepts reports whether the model takes the given input kind.
-func (m Model) Accepts(mod Modality) bool { return slices.Contains(m.Input, mod) }
 
 // Display returns the name to show, falling back to the id.
 func (m Model) Display() string {

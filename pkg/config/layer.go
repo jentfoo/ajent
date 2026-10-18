@@ -81,7 +81,7 @@ func foldVal(dst *object, over *object, path string, name string, src map[string
 			if ok && dv.isObject() {
 				// a JSON null cannot merge with an object; dropping every default
 				// beneath it silently is worse than ignoring the key
-				if ov.isNull() {
+				if ov != nil && ov.k == kindScalar && string(ov.raw) == "null" {
 					continue
 				}
 				prefix := childPath + "." // replaced subtree leaves no stale paths

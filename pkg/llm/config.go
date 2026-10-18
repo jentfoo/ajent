@@ -148,12 +148,6 @@ var flavorNames = enumNames[Flavor]{
 	FlavorUnknown:     nameUnknown,
 }
 
-// flavorChoices are the flavor values a provider entry may name, in enum order.
-func flavorChoices() []string {
-	return bulk.SliceFilterInPlace(func(name string) bool { return name != "" && name != nameUnknown },
-		flavorNames.sorted())
-}
-
 // String returns the configuration name of the flavor.
 func (f Flavor) String() string { return flavorNames.name(f) }
 
@@ -357,8 +351,11 @@ func LoadFile(path string) (File, []string, error) {
 	for _, k := range config.DuplicateKeys(data) {
 		warnings = append(warnings, fmt.Sprintf("%s: duplicate key %q, the last one wins", path, k))
 	}
-	if w := secretWarning(path, f); w != "" {
-		warnings = append(warnings, w)
+	// a permissive mode on a file holding a literal key is worth a warning
+	if slices.ContainsFunc(bulk.MapValuesSlice(f.Providers), func(p ProviderConfig) bool { return p.APIKey != "" }) {
+		if w := config.CheckSecretPerms(path); w != "" {
+			warnings = append(warnings, w)
+		}
 	}
 	return f, warnings, nil
 }
@@ -438,9 +435,12 @@ func compatWarnings(o *Compat, d Dialect) []string {
 			continue
 		}
 		allowed := strings.Split(dialects, ",")
-		name := compatJSONName(f)
+		jsonName, _, _ := strings.Cut(f.Tag.Get("json"), ",") // a field's json name for the warning
+		if jsonName == "" || jsonName == "-" {
+			jsonName = f.Name
+		}
 		if d == DialectUnset || !slices.Contains(allowed, d.String()) {
-			out = append(out, fmt.Sprintf("compat field %q is ignored by dialect %s", name, d))
+			out = append(out, fmt.Sprintf("compat field %q is ignored by dialect %s", jsonName, d))
 		}
 	}
 	return out
@@ -473,21 +473,4 @@ func compatFieldSet(v reflect.Value, i int) bool {
 	default:
 		return !fv.IsZero()
 	}
-}
-
-// compatJSONName returns a field's json name for warning messages.
-func compatJSONName(f reflect.StructField) string {
-	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
-	if name == "" || name == "-" {
-		return f.Name
-	}
-	return name
-}
-
-// secretWarning reports a permissive mode on a file holding a literal key.
-func secretWarning(path string, f File) string {
-	if slices.ContainsFunc(bulk.MapValuesSlice(f.Providers), func(p ProviderConfig) bool { return p.APIKey != "" }) {
-		return config.CheckSecretPerms(path)
-	}
-	return ""
 }

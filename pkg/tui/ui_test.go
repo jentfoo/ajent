@@ -1656,7 +1656,7 @@ func TestUIOnEditFiresAsyncAndExpandsPastes(t *testing.T) {
 	// a large paste is stored under a placeholder, the editor holds the tiny marker
 	big := strings.Repeat("a", 3000)
 	u.mu.Lock()
-	ph := pastePlaceholder(big, 1)
+	ph := "[pasted 1 lines #1]" // the marker a one-line paste gets
 	u.pastes = []pasteEntry{{placeholder: ph, content: big}}
 	u.editor.Insert(ph) // what the buffer actually contains
 	u.notifyEditLocked(u.expandPastes(u.editor.Value()))

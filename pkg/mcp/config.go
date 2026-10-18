@@ -58,7 +58,13 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 	merged := make(map[string]ServerConfig)
 	var warnings []string
 
-	for _, path := range mcpFiles(workspace) {
+	// user config first, then project: merge order means project wins
+	var paths []string
+	if dir, err := config.Dir(); err == nil {
+		paths = append(paths, filepath.Join(dir, "mcp.json"))
+	}
+	paths = append(paths, filepath.Join(config.ProjectDir(workspace), "mcp.json"))
+	for _, path := range paths {
 		servers, warns, err := loadOne(path)
 		if err != nil {
 			return nil, warnings, err
@@ -79,15 +85,6 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 		}
 	}
 	return merged, warnings, nil
-}
-
-// mcpFiles returns the user then project config paths, in merge order.
-func mcpFiles(workspace string) []string {
-	var paths []string
-	if dir, err := config.Dir(); err == nil {
-		paths = append(paths, filepath.Join(dir, "mcp.json"))
-	}
-	return append(paths, filepath.Join(config.ProjectDir(workspace), "mcp.json"))
 }
 
 // loadOne decodes a single mcp.json file following pkg/llm's LoadFile read path.
@@ -179,15 +176,6 @@ func expandVar(s string) (string, error) {
 		s = s[i+len("${env:")+end+1:]
 	}
 	return b.String(), nil
-}
-
-// NetworkKind returns the resolved transport kind for a network (url) server:
-// "http" or legacy "sse". Only meaningful when Command is empty.
-func (c ServerConfig) NetworkKind() string {
-	if c.Transport == TransportSSE {
-		return TransportSSE
-	}
-	return TransportHTTP
 }
 
 // validateServerName checks a server key: every bridged tool is named

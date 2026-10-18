@@ -23,41 +23,6 @@ func TestCursorTo(t *testing.T) {
 	}
 }
 
-func TestCursorUp(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name string
-		n    int
-		want string
-	}{
-		{name: "zero_is_noop", n: 0},
-		{name: "negative_is_noop", n: -1},
-		{name: "moves_up_n_rows", n: 3, want: "\x1b[3A"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, cursorUp(tc.n))
-		})
-	}
-}
-
-func TestCursorRight(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name string
-		n    int
-		want string
-	}{
-		{name: "zero_is_noop", n: 0},
-		{name: "moves_right_n_cols", n: 5, want: "\x1b[5C"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, cursorRight(tc.n))
-		})
-	}
-}
-
 func TestSgr(t *testing.T) {
 	t.Parallel()
 

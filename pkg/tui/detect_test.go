@@ -40,37 +40,42 @@ func TestToneFromEnv(t *testing.T) {
 	}
 }
 
-func TestParseBackground(t *testing.T) {
+// TestDetectToneLuminanceBoundary pins the relative-luminance classification at
+// its boundary, plus the keep-waiting behavior on unparseable specs.
+func TestDetectToneLuminanceBoundary(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		spec     string
-		expected Tone
-		valid    bool
+	for _, tc := range []struct {
+		name string
+		spec string
+		want Tone
 	}{
-		{"white_is_light", "rgb:ffff/ffff/ffff", ToneLight, true},
-		{"black_is_dark", "rgb:0000/0000/0000", ToneDark, true},
-		{"short_components", "rgb:ff/ff/ff", ToneLight, true},
-		{"solarized_light", "rgb:fdfd/f6f6/e3e3", ToneLight, true},
-		{"solarized_dark", "rgb:0000/2b2b/3636", ToneDark, true},
-		{"hex_form", "#ffffff", ToneLight, true},
-		{"short_hex_form", "#000", ToneDark, true},
-		{"trailing_space", "rgb:ffff/ffff/ffff ", ToneLight, true},
-		{"just_below_half_is_dark", "rgb:7f7f/7f7f/7f7f", ToneDark, true},
-		{"just_above_half_is_light", "rgb:8080/8080/8080", ToneLight, true},
-		{"missing_component", "rgb:ffff/ffff", ToneUnknown, false},
-		{"not_a_color", "rgb:zz/zz/zz", ToneUnknown, false},
-		{"unknown_prefix", "cmy:1/1/1", ToneUnknown, false},
-		{"empty", "", ToneUnknown, false},
-	}
-	for _, tc := range tests {
+		{"just_below_half_is_dark", "rgb:7f7f/7f7f/7f7f", ToneDark},
+		{"just_above_half_is_light", "rgb:8080/8080/8080", ToneLight},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			tone, ok := parseBackground(tc.spec)
-			assert.Equal(t, tc.valid, ok)
-			assert.Equal(t, tc.expected, tone)
+			u, pw, _ := newReplyUI(t)
+			swapEnv(t, nil)
+
+			done := make(chan Tone, 1)
+			go func() { done <- u.DetectTone() }()
+			feed(pw, "\x1b]11;"+tc.spec+"\x07")
+
+			assert.Equal(t, tc.want, <-done)
 		})
 	}
+
+	t.Run("unparseable_spec_keeps_waiting", func(t *testing.T) {
+		u, pw, _ := newReplyUI(t)
+		swapEnv(t, nil)
+
+		done := make(chan Tone, 1)
+		go func() { done <- u.DetectTone() }()
+		feed(pw, "\x1b]11;cmy:1/1/1\x07") // not a color spec: no verdict yet
+		feed(pw, "\x1b]11;rgb:ffff/ffff/ffff\x07")
+
+		assert.Equal(t, ToneLight, <-done)
+	})
 }
 
 func TestDetectTone(t *testing.T) {

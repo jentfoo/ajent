@@ -171,7 +171,13 @@ func (c *uiConsole) SaveSetting(layer, key string, value any) error {
 	return nil
 }
 
-func (c *uiConsole) SessionName() string { return c.sess.name() }
+func (c *uiConsole) SessionName() string {
+	entries, ok := sessionEntries(c.sess)
+	if !ok {
+		return ""
+	}
+	return session.NameOf(entries)
+}
 
 func (c *uiConsole) SetSessionName(name string) error {
 	if c.sess == nil || c.rec == nil {

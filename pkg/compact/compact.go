@@ -57,7 +57,15 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	// plan, so this pass recomputes cumulatively from the unreduced branch.
 	prior, priorIdx, has, perr := session.NewestCompaction(branch)
 	if has {
-		prior = normalisePrior(branch, prior, priorIdx)
+		// resolve a summary-only prior to an explicit FirstKeptEntryID so carrying it
+		// into the new compaction entry cannot re-cut at the new entry's own position,
+		// dropping everything between the two. With no following message entry,
+		// summary-only semantics stay correct.
+		if prior.Summary != "" && prior.FirstKeptEntryID == "" {
+			if i := slices.IndexFunc(branch[priorIdx+1:], func(e session.Entry) bool { return e.Type == session.TypeMessage }); i >= 0 {
+				prior.FirstKeptEntryID = branch[priorIdx+1+i].ID
+			}
+		}
 	}
 	priorCut := session.CutIndex(branch, prior)
 	if priorCut < 0 { // a missing cut means the effective context is unrecoverable
@@ -72,7 +80,10 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	if !ok || view.spanTokens(priorCut, band) < minSpanTokens {
 		return nil, nil
 	}
-	firstKept := firstKeptID(branch, band)
+	var firstKept string
+	if band >= 0 && band < len(branch) && branch[band].Type == session.TypeMessage {
+		firstKept = branch[band].ID
+	}
 	if firstKept == "" { // the band opens on an assistant message, providers reject otherwise
 		return nil, errors.New("compact: a cut needs a kept message entry")
 	}
@@ -104,35 +115,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	}
 	cd := session.CompactionData{Summary: summary, FirstKeptEntryID: firstKept, Reduce: &res.Reduce}
 	res.After = tokensFor(branch, cd, model, opts.Retain, opts.Base, opts.Resolve)
-	return finish(res)
-}
-
-// normalisePrior resolves a summary-only prior compaction to an explicit
-// FirstKeptEntryID so carrying it into a new compaction entry cannot re-cut at the
-// new entry's own position, dropping everything between the two. It returns cd
-// unchanged when no message entry follows the compaction, where summary-only
-// semantics stay correct.
-func normalisePrior(branch []session.Entry, cd session.CompactionData, idx int) session.CompactionData {
-	if cd.Summary == "" || cd.FirstKeptEntryID != "" {
-		return cd
-	}
-	if i := slices.IndexFunc(branch[idx+1:], func(e session.Entry) bool { return e.Type == session.TypeMessage }); i >= 0 {
-		cd.FirstKeptEntryID = branch[idx+1+i].ID
-	}
-	return cd
-}
-
-// firstKeptID returns the entry id the band starts at.
-func firstKeptID(branch []session.Entry, band int) string {
-	if band < 0 || band >= len(branch) || branch[band].Type != session.TypeMessage {
-		return ""
-	}
-	return branch[band].ID
-}
-
-// finish returns res only when the plan measurably shrinks the next request.
-func finish(res *Result) (*Result, error) {
-	if res.After < res.Before {
+	if res.After < res.Before { // the plan must measurably shrink the next request
 		return res, nil
 	}
 	return nil, nil // nothing saved, or it would grow context

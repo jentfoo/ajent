@@ -347,10 +347,6 @@ func (a *Accounting) rollUp(key string, u llm.Usage) {
 // caller holds a.mu.
 func addSpend(a *Accounting, key string, u llm.Usage) {
 	a.total.Add(u)
-	addByModel(a, key, u)
-}
-
-func addByModel(a *Accounting, key string, u llm.Usage) {
 	if a.byModel == nil {
 		a.byModel = make(map[string]llm.Usage)
 	}

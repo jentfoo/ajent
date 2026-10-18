@@ -61,7 +61,10 @@ func copyEntryText(ti treeIndex, id string) string {
 // or until every call has its result, whichever comes first.
 func turnMessages(ti treeIndex, e Entry, m llm.Message) []llm.Message {
 	msgs := []llm.Message{m}
-	if !messageHasCalls(m) {
+	if !slices.ContainsFunc(m.Content, func(b llm.Block) bool {
+		_, ok := b.(llm.ToolCallBlock)
+		return ok
+	}) {
 		return msgs
 	}
 	for id := ti.firstChild(e.ID); id != ""; id = ti.firstChild(id) {
@@ -97,35 +100,14 @@ func resultText(ti treeIndex, e Entry, m llm.Message) string {
 		}
 		chain = append(chain, md.Message)
 		need = bulk.SliceFilterInPlace(func(callID string) bool {
-			return !messageHasCall(md.Message, callID)
+			return !slices.ContainsFunc(md.Message.Content, func(b llm.Block) bool {
+				call, ok := b.(llm.ToolCallBlock)
+				return ok && call.ID == callID
+			})
 		}, need)
 	}
 	slices.Reverse(chain)
 	return llm.CopyResults(append(chain, m), len(chain))
-}
-
-// messageHasCalls reports whether m carries any tool call.
-func messageHasCalls(m llm.Message) bool {
-	return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
-		_, ok := b.(llm.ToolCallBlock)
-		return ok
-	})
-}
-
-// messageHasCall reports whether m carries the tool call named callID.
-func messageHasCall(m llm.Message, callID string) bool {
-	return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
-		call, ok := b.(llm.ToolCallBlock)
-		return ok && call.ID == callID
-	})
-}
-
-// messageHasToolResult reports whether m carries the tool result named callID.
-func messageHasToolResult(m llm.Message, callID string) bool {
-	return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
-		res, ok := b.(llm.ToolResultBlock)
-		return ok && res.CallID == callID
-	})
 }
 
 // callsAnswered reports whether every call in the assistant message has a
@@ -137,7 +119,10 @@ func callsAnswered(call llm.Message, rest []llm.Message) bool {
 			continue
 		}
 		answered := slices.ContainsFunc(rest, func(m llm.Message) bool {
-			return messageHasToolResult(m, tc.ID)
+			return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
+				res, ok := b.(llm.ToolResultBlock)
+				return ok && res.CallID == tc.ID
+			})
 		})
 		if !answered {
 			return false

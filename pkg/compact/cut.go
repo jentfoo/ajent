@@ -102,7 +102,21 @@ func (v *branchView) spanTokens(lo, hi int) int {
 func (v *branchView) sentTokens(i int) int {
 	n := v.tokens(i)
 	md, ok := v.message(i)
-	if !ok || retainsThinking(v.retain, i, v.keepFrom, v.lastAssistant) {
+	if !ok {
+		return n
+	}
+	// whether entry i's thinking survives retention: llm's per-message rule in
+	// branch-index space
+	var keeps bool
+	switch v.retain {
+	case llm.RetainLastTurn:
+		keeps = i == v.lastAssistant
+	case llm.RetainWholeTurn:
+		keeps = i >= v.keepFrom
+	case llm.RetainAll:
+		keeps = true
+	}
+	if keeps {
 		return n
 	}
 	for _, blk := range md.Message.Content {
@@ -111,21 +125,6 @@ func (v *branchView) sentTokens(i int) int {
 		}
 	}
 	return n
-}
-
-// retainsThinking reports whether entry i's thinking survives retention,
-// mirroring llm's per-message rule in branch-index space.
-func retainsThinking(policy llm.RetainPolicy, i, keepFrom, lastAssistant int) bool {
-	switch policy {
-	case llm.RetainLastTurn:
-		return i == lastAssistant
-	case llm.RetainWholeTurn:
-		return i >= keepFrom
-	case llm.RetainAll:
-		return true
-	default:
-		return false
-	}
 }
 
 // countMessages reports how many message entries a span holds, for the notice.
@@ -149,17 +148,10 @@ func isStepStart(e session.Entry) bool {
 	return e.Decode(&md) == nil && md.Message.Role == llm.RoleAssistant
 }
 
-// isLivePrompt reports whether an entry is a real user prompt: typed by the user,
-// not a tool result and not system-injected context.
-func isLivePrompt(e session.Entry) bool {
-	if e.Type != session.TypeMessage {
-		return false
-	}
-	var md session.MessageData
-	if err := e.Decode(&md); err != nil || md.Injected {
-		return false
-	}
-	return md.Message.Role == llm.RoleUser && !llm.OnlyToolResults(md.Message.Content)
+// livePrompt reports whether a decoded message is a real user prompt: typed by
+// the user, not a tool result and not system-injected context.
+func livePrompt(md session.MessageData) bool {
+	return !md.Injected && md.Message.Role == llm.RoleUser && !llm.OnlyToolResults(md.Message.Content)
 }
 
 // verbatimCut returns the branch index the verbatim band starts at: the newest
@@ -204,7 +196,7 @@ func (v *branchView) withLivePrompt(cut, priorCut int) int {
 			continue // notices and setting changes sit between without breaking the pair
 		}
 		md, ok := v.message(i)
-		if ok && !md.Injected && md.Message.Role == llm.RoleUser && !llm.OnlyToolResults(md.Message.Content) {
+		if ok && livePrompt(md) {
 			return i
 		}
 		return cut

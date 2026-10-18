@@ -240,10 +240,10 @@ func modelRow(name, key string) settingsRow {
 func allRows() []settingsRow {
 	rows := []settingsRow{
 		{name: "Model", render: rowModel, edit: editModel},
-		{name: "Reasoning", render: rowReasoning, edit: editReasoning,
+		{name: "Reasoning", render: detailRow("Reasoning", "reasoning.level"), edit: editReasoning,
 			unavailable: reasoningUnavailable},
-		{name: "Reasoning retention", render: rowRetention, edit: editRetention},
-		{name: "Show thinking", render: rowThinking, edit: editThinking},
+		{name: "Reasoning retention", render: detailRow("Reasoning retention", "reasoning.retain"), edit: editRetention},
+		{name: "Show thinking", render: detailRow("Show thinking", "reasoning.hide"), edit: editThinking},
 		{name: "Tools", render: rowTools, edit: editTools},
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
 		intRow("Compaction verbatim steps", "compaction.minSteps", 1, 8),
@@ -252,7 +252,7 @@ func allRows() []settingsRow {
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
 		intRow("Sub-agent step limit", "subagent.maxSteps", 0, 10000),
-		{name: "Block images", render: rowImagesBlock, edit: editImagesBlock},
+		{name: "Block images", render: detailRow("Block images", "images.block"), edit: editImagesBlock},
 		themeRow(),
 		{name: "Tool limits",
 			render: func(_ Console) (string, string) { return "Tool limits", "edit per-tool output bounds" },
@@ -334,8 +334,9 @@ func rowModel(c Console) (string, string) {
 	return "Model", d
 }
 
-func rowReasoning(c Console) (string, string) {
-	return "Reasoning", detailOrDefault(c, "reasoning.level")
+// detailRow renders the setting's stored value under a fixed label.
+func detailRow(label, key string) func(Console) (string, string) {
+	return func(c Console) (string, string) { return label, detailOrDefault(c, key) }
 }
 
 // reasoningUnavailable reports why the Reasoning level cannot be edited: a model
@@ -348,16 +349,6 @@ func reasoningUnavailable(c Console) string {
 		return "only one level for this model"
 	}
 	return ""
-}
-func rowRetention(c Console) (string, string) {
-	return "Reasoning retention", detailOrDefault(c, "reasoning.retain")
-}
-func rowThinking(c Console) (string, string) {
-	return "Show thinking", detailOrDefault(c, "reasoning.hide")
-}
-
-func rowImagesBlock(c Console) (string, string) {
-	return "Block images", detailOrDefault(c, "images.block")
 }
 
 // editImagesBlock flips the image-reading gate. SetSessionSetting both records
@@ -390,7 +381,7 @@ func rowCompaction(c Console) (string, string) {
 		thr = fmt.Sprintf("%.0f%%", f*100)
 	}
 	return "Auto-compaction",
-		fmt.Sprintf("%s, %s  (%s)", boolWord(auto), thr, orDefault(asrc))
+		fmt.Sprintf("%s, %s  (%s)", onOffStr(jsonBool(auto)), thr, orDefault(asrc))
 }
 
 // editModel applies a pick through the model picker without persisting.
@@ -590,7 +581,7 @@ func orDefault(src string) string {
 	return src
 }
 
-func boolWord(raw json.RawMessage) string { return onOffStr(jsonBool(raw)) }
+// onOffStr renders a boolean the way the settings rows read.
 func onOffStr(b bool) string {
 	if b {
 		return "on"

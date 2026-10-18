@@ -317,8 +317,9 @@ func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	case <-j.done:
 		return m.claimResult(j), true
 	case <-timer.C:
-		// finish sets the status before close(done), so a timer in that window must claim
-		if j.finished() || j.terminal() {
+		// finish sets a final status before close(done), so checking the status
+		// covers both a landed and an in-flight completion; the timer must claim
+		if j.terminal() {
 			return m.claimResult(j), true
 		}
 		return j.snapshot(), false // still running, caller reads progress for the payload
@@ -335,7 +336,14 @@ func (m *Manager) claimResult(j *job) Job {
 	j.mu.Lock()
 	j.consumed = true
 	j.mu.Unlock()
-	m.claim(j.id) // poll response carries the result, no steer may repeat it
+	// mark delivered by this poll and drop the id from every delivery list, so no
+	// later steer repeats it and no later notice re-names it
+	one := []string{j.id}
+	m.mu.Lock()
+	m.pending = dropIDs(m.pending, one)
+	m.inFlight = dropIDs(m.inFlight, one)
+	m.noticeBatch = dropIDs(m.noticeBatch, one)
+	m.mu.Unlock()
 	return j.snapshot()
 }
 
@@ -484,7 +492,11 @@ func (m *Manager) enqueue(id string) {
 	}
 	batch := slices.Clone(m.noticeBatch)
 	m.mu.Unlock()
-	m.opts.Notice(noticeText(batch))
+	text := "Sub-agents " + strings.Join(batch, ", ") + " completed" // names the batch for the keyed UI notice
+	if len(batch) == 1 {
+		text = "Sub-agent " + batch[0] + " completed"
+	}
+	m.opts.Notice(text)
 }
 
 // Boundary returns one batched completion input for the step boundary, or nil.
@@ -589,17 +601,6 @@ func dropIDs(ids, drop []string) []string {
 	return bulk.SliceFilterInPlace(func(id string) bool { return !slices.Contains(drop, id) }, ids)
 }
 
-// claim drops an id whose result a poll is delivering from every delivery list, so
-// no later steer repeats it and no later notice re-names it.
-func (m *Manager) claim(id string) {
-	m.mu.Lock()
-	one := []string{id}
-	m.pending = dropIDs(m.pending, one)
-	m.inFlight = dropIDs(m.inFlight, one)
-	m.noticeBatch = dropIDs(m.noticeBatch, one)
-	m.mu.Unlock()
-}
-
 // Interrupted reports that the parent turn was interrupted: queued completion
 // steers were dropped without their Delivered firing, so the in-flight marks
 // must release or every later batch waits behind a delivery that never comes.
@@ -608,14 +609,6 @@ func (m *Manager) Interrupted() {
 	m.mu.Lock()
 	m.inFlight = nil
 	m.mu.Unlock()
-}
-
-// noticeText names a completed batch for the keyed UI notice.
-func noticeText(ids []string) string {
-	if len(ids) == 1 {
-		return "Sub-agent " + ids[0] + " completed"
-	}
-	return "Sub-agents " + strings.Join(ids, ", ") + " completed"
 }
 
 // completionNotice is the steer text naming completed sub-agents. The [tool]
@@ -703,16 +696,6 @@ func (m *Manager) publishStatus() {
 		short = fmt.Sprintf("sub %d", live)
 	}
 	fn("subagents: "+strings.Join(parts, ", "), short)
-}
-
-// model returns the configured child model or the session's current one.
-func (m *Manager) model() llm.Model {
-	return m.opts.Model()
-}
-
-// reasoning inherits the parent's reasoning configuration verbatim.
-func (m *Manager) reasoning() llm.ReasoningConfig {
-	return m.opts.Reasoning()
 }
 
 // pollProgress reads a still-pending job's wait or active runtime and child context

@@ -68,7 +68,16 @@ func New(opts Options) *http.Client {
 	if v, ok := clientCache.Load(k); ok {
 		return v.(*http.Client)
 	}
-	v, _ := clientCache.LoadOrStore(k, newClient(buildTransport(k)))
+	v, _ := clientCache.LoadOrStore(k, newClient(&http.Transport{
+		Proxy:                 http.ProxyFromEnvironment, // honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY
+		DialContext:           (&net.Dialer{Timeout: k.connect}).DialContext,
+		TLSHandshakeTimeout:   k.tls,
+		ResponseHeaderTimeout: k.header,
+		ForceAttemptHTTP2:     true,
+		IdleConnTimeout:       pooledConnTimeout,
+		MaxIdleConns:          defaultMaxIdleConns,
+		MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
+	}))
 	return v.(*http.Client)
 }
 
@@ -79,19 +88,6 @@ func newClient(tr http.RoundTripper) *http.Client {
 		// a credential bearing request against a host we did not choose
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	} // no Timeout, it would kill a long stream
-}
-
-func buildTransport(k transportKey) *http.Transport {
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment, // honours HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-		DialContext:           (&net.Dialer{Timeout: k.connect}).DialContext,
-		TLSHandshakeTimeout:   k.tls,
-		ResponseHeaderTimeout: k.header,
-		ForceAttemptHTTP2:     true,
-		IdleConnTimeout:       pooledConnTimeout,
-		MaxIdleConns:          defaultMaxIdleConns,
-		MaxIdleConnsPerHost:   defaultMaxIdleConnsPerHost,
-	}
 }
 
 // durOr returns d as a duration, or alt when unset. An explicit zero is

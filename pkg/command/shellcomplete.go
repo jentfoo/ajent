@@ -46,14 +46,10 @@ func (c *Completer) shellComplete(ctx completeCtx) (int, []tui.Completion) {
 		if token == "" {
 			return ctx.pos, nil // every command on the system is not a useful list
 		}
-		return offer(tokStart, ctx.pos, textCompletions(shellNameMatches(token)))
+		return offer(tokStart, ctx.pos, textCompletions(
+			bulk.SliceFilter(func(n string) bool { return strings.HasPrefix(n, token) }, shellNames())))
 	}
 	return offer(tokStart, ctx.pos, c.paths.ShellCandidates(token))
-}
-
-// shellNameMatches returns the known command names starting with prefix.
-func shellNameMatches(prefix string) []string {
-	return bulk.SliceFilter(func(n string) bool { return strings.HasPrefix(n, prefix) }, shellNames())
 }
 
 // shellCmdStart returns the cell where a `!` line's shell text begins.

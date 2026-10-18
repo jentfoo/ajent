@@ -141,7 +141,12 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 	// answer window. Adaptive models replace the budget with an effort instead.
 	var budget int
 	if on && !caps.ForceAdaptiveThinking {
-		maxTokens += levelBudgetFor(req, level)
+		explicit := req.Reasoning.Budget // else the model's configured budget for the level
+		if explicit > 0 {
+			maxTokens += explicit
+		} else {
+			maxTokens += req.Model.Caps.Budgets[level]
+		}
 		if req.Model.MaxOutput > 0 {
 			maxTokens = min(maxTokens, req.Model.MaxOutput)
 		}
@@ -190,15 +195,6 @@ func buildAnthropicBody(req Request) ([]byte, error) {
 		applyCacheBreakpoints(&body, req.Cache.KeepLast, caps.LongCache, caps.CacheControlOnTools)
 	}
 	return json.Marshal(body)
-}
-
-// levelBudgetFor returns the request's explicit reasoning budget, or the model's
-// configured budget for the level.
-func levelBudgetFor(req Request, l Level) int {
-	if req.Reasoning.Budget > 0 {
-		return req.Reasoning.Budget
-	}
-	return req.Model.Caps.Budgets[l]
 }
 
 // thinkingBudget returns the reasoning token budget for a resolved level, or zero
@@ -572,24 +568,19 @@ func anthropicClassifier(provider string) func(int, []byte) error {
 			if matchesOverflow(msg, FlavorAnthropic) {
 				return err.Overflow()
 			}
-			err.Hint = anthropicCompatHint(msg)
+			// name the compat flag a rejection asks for: these two default to the
+			// value newer models reject, and the provider's message never mentions
+			// the setting that would fix it
+			l := strings.ToLower(msg)
+			switch {
+			case strings.Contains(l, "temperature"):
+				err.Hint = `set compat.supportsTemperature to false for this model`
+			case strings.Contains(l, "thinking"), strings.Contains(l, "effort"):
+				err.Hint = `set compat.forceAdaptiveThinking to true for this model`
+			}
 		}
 		return err
 	}
-}
-
-// anthropicCompatHint names the compat flag a rejection is asking for. These two
-// default to the value newer models reject, and the provider's message never
-// mentions the setting that would fix it.
-func anthropicCompatHint(msg string) string {
-	l := strings.ToLower(msg)
-	switch {
-	case strings.Contains(l, "temperature"):
-		return `set compat.supportsTemperature to false for this model`
-	case strings.Contains(l, "thinking"), strings.Contains(l, "effort"):
-		return `set compat.forceAdaptiveThinking to true for this model`
-	}
-	return ""
 }
 
 // anthropicStream decodes a Messages API event stream.

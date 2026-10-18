@@ -10,8 +10,6 @@ type ringLog struct {
 	max int
 }
 
-func newRingLog(max int) *ringLog { return &ringLog{max: max} }
-
 // add appends a line, dropping the oldest once at capacity.
 func (l *ringLog) add(line string) {
 	l.mu.Lock()

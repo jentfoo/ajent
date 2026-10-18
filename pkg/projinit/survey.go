@@ -96,7 +96,7 @@ func codeSlices(ctx context.Context, cwd string) [][]string {
 	out := make([][]string, n)
 	load := make([]int, n)
 	for _, u := range us {
-		i := leastLoaded(load)
+		i := slices.Index(load, slices.Min(load)) // the smallest bucket
 		out[i] = append(out[i], u.label())
 		load[i] += u.count
 	}
@@ -213,11 +213,6 @@ func surveyable(files []string) []string {
 		_, owned := ownedElsewhere[f]
 		return !owned && !strings.HasPrefix(f, "README")
 	}, files)
-}
-
-// leastLoaded returns the index of the smallest bucket.
-func leastLoaded(load []int) int {
-	return slices.Index(load, slices.Min(load))
 }
 
 // isFile reports whether path exists and is a regular file.

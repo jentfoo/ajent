@@ -32,17 +32,6 @@ type pumpLine struct {
 	wake bool
 }
 
-// submittedEcho returns a dispatched prompt line's echo: blank input stays
-// silent (an image-only turn renders its own row), everything else echoes
-// verbatim. Commands and shell lines never reach the pump as prompts, so no
-// re-classification happens here.
-func submittedEcho(msg string) string {
-	if strings.TrimSpace(msg) == "" {
-		return ""
-	}
-	return msg
-}
-
 func submitPrompt(st *agent.State, editSinks []agent.Sink, est int, push func()) {
 	if len(editSinks) == 0 {
 		return
@@ -73,12 +62,6 @@ func newStartState(committed bool) *startState {
 	s := &startState{}
 	s.committed.v.Store(committed)
 	return s
-}
-
-// mark records a dispatched prompt, committing the tool block with it.
-func (s *startState) mark() {
-	s.dispatched.mark()
-	s.committed.mark()
 }
 
 // runPump serves submitted lines until ctx (appRoot) is canceled. The pump
@@ -192,12 +175,16 @@ func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (age
 	for _, n := range res.Notices {
 		warn(n)
 	}
+	echo := line.rest // blank stays silent: an image-only turn renders its own row
+	if strings.TrimSpace(echo) == "" {
+		echo = ""
+	}
 	return agent.Input{
 		Text:     res.Text,
 		Blocks:   line.blocks, // clipboard images ride after the text
 		After:    res.Run,
 		Prepared: true, // expanded here, the append seam must not re-expand
-	}, submittedEcho(line.rest), res.Est // blank stays silent: an image-only turn renders its own row
+	}, echo, res.Est
 }
 
 func submitEstimate(in agent.Input, pending int) int {
@@ -256,7 +243,8 @@ func (d *drainWaiter) wait(timeout time.Duration) {
 // startDrain runs inputs as the turn goroutine, its exit observable on drain.
 func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, starts *startState, hooks planHooks, drain *drainWaiter) {
 	ui.SetIdle(false)
-	starts.mark()
+	starts.dispatched.mark() // record the dispatched prompt, committing the tool block with it
+	starts.committed.mark()
 	drain.launch(func() {
 		for {
 			err := ag.PromptBatch(ctx, inputs)

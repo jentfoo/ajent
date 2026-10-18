@@ -55,8 +55,8 @@ func gitInWorkTree(ctx context.Context, cwd string) bool {
 // run builds and drives one child agent, returning its final summary. It runs on
 // the job's own goroutine with a per-job cancellable context.
 func (m *Manager) run(ctx context.Context, j *job) (string, error) {
-	model := m.model() // resolved at spawn so /settings applies to the next job
-	ledger := j.tokens // child ledger created at Start, reused here and by poll payloads
+	model := m.opts.Model() // resolved at spawn so /settings applies to the next job
+	ledger := j.tokens      // child ledger created at Start, reused here and by poll payloads
 	// Child() pins the parent's model; rebase so window/reserve follow the child's own
 	ledger.SetWindow(model)
 
@@ -65,7 +65,7 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 
 	state := &agent.State{
 		Model:     model,
-		Reasoning: m.reasoning(),
+		Reasoning: m.opts.Reasoning(), // inherited verbatim from the parent
 		Tokens:    ledger,
 	}
 
@@ -78,8 +78,8 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		Sinks:               []agent.Sink{sink},
 		Env:                 m.opts.Env,
 		ProjectInstructions: m.opts.ProjectInstructions,
-		SystemSnippets:      childSnippets(inRepo),
-		MaxSteps:            m.opts.MaxSteps, // bounds a runaway investigation
+		SystemSnippets:      []string{childContract(inRepo)}, // the system snippet a child gets
+		MaxSteps:            m.opts.MaxSteps,                 // bounds a runaway investigation
 	})
 
 	if err := a.Prompt(ctx, agent.Input{Text: taskPrompt(j.task, j.instructions)}); err != nil {
@@ -95,7 +95,11 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		sum = llm.JoinText(last.Content)
 	}
 	for attempt := 0; needsNudge(sum, last) && attempt < maxContinueAttempts; attempt++ {
-		if err := a.Prompt(ctx, agent.Input{Text: nudgeFor(last)}); err != nil {
+		wrap := continueNudge // a cut-off message gets the truncation variant instead
+		if truncated(last) {
+			wrap = truncatedNudge
+		}
+		if err := a.Prompt(ctx, agent.Input{Text: wrap}); err != nil {
 			return "", err
 		}
 		if ctx.Err() != nil {
@@ -156,10 +160,7 @@ func bestThinking(msgs []llm.Message) string {
 		if m.Role != llm.RoleAssistant {
 			continue // nudge inputs and tool-result turns sit between the answer turns
 		}
-		if slices.ContainsFunc(m.Content, func(b llm.Block) bool {
-			_, ok := b.(llm.ToolCallBlock)
-			return ok
-		}) {
+		if hasToolCall(m) {
 			break // only trailing answer turns qualify, never mid-investigation reasoning
 		}
 		if t := thinkingText(m); len(t) > len(best) {

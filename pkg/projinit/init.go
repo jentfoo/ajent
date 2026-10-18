@@ -107,7 +107,11 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	started, ids, failed := r.startAll(ctx, start, tasks, run)
 	before = append(before, started...)
 	if len(ids) == 0 {
-		return agent.Input{}, startError(failed)
+		// distinguish spawns that were refused from tools that were never there
+		if len(failed) == 0 {
+			return agent.Input{}, ErrNoSubAgents
+		}
+		return agent.Input{}, fmt.Errorf("%w: %s", ErrNoneStarted, strings.Join(failed, "; "))
 	}
 	if err := ctx.Err(); err != nil { // cancelled mid-spawn, so the counts would mislead
 		return agent.Input{}, err
@@ -133,15 +137,6 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 		infos = append(infos, agent.MessageInfo{Message: m})
 	}
 	return agent.Input{Text: text, Before: infos, Injected: true}, nil
-}
-
-// startError distinguishes spawns that were refused from tools that were never
-// there, so the notice names what actually went wrong.
-func startError(failed []string) error {
-	if len(failed) == 0 {
-		return ErrNoSubAgents
-	}
-	return fmt.Errorf("%w: %s", ErrNoneStarted, strings.Join(failed, "; "))
 }
 
 // readDocs does one real read per README and any existing AGENTS.md, reporting
@@ -191,7 +186,11 @@ func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []surveyTa
 			ids = append(ids, id)
 			r.opts.Started(id)
 		default: // a refused spawn (denied, bad child model) is not a missing tool
-			failed = append(failed, task.label+" ("+resultText(res)+")")
+			refused := llm.JoinText(res.Content)
+			if refused == "" {
+				refused = "no id returned"
+			}
+			failed = append(failed, task.label+" ("+refused+")")
 		}
 	}
 	return msgs, ids, failed
@@ -273,14 +272,6 @@ func runOf(id string) int64 {
 		return 0
 	}
 	return n
-}
-
-// resultText joins a tool result's text blocks, for reporting a refusal.
-func resultText(res agent.ToolResult) string {
-	if s := llm.JoinText(res.Content); s != "" {
-		return s
-	}
-	return "no id returned"
 }
 
 // detail reads one key from a tool result's Details map.

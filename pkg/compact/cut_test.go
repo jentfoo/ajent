@@ -216,6 +216,18 @@ func countSteps(branch []session.Entry) int {
 	return n
 }
 
+// isLivePrompt reports whether an entry is a real user prompt.
+func isLivePrompt(e session.Entry) bool {
+	if e.Type != session.TypeMessage {
+		return false
+	}
+	var md session.MessageData
+	if err := e.Decode(&md); err != nil {
+		return false
+	}
+	return livePrompt(md)
+}
+
 func TestVerbatimCutFuzz(t *testing.T) {
 	if testing.Short() {
 		t.Skip("-short mode")

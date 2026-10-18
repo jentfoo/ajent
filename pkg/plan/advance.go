@@ -183,7 +183,13 @@ func (c *Controller) beginReviewLocked(ctx context.Context) agent.Input {
 // implementKickoffText returns the current round's implementation kickoff.
 // Caller holds mu.
 func (c *Controller) implementKickoffText() string {
-	return implementKickoff(c.approvedPlan, latestRound(c.revisionRounds))
+	// the most recent revision instructions, empty on round one
+	rounds := c.revisionRounds
+	latest := ""
+	if len(rounds) > 0 {
+		latest = rounds[len(rounds)-1]
+	}
+	return implementKickoff(c.approvedPlan, latest)
 }
 
 // reviewKickoffText returns the review kickoff over live git state. Caller holds mu.
@@ -237,14 +243,6 @@ func (c *Controller) stalledReviewerLocked(ctx context.Context) (agent.Input, bo
 		c.stopLocked("plan workflow complete")
 	}
 	return agent.Input{}, false
-}
-
-// latestRound returns the most recent revision instructions, empty on round one.
-func latestRound(rounds []string) string {
-	if len(rounds) == 0 {
-		return ""
-	}
-	return rounds[len(rounds)-1]
 }
 
 // kickoffInput wraps one round of workflow-authored turn text. Prepared marks it

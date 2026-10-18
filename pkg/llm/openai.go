@@ -83,7 +83,7 @@ func buildResponsesBody(req Request) ([]byte, error) {
 	}
 	if len(req.Tools) > 0 {
 		// deferred tools load via injected items, not the top-level list
-		body.Tools = responsesTools(immediateResponsesTools(req.Tools), caps)
+		body.Tools = responsesTools(bulk.SliceFilter(func(t ToolSchema) bool { return !t.Deferred }, req.Tools), caps)
 		if caps.ToolChoice {
 			body.ToolChoice = responsesToolChoice(req.ToolChoice)
 		}
@@ -225,7 +225,7 @@ func responsesItems(m Message, caps Capabilities, schemaByName map[string]ToolSc
 			// else nothing replayable: an id alone cannot resolve with store:false
 		case ToolCallBlock:
 			flushMessage()
-			callID, itemID := cutToolCallID(v.ID)
+			callID, itemID, _ := strings.Cut(v.ID, "|") // the piped id splits into call and item parts
 			if !strings.HasPrefix(itemID, "fc_") {
 				itemID = "" // the API rejects a function_call id in any other form
 			}
@@ -338,11 +338,6 @@ func responsesTools(tools []ToolSchema, caps Capabilities) []respTool {
 	return out
 }
 
-// immediateResponsesTools drops load-on-demand tools from the top-level list.
-func immediateResponsesTools(tools []ToolSchema) []ToolSchema {
-	return bulk.SliceFilter(func(t ToolSchema) bool { return !t.Deferred }, tools)
-}
-
 // responsesToolChoice renders the tool choice, nil when the default applies.
 func responsesToolChoice(tc ToolChoice) any {
 	switch tc.Mode {
@@ -398,12 +393,6 @@ func shortenTextID(id string) string {
 		return "msg_" + shortHash(id)
 	}
 	return id
-}
-
-// cutToolCallID splits the piped tool-call id into its call and item parts.
-func cutToolCallID(id string) (callID, itemID string) {
-	callID, itemID, _ = strings.Cut(id, "|")
-	return callID, itemID
 }
 
 // marshalMerged marshals a body and folds configured extra keys over it.

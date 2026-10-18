@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-analyze/bulk"
+	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -123,7 +124,7 @@ func (m *Manager) newServer(name string, cfg ServerConfig) *server {
 		cfg:    cfg,
 		regEra: cfg,
 		source: "mcp: " + name,
-		logs:   newRingLog(200),
+		logs:   &ringLog{max: 200},
 		notice: func(msg string, warn bool) {
 			m.opts.Notice("mcp "+name+": "+msg, warn)
 		},
@@ -142,7 +143,9 @@ func (m *Manager) serverByName(name string) *server {
 // (visible and toggleable in /tools). Safe to call more than once: it never re-dials.
 func (m *Manager) LoadOnFirstMessage(ctx context.Context) {
 	m.Preload() // start if not already running, idempotent, never re-dials
-	w := m.preloadWG()
+	m.mu.Lock()
+	w := m.preload // nil before Preload ran
+	m.mu.Unlock()
 	if w == nil {
 		return
 	}
@@ -261,8 +264,11 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 	cfg := s.config()
 	keep := m.captureKeep(s) // registrar call stays off s.mu
 	s.mu.Lock()
-	if s.reopenKeep != nil { // restore the pre-death split across a reconnect
-		mergeToolState(keep, s.reopenKeep)
+	if s.reopenKeep != nil { // restore the pre-death split across a reconnect:
+		// it wins over any current registrar split, and a name lives in exactly
+		// one set so overlaying is a union
+		maps.Copy(keep.enabled, s.reopenKeep.enabled)
+		maps.Copy(keep.disabled, s.reopenKeep.disabled)
 	}
 	s.mu.Unlock()
 
@@ -327,7 +333,7 @@ func (m *Manager) dial(ctx context.Context, name string, s *server, disc int) er
 	go m.watchServer(s, c)
 	// m.ctx, not the caller's: notification refresh outlives whoever connected
 	c.OnNotification(func(n mcp.JSONRPCNotification) { m.onNotification(m.ctx, s, n) })
-	s.diag("connected (" + c.Transport() + ")")
+	s.diag("connected (" + c.tran + ")")
 	return nil
 }
 
@@ -440,14 +446,6 @@ func (s *server) defsSnapshot() []ToolDef {
 	return slices.Clone(s.defs)
 }
 
-// preloadWG returns the in-flight preload waitgroup, or nil before Preload ran.
-func (m *Manager) preloadWG() *sync.WaitGroup {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.preload
-}
-
 // impliedEnabled reports whether cfg leaves name enabled before any live /tools
 // toggle. A recorded tools.enabled is an explicit enablement authoritative over
 // config (an empty set disables everything); without one, config governs the
@@ -499,13 +497,6 @@ func (m *Manager) captureKeep(s *server) *toolState {
 	defer s.regMu.Unlock()
 
 	return m.captureLive(s.source, s.regEra)
-}
-
-// mergeToolState overlays src onto dst, so a pre-death split wins over any
-// current registrar split. A name lives in exactly one set, so this is a union.
-func mergeToolState(dst, src *toolState) {
-	maps.Copy(dst.enabled, src.enabled)
-	maps.Copy(dst.disabled, src.disabled)
 }
 
 // Disconnect closes and unregisters a server without removing its config.
@@ -601,43 +592,28 @@ func (m *Manager) applyConfig(ctx context.Context, s *server, sc ServerConfig) {
 	s.mu.Lock()
 	old, c := s.cfg, s.c
 	s.cfg = sc
-	if configChanged(old, sc) {
+	// DeepEqual, not field lists: Enabled is a fresh *bool per load, and a new
+	// ServerConfig field must not silently miss the comparison. A reload with an
+	// untouched server keeps its warning dedupe.
+	if !reflect.DeepEqual(old, sc) {
 		s.warned = nil // an edit may fix or re-break a tool, so each state deserves a fresh notice
 	}
 	s.mu.Unlock()
 	if c == nil { // the next connect picks the new config up whole
 		return
 	}
-	if filterChanged(old, sc) { // independent of the transport: applies against the running process
+	// filter changes apply against the running process, independent of the transport
+	if old.Timeout != sc.Timeout || disabledByConfig(old) != disabledByConfig(sc) ||
+		!slices.Equal(old.Tools.Allow, sc.Tools.Allow) || !slices.Equal(old.Tools.Deny, sc.Tools.Deny) ||
+		!slices.Equal(old.ExcludeTools, sc.ExcludeTools) || !slices.Equal(old.ReadOnly, sc.ReadOnly) {
 		// keep holds deliberate toggles only, so pre-reload defaults cannot pin over the new config
 		m.rediscan(ctx, s, m.captureKeep(s))
 	}
-	if connectionChanged(old, sc) {
+	// transport edits can only take effect on a new connection
+	if old.Command != sc.Command || old.URL != sc.URL || old.Transport != sc.Transport ||
+		!slices.Equal(old.Args, sc.Args) || !maps.Equal(old.Env, sc.Env) || !maps.Equal(old.Headers, sc.Headers) {
 		s.note("connection config changed; applies on the next connect, or now with /mcp disconnect then /mcp connect", true)
 	}
-}
-
-// connectionChanged reports whether a config edit can only take effect on a new
-// transport.
-func connectionChanged(a, b ServerConfig) bool {
-	return a.Command != b.Command || a.URL != b.URL || a.Transport != b.Transport ||
-		!slices.Equal(a.Args, b.Args) || !maps.Equal(a.Env, b.Env) || !maps.Equal(a.Headers, b.Headers)
-}
-
-// configChanged reports whether two declarations differ at all, so a reload
-// with an untouched server keeps its warning dedupe. DeepEqual, not field
-// lists: Enabled is a fresh *bool per load, and a new ServerConfig field must
-// not silently miss the comparison.
-func configChanged(a, b ServerConfig) bool {
-	return !reflect.DeepEqual(a, b)
-}
-
-// filterChanged reports whether a config edit changes which tools register or how
-// they are called, so the live registration is stale.
-func filterChanged(a, b ServerConfig) bool {
-	return a.Timeout != b.Timeout || disabledByConfig(a) != disabledByConfig(b) ||
-		!slices.Equal(a.Tools.Allow, b.Tools.Allow) || !slices.Equal(a.Tools.Deny, b.Tools.Deny) ||
-		!slices.Equal(a.ExcludeTools, b.ExcludeTools) || !slices.Equal(a.ReadOnly, b.ReadOnly)
 }
 
 // disabledByConfig reports whether a config explicitly turns its server's tools off.
@@ -940,11 +916,11 @@ func (m *Manager) watchServer(s *server, c *Client) {
 	if c == nil {
 		return
 	}
-	r := c.stderr()
-	if r == nil { // network server: no process to watch for death
+	stderr, ok := mcpclient.GetStderr(c.c)
+	if !ok || stderr == nil { // network server: no process to watch for death
 		return
 	}
-	br := bufio.NewReader(r)
+	br := bufio.NewReader(stderr)
 	for {
 		line, err := br.ReadBytes('\n') // one log entry per line, unbounded so nothing is dropped
 		if len(line) > 0 {

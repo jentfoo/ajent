@@ -2,11 +2,22 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/stretchr/testify/assert"
 )
+
+// summaryLine rebuilds the collapse row commitSummary renders for h's hidden
+// tail, so tests pin the exact format the UI commits.
+func summaryLine(h *outputHead) string {
+	if n := h.hidden(); n > 0 {
+		return "… +" + strconv.Itoa(n) + " lines, " + strutil.HumanSize(int64(h.bytes))
+	}
+	return ""
+}
 
 func TestOutputHead(t *testing.T) {
 	t.Parallel()
@@ -19,7 +30,7 @@ func TestOutputHead(t *testing.T) {
 		}
 		assert.Equal(t, "line a\nline b\nline c\n", out.String())
 		assert.Zero(t, h.hidden())
-		assert.Empty(t, h.summary())
+		assert.Empty(t, summaryLine(&h))
 	})
 
 	t.Run("head_then_summary", func(t *testing.T) {
@@ -33,7 +44,7 @@ func TestOutputHead(t *testing.T) {
 			"0123456789\n0123456789\n", out.String())
 		assert.Equal(t, 2, h.hidden())
 		// bytes, never a token-style count: a size on the collapse row must not read as tokens
-		assert.Equal(t, "… +2 lines, 20b", h.summary())
+		assert.Equal(t, "… +2 lines, 20b", summaryLine(&h))
 	})
 
 	t.Run("partial_line_flush", func(t *testing.T) {
@@ -72,6 +83,6 @@ func TestOutputHead(t *testing.T) {
 		assert.Equal(t, "line 1\nline 2\nline 3\nline 4\nline 5\n"+
 			"line 6\nline 7\nline 8\n", b.String())
 		assert.Zero(t, h.hidden())
-		assert.Empty(t, h.summary())
+		assert.Empty(t, summaryLine(&h))
 	})
 }

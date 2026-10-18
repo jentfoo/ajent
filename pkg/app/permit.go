@@ -165,11 +165,15 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 	if s.Cwd != "" { // a shell cwd rebases every relative path in the command
 		userMsg = "working directory: " + s.Cwd + "\n" + userMsg
 	}
+	budget := m.MaxOutput
+	if budget <= 0 {
+		budget = 4096 // unknown window: modest fallback, enough for one word plus thought
+	}
 	req := llm.Request{
 		Model:     m,
 		System:    llm.BlockList{llm.TextBlock{Text: sys}},
 		Messages:  []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: userMsg}}}},
-		MaxTokens: classifyBudget(m),
+		MaxTokens: min(budget, 20480),
 		// constant prompt re-sent per gated call, needs SessionID on openai
 		Cache:     llm.CachePolicy{Enabled: true},
 		SessionID: a.session,
@@ -180,14 +184,6 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 		return permit.ClassUnsure
 	}
 	return permit.NormalizeClass(out)
-}
-
-func classifyBudget(m llm.Model) int {
-	budget := m.MaxOutput
-	if budget <= 0 {
-		return 4096 // unknown window: modest fallback, enough for one word plus thought
-	}
-	return min(budget, 20480)
 }
 
 func showPermissionIndicator(ui *tui.UI, b *permit.Barrier) {

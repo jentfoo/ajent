@@ -165,16 +165,11 @@ func profileFor(name string, flavor Flavor, baseURL string, cfg ProviderConfig) 
 	return p
 }
 
-// localChatFlavor reports the local servers whose OpenAI tree sits under a
-// fixed /v1 prefix however the base was written.
-func localChatFlavor(flavor Flavor) bool {
-	return flavor == FlavorLlamaCpp || flavor == FlavorLMStudio
-}
-
 // localChatBase reports whether the chat path pins the /v1 prefix, so the base
-// must drop its own trailing /v1 first.
+// must drop its own trailing /v1 first. Local servers whose OpenAI tree sits
+// under a fixed /v1 however the base was written.
 func localChatBase(name string, flavor Flavor, baseURL string) bool {
-	return localChatFlavor(flavor) && !isOpenRouterEndpoint(name, baseURL)
+	return (flavor == FlavorLlamaCpp || flavor == FlavorLMStudio) && !isOpenRouterEndpoint(name, baseURL)
 }
 
 // stripV1Suffix drops a trailing /v1 from a base URL, so a path that spells the

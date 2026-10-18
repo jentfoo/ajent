@@ -713,23 +713,6 @@ func TestDriftNote(t *testing.T) {
 	})
 }
 
-func TestTrailingPunct(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ name, in, want string }{
-		{"comma_after_value", "\t\treserve: 6400,", ","},
-		{"none_after_ident", "\tidleTimeout = 90 * time.Second", ""},
-		{"closing_paren", "\tf(x)", ")"},
-		{"punctuation_only_line", "\t\t},", "\t\t},"}, // no token to stop the walk
-		{"empty", "", ""},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, trailingPunct(tc.in))
-		})
-	}
-}
-
 func TestFuzzyRefusesPunctuationLoss(t *testing.T) {
 	t.Parallel()
 

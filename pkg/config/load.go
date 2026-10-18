@@ -337,32 +337,19 @@ func loadFile(path string) ([]byte, []string, error) {
 	for _, r := range renames {
 		warns = append(warns, fmt.Sprintf("%s: normalized key %q to %q", path, r.from, r.to))
 	}
-	for _, k := range mustUnknownKeys(data) {
-		warns = append(warns, fmt.Sprintf("%s: unrecognized key %q", path, k))
+	// either probe failing means malformed JSON, already reported by the unmarshal check above
+	if unknown, err := UnknownKeys(data, Settings{}); err == nil {
+		for _, k := range unknown {
+			warns = append(warns, fmt.Sprintf("%s: unrecognized key %q", path, k))
+		}
 	}
 	for _, k := range DuplicateKeys(data) {
 		warns = append(warns, fmt.Sprintf("%s: duplicate key %q, the last one wins", path, k))
 	}
-	for _, msg := range mustTypeErrors(data) {
-		warns = append(warns, fmt.Sprintf("%s: %s", path, msg))
+	if te, err := TypeErrors(data, Settings{}); err == nil {
+		for _, msg := range te {
+			warns = append(warns, fmt.Sprintf("%s: %s", path, msg))
+		}
 	}
 	return data, warns, nil
-}
-
-// mustUnknownKeys runs UnknownKeys against Settings, swallowing a decode failure.
-func mustUnknownKeys(data []byte) []string {
-	unknown, err := UnknownKeys(data, Settings{})
-	if err != nil {
-		return nil // malformed JSON is reported by the unmarshal check above
-	}
-	return unknown
-}
-
-// mustTypeErrors runs TypeErrors against Settings, swallowing a decode failure.
-func mustTypeErrors(data []byte) []string {
-	te, err := TypeErrors(data, Settings{})
-	if err != nil {
-		return nil // malformed JSON is reported by the unmarshal check above
-	}
-	return te
 }

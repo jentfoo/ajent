@@ -90,8 +90,10 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		flavor := flavorFor(name, cfg)
 		if cfg.Flavor == FlavorUnknown {
 			// the provider key may still name a known flavor, so report what won
+			want := bulk.SliceFilterInPlace(func(n string) bool { return n != "" && n != nameUnknown },
+				flavorNames.sorted())
 			warnings = append(warnings, fmt.Sprintf("provider %s: unknown flavor ignored, using %s; want one of %s",
-				name, flavor, strings.Join(flavorChoices(), ", ")))
+				name, flavor, strings.Join(want, ", ")))
 		}
 		def := flavorDefaults[flavor]
 		dialect := dialectFor(cfg, def.dialect)
@@ -513,17 +515,14 @@ func (r *Registry) Resolve(name string) (Model, error) {
 // aliasCandidates returns the key of every model listing an alias equal to q,
 // sorted by provider then id.
 func aliasCandidates(models []Model, q string) []string {
-	hits := bulk.SliceFilter(func(m Model) bool { return hasAlias(m, q) }, models)
+	hits := bulk.SliceFilter(func(m Model) bool {
+		return slices.ContainsFunc(m.Aliases, func(a string) bool { return strings.EqualFold(a, q) })
+	}, models)
 	out := make([]string, len(hits))
 	for i, m := range hits {
 		out[i] = m.Key()
 	}
 	return out
-}
-
-// hasAlias reports whether the model lists an alias equal to q (case-insensitive).
-func hasAlias(m Model, q string) bool {
-	return slices.ContainsFunc(m.Aliases, func(a string) bool { return strings.EqualFold(a, q) })
 }
 
 // unique returns the single model matching pred, nil when none match, or an

@@ -54,11 +54,6 @@ type retryableError struct{ err error }
 func (e *retryableError) Error() string { return e.err.Error() }
 func (e *retryableError) Unwrap() error { return e.err }
 
-func isRetryableAttempt(err error) bool {
-	var re *retryableError
-	return errors.As(err, &re)
-}
-
 // unwrapAttempt strips the retry marker so callers see the provider error.
 func unwrapAttempt(err error) error {
 	var re *retryableError
@@ -79,7 +74,7 @@ func Do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error)
 		h.now = time.Now
 	}
 	if h.sleep == nil {
-		h.sleep = sleepContext
+		h.sleep = SleepContext
 	}
 	if h.afterFunc == nil {
 		h.afterFunc = func(d time.Duration, f func()) stopper { return time.AfterFunc(d, f) }
@@ -101,10 +96,11 @@ func Do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error)
 			resp.Body = &cancelReader{ReadCloser: resp.Body, cancel: cancel}
 			return resp, nil
 		}
+		var re *retryableError
 		if ctx.Err() != nil {
 			cancel()
 			return nil, ctx.Err()
-		} else if !isRetryableAttempt(err) {
+		} else if !errors.As(err, &re) {
 			cancel()
 			return nil, unwrapAttempt(err)
 		}

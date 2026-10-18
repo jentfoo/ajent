@@ -65,7 +65,12 @@ func (s *Store) Dir(workspace string) (string, error) {
 	if herr != nil {
 		home = "" // no home to anchor against, so the path encodes absolute
 	}
-	d := filepath.Join(s.root, dirName(abs, home))
+	name := slug(abs, home)
+	dir := name + "-" + hash4(abs)
+	if name == "" {
+		dir = hash4(abs) // the home directory itself has nothing to encode
+	}
+	d := filepath.Join(s.root, dir)
 	if err := os.MkdirAll(d, sessionDirPerm); err != nil {
 		return "", err
 	}
@@ -387,14 +392,6 @@ func nameRune(r rune) bool {
 }
 
 // dirName returns the session directory name for the absolute workspace path
-// abs, anchored on the user home directory home (empty when there is none).
-func dirName(abs, home string) string {
-	s := slug(abs, home)
-	if s == "" {
-		return hash4(abs) // the home directory itself has nothing to encode
-	}
-	return s + "-" + hash4(abs)
-}
 
 // slug encodes abs as a flat lowercase name: path segments joined with "_", with anything
 // outside [a-z0-9] dropped. A path outside home keeps its leading separator as a "_" prefix.

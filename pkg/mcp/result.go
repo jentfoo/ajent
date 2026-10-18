@@ -87,9 +87,6 @@ func resourceRef(r mcp.ResourceContents) string {
 	}
 }
 
-// toBlocks returns the result's model-visible content.
-func (r Result) toBlocks() llm.BlockList { return r.Blocks }
-
 // imageBytes decodes an mcp image payload's base64 data, ok false for a
 // non-image mime or nothing decodable. Padded and unpadded, standard and
 // URL-safe alphabets all appear in the wild.

@@ -16,15 +16,6 @@ type ContextState struct {
 	Estimated bool
 }
 
-// Budget returns the usable input budget, Window minus Reserve. It never goes
-// below zero so a misconfigured reserve cannot produce a negative bar.
-func (c ContextState) Budget() int {
-	if b := c.Window - c.Reserve; b > 0 {
-		return b
-	}
-	return 0
-}
-
 // CompactAt returns where an automatic compaction fires for m: >= 1 is an
 // absolute token count, a value in (0,1) a fraction of the window, anything else
 // uses defaultCompactFraction. Never triggers on a zero or negative window.

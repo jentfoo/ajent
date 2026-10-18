@@ -78,7 +78,16 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 		base = idx.root
 	}
 
-	target := dirTarget(base, qrel)
+	target := base // an empty rel lists base itself
+	if qrel != "" {
+		p := filepath.Join(base, qrel)
+		// the path itself when it ends in a separator (completing inside), else its parent
+		if strings.HasSuffix(qrel, "/") || strings.HasSuffix(qrel, `\`) {
+			target = p // Join already cleaned the trailing separator
+		} else {
+			target = filepath.Dir(p)
+		}
+	}
 	entries, mtime := listDir(target, skipVCS)
 	if len(entries) == 0 {
 		return nil
@@ -104,25 +113,14 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 		if e.isDir {
 			text += "/"
 		}
-		// one directory per listing, so the bare name is unique in a listing
-		out = append(out, rankCandidate(text, name+dirSuffix(e), inConversation(e.path), mtime[e.path], query))
+		label := name // one directory per listing, so the bare name is unique; mark dirs the way Text does
+		if e.isDir {
+			label += "/"
+		}
+		out = append(out, rankCandidate(text, label, inConversation(e.path), mtime[e.path], query))
 	}
 	slices.SortStableFunc(out, func(a, b tui.Completion) int { return b.Score - a.Score })
 	return out
-}
-
-// dirTarget returns the directory whose immediate children should be offered for
-// rel under base: the path itself when it ends in a separator (completing inside),
-// else its parent. An empty rel lists base itself.
-func dirTarget(base, rel string) string {
-	if rel == "" {
-		return base
-	}
-	p := filepath.Join(base, rel)
-	if strings.HasSuffix(rel, "/") || strings.HasSuffix(rel, `\`) {
-		return p // Join already cleaned the trailing separator
-	}
-	return filepath.Dir(p)
 }
 
 // rankCandidate builds one completion, scoring by conversation presence first,
@@ -137,14 +135,6 @@ func rankCandidate(text, label string, inConvo bool, mt time.Time, query string)
 		score += q
 	}
 	return tui.Completion{Text: text, Label: label, Score: score}
-}
-
-// dirSuffix marks directories in listings the way Text does.
-func dirSuffix(e entry) string {
-	if e.isDir {
-		return "/"
-	}
-	return ""
 }
 
 // recentScore gives newer files a higher score on a 0..300 scale.
@@ -188,15 +178,9 @@ func listDir(path string, skipVCS bool) ([]entry, map[string]time.Time) {
 			continue
 		}
 		entries = append(entries, entry{path: p, isDir: de.IsDir()})
-		mtimes[p] = statMod(p)
+		if fi, err := os.Stat(p); err == nil { // zero when it cannot be stated
+			mtimes[p] = fi.ModTime()
+		}
 	}
 	return entries, mtimes
-}
-
-// statMod returns a path's modification time, zero when it cannot be stated.
-func statMod(path string) time.Time {
-	if fi, err := os.Stat(path); err == nil {
-		return fi.ModTime()
-	}
-	return time.Time{}
 }

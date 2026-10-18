@@ -297,7 +297,7 @@ func TestInlineDiff(t *testing.T) {
 		r.setLive(tick, 1, 2)
 		out := buf.String()
 		assert.Contains(t, out, "status tick")
-		assert.Contains(t, out, cursorUp(3))
+		assert.Contains(t, out, "\x1b[3A")
 		assert.NotContains(t, out, "draft")
 		assert.NotContains(t, out, "third row")
 		assert.NotContains(t, out, eraseBelow)

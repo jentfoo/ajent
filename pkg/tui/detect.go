@@ -26,7 +26,12 @@ func (u *UI) DetectTone() Tone {
 		return ToneUnknown
 	}
 
-	u.queryTone()
+	// write the tone probes under the render lock; the reply arrives on
+	// reader.colors, so holding mu across DetectTone's wait would stall the UI
+	// for the whole probe timeout
+	u.mu.Lock()
+	u.render.query(backgroundQuery + attrsQuery)
+	u.mu.Unlock()
 
 	expired := make(chan struct{})
 	deadline := u.afterSafe(toneQueryTimeout, func() { close(expired) })
@@ -36,8 +41,13 @@ func (u *UI) DetectTone() Tone {
 		case spec, ok := <-u.reader.colors:
 			if !ok {
 				return ToneUnknown // input ended
-			} else if tone, valid := parseBackground(spec); valid {
-				return tone
+			}
+			// classify the X11 color spec by relative luminance
+			if r, g, b, valid := parseColorSpec(strings.TrimSpace(spec)); valid {
+				if 0.2126*r+0.7152*g+0.0722*b > 0.5 {
+					return ToneLight
+				}
+				return ToneDark
 			}
 		case <-u.reader.attrs:
 			return ToneUnknown // the fence answered, the query did not
@@ -45,16 +55,6 @@ func (u *UI) DetectTone() Tone {
 			return ToneUnknown
 		}
 	}
-}
-
-// queryTone writes the tone probes. Scoped here because the reply arrives on
-// reader.colors, so holding mu across DetectTone's wait would stall the UI for
-// the whole probe timeout.
-func (u *UI) queryTone() {
-	u.mu.Lock()
-	defer u.mu.Unlock()
-
-	u.render.query(backgroundQuery + attrsQuery)
 }
 
 // toneFromEnv classifies COLORFGBG ("fg;bg" or "fg;default;bg"), which several
@@ -76,17 +76,6 @@ func toneFromEnv(env func(string) string) Tone {
 	default:
 		return ToneUnknown
 	}
-}
-
-// parseBackground classifies an X11 color spec by relative luminance.
-func parseBackground(spec string) (Tone, bool) {
-	r, g, b, ok := parseColorSpec(strings.TrimSpace(spec))
-	if !ok {
-		return ToneUnknown, false
-	} else if 0.2126*r+0.7152*g+0.0722*b > 0.5 {
-		return ToneLight, true
-	}
-	return ToneDark, true
 }
 
 // parseColorSpec returns the components of "rgb:RR/GG/BB" or "#RRGGBB" scaled

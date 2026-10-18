@@ -82,7 +82,14 @@ func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 // enhanced header (tool count, startup mode, connection state) from the manager.
 func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem, []int) {
 	enabled := bulk.SliceToSet(reg.Names())
-	labels := mcpGroupLabels(c)
+	var groups []MCPGroup
+	if mgr := c.MCP(); mgr != nil {
+		groups = mgr.Groups()
+	}
+	labels := make(map[string]string, len(groups)) // source-to-header-label for MCP servers
+	for _, g := range groups {
+		labels[g.Source] = g.Label
+	}
 
 	// group by source so MultiPick emits a header when the group changes, stable
 	// sort keeping declaration order within a source (builtins up front, ahead of MCP)
@@ -111,17 +118,4 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 		}
 	}
 	return items, initial
-}
-
-// mcpGroupLabels builds source-to-header-label for MCP servers from the manager.
-func mcpGroupLabels(c Console) map[string]string {
-	var groups []MCPGroup
-	if mgr := c.MCP(); mgr != nil {
-		groups = mgr.Groups()
-	}
-	labels := make(map[string]string, len(groups))
-	for _, g := range groups {
-		labels[g.Source] = g.Label
-	}
-	return labels
 }

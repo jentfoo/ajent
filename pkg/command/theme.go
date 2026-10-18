@@ -31,8 +31,12 @@ func ThemeSetup(ctx context.Context, c Console) error {
 		if !errorsIsCancelled(err) {
 			return err
 		}
-		// Esc settles on the detected match, so a dismissed picker never returns
-		applyTheme(c, fallbackPalette(tone))
+		// Esc settles on the detected match: the tone's first palette, else default
+		pal := tui.DefaultPalette()
+		if pals := tui.PalettesFor(tone); len(pals) > 0 {
+			pal = pals[0]
+		}
+		applyTheme(c, pal)
 		return nil
 	}
 	applyTheme(c, choices[idx])
@@ -72,14 +76,6 @@ func applyTheme(c Console, pal tui.Palette) {
 	if err := c.SaveSetting("user", themeKey, pal.Name); err != nil {
 		c.Notify("could not save theme: "+err.Error(), levelWarn)
 	}
-}
-
-// fallbackPalette is the palette a dismissed picker settles on.
-func fallbackPalette(tone tui.Tone) tui.Palette {
-	if pals := tui.PalettesFor(tone); len(pals) > 0 {
-		return pals[0]
-	}
-	return tui.DefaultPalette()
 }
 
 // paletteSample renders a strip of pal's roles in pal's own colors, so the

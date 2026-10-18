@@ -31,8 +31,10 @@ type RetryPolicy struct {
 	Jitter   float64 // fraction of the delay, 0 to 1
 }
 
-// withDefaults returns the policy with unset fields filled in.
-func (p RetryPolicy) withDefaults() RetryPolicy {
+// BackoffDelay returns how long to wait after the given one based attempt failed, and whether
+// waiting is worthwhile at all. A server supplied retryAfter wins, unless it is longer than we
+// are willing to stall for. rnd is a jitter sample in [0,1).
+func BackoffDelay(p RetryPolicy, attempt int, retryAfter time.Duration, rnd float64) (time.Duration, bool) {
 	if p.Attempts <= 0 {
 		p.Attempts = defaultAttempts
 	}
@@ -45,14 +47,6 @@ func (p RetryPolicy) withDefaults() RetryPolicy {
 	if p.Jitter <= 0 || p.Jitter > 1 {
 		p.Jitter = defaultJitter
 	}
-	return p
-}
-
-// BackoffDelay returns how long to wait after the given one based attempt failed, and whether
-// waiting is worthwhile at all. A server supplied retryAfter wins, unless it is longer than we
-// are willing to stall for. rnd is a jitter sample in [0,1).
-func BackoffDelay(p RetryPolicy, attempt int, retryAfter time.Duration, rnd float64) (time.Duration, bool) {
-	p = p.withDefaults()
 	if attempt >= p.Attempts {
 		return 0, false
 	} else if retryAfter > 0 {

@@ -34,7 +34,12 @@ func Read(path string) ([]Entry, []string, error) {
 	for {
 		line, rerr := r.ReadString('\n')
 		if len(line) > 0 && line[len(line)-1] == '\n' {
-			e, warn := parseLine([]byte(line[:len(line)-1]))
+			// a malformed line yields an empty entry plus a warning, so the reader stays tolerant
+			var e Entry
+			warn := ""
+			if err := json.Unmarshal([]byte(line[:len(line)-1]), &e); err != nil {
+				warn = "unparseable entry: " + err.Error()
+			}
 			n++
 			if e.ID != "" {
 				out = append(out, e)
@@ -49,16 +54,6 @@ func Read(path string) ([]Entry, []string, error) {
 		}
 	}
 	return out, warns, versionErr(out)
-}
-
-// parseLine decodes one entry. A malformed line yields an empty entry plus a
-// warning so the reader stays tolerant.
-func parseLine(line []byte) (Entry, string) {
-	var e Entry
-	if err := json.Unmarshal(line, &e); err != nil {
-		return Entry{}, "unparseable entry: " + err.Error()
-	}
-	return e, ""
 }
 
 // versionErr returns a hard error when any session entry carries a format

@@ -82,7 +82,7 @@ func buildSystem(env Environment, proj []ProjectInstruction, snippets []string, 
 	var b strings.Builder
 
 	if override == "" {
-		b.WriteString(identityLine())
+		b.WriteString(identityLine)
 
 		// static guidelines first, then environment facts
 		b.WriteString("Guidelines:\n")
@@ -120,9 +120,7 @@ func writeProjectInstructions(b *strings.Builder, proj []ProjectInstruction) {
 
 // identityLine is the neutral first sentence stating how the agent works. It names no
 // domain or tool so the same block serves coding, security work and plain Q&A alike.
-func identityLine() string {
-	return "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n"
-}
+const identityLine = "You help by following the user's instructions: research and review until you understand them, then focus on what is asked.\n\n"
 
 // buildEnvironmentFacts appends the working directory, platform and date.
 // Empty values are omitted rather than emitted as "unknown". Shell, git status

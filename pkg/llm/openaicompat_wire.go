@@ -45,14 +45,6 @@ type compatRequest struct {
 	extra map[string]json.RawMessage
 }
 
-// setExtra records one configuration named body key.
-func (r *compatRequest) setExtra(key string, val json.RawMessage) {
-	if r.extra == nil {
-		r.extra = make(map[string]json.RawMessage, 1)
-	}
-	r.extra[key] = val
-}
-
 // compatGateway is the vercel ai gateway provider_options shape.
 type compatGateway struct {
 	Only  []string `json:"only,omitempty"`

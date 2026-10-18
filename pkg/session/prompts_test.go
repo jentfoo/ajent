@@ -247,7 +247,7 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 		require.NoError(t, w.Close())
 
 		idx := NewTranscriptIndex(w.Path(), "")
-		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, idx.PromptTexts())
+		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, PromptTexts(idx.Prompts()))
 	})
 
 	t.Run("append_refreshes", func(t *testing.T) {
@@ -258,27 +258,27 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 
 		idx := NewTranscriptIndex(w.Path(), "")
-		assert.Equal(t, []string{"one"}, idx.PromptTexts())
+		assert.Equal(t, []string{"one"}, PromptTexts(idx.Prompts()))
 
 		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
 		require.NoError(t, aerr)
-		assert.Equal(t, []string{"two", "one"}, idx.PromptTexts())
+		assert.Equal(t, []string{"two", "one"}, PromptTexts(idx.Prompts()))
 	})
 
 	t.Run("missing_file_keeps_last", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.jsonl")
 		idx := NewTranscriptIndex(path, "")
-		assert.Empty(t, idx.PromptTexts()) // never scanned, nothing to keep
+		assert.Empty(t, PromptTexts(idx.Prompts())) // never scanned, nothing to keep
 
 		w, err := Create(path, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
 		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "kept")})
 		require.NoError(t, aerr)
 		require.NoError(t, w.Close())
-		assert.Equal(t, []string{"kept"}, idx.PromptTexts())
+		assert.Equal(t, []string{"kept"}, PromptTexts(idx.Prompts()))
 
 		require.NoError(t, os.Remove(path))
-		assert.Equal(t, []string{"kept"}, idx.PromptTexts()) // a failed stat keeps the last list
+		assert.Equal(t, []string{"kept"}, PromptTexts(idx.Prompts())) // a failed stat keeps the last list
 	})
 
 	t.Run("secret_prefix_excluded", func(t *testing.T) {
@@ -293,12 +293,12 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 		// the open session's own tree is what plain ↑/↓ serves, so its index must
 		// drop secret prompts like every other recall surface
 		idx := NewTranscriptIndex(w.Path(), "secret:")
-		assert.Equal(t, []string{"plain prompt"}, idx.PromptTexts())
+		assert.Equal(t, []string{"plain prompt"}, PromptTexts(idx.Prompts()))
 
 		// a live append rescans and keeps filtering
 		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "secret:more")})
 		require.NoError(t, aerr)
-		assert.Equal(t, []string{"plain prompt"}, idx.PromptTexts())
+		assert.Equal(t, []string{"plain prompt"}, PromptTexts(idx.Prompts()))
 		t.Cleanup(func() { _ = w.Close() })
 	})
 }

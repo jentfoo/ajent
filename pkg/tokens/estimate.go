@@ -53,9 +53,9 @@ const (
 	imageBytesPerToken = 512
 )
 
-// EstimateBytes estimates the token count of n bytes of ASCII content under
+// estimateBytes estimates the token count of n bytes of ASCII content under
 // kind. Use it to size content that has been measured but not read.
-func EstimateBytes(n int64, kind Kind) int {
+func estimateBytes(n int64, kind Kind) int {
 	if n <= 0 {
 		return 0
 	}
@@ -81,7 +81,7 @@ func EstimateText(text string, kind Kind) int {
 			}
 		}
 	}
-	return tokens + EstimateBytes(ascii, kind)
+	return tokens + estimateBytes(ascii, kind)
 }
 
 // estimateBlocks returns the content tokens of blocks. Text inside a tool result
@@ -206,7 +206,7 @@ func EstimateFor(m llm.Model, retain llm.RetainPolicy, msgs []llm.Message) int {
 // what the ledger bills.
 func EstimateToolPair(call llm.ToolCallBlock, body int64, kind Kind) int {
 	return 2*messageOverhead + estimateToolCall(call) +
-		toolResultOverhead + EstimateText(call.ID, KindOpaque) + EstimateBytes(body, kind)
+		toolResultOverhead + EstimateText(call.ID, KindOpaque) + estimateBytes(body, kind)
 }
 
 // EstimateFixed estimates the message-independent part of a request: system

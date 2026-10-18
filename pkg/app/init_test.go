@@ -558,6 +558,29 @@ func TestPromptInput(t *testing.T) {
 		require.Len(t, warned, 1)
 		assert.Contains(t, warned[0], "missing.go")
 	})
+
+	// only dispatched prompts reach this path: escaped text that looks like a
+	// command or shell line was already classified, so it echoes verbatim
+	dir := t.TempDir()
+	reg, err := tools.Builtins(tools.Options{Cwd: dir})
+	require.NoError(t, err)
+	echoExpander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"prompt_echoes", "refactor the parser", "refactor the parser"},
+		{"blank_prompt_silent", "   ", ""},
+		{"escaped_shell_echos", "!git status", "!git status"},
+		{"multiline_echos_verbatim", "line one\nline two", "line one\nline two"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := pumpLine{kind: command.KindPrompt, rest: tc.in}
+			_, echo, _ := promptInput(line, echoExpander, func(string) {})
+			assert.Equal(t, tc.want, echo)
+		})
+	}
 }
 
 func TestSubmitEstimate(t *testing.T) {

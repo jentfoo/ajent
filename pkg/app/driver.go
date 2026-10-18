@@ -543,7 +543,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		showPermissionIndicator(ui, barrier)
 		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 	}
-	watchControls(appRoot, ui, hints, ag, q, stager, ictl, quitNow, onModeCycle)
+	go controlLoop(appRoot, ui, ui.Controls(), hints, ag, q, stager, ictl, quitNow, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.starts = starts
@@ -757,10 +757,6 @@ const (
 	// command) holds the hint line before releasing it to whatever claimed it before.
 	hintNoticeTTL = 6 * time.Second
 )
-
-func watchControls(ctx context.Context, ui *tui.UI, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
-	go controlLoop(ctx, ui, ui.Controls(), hints, ag, q, stager, initCtl, quitNow, onModeCycle)
-}
 
 func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
 	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint

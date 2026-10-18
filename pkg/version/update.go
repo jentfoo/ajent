@@ -52,7 +52,11 @@ func (u updateCmds) installLatest(ctx context.Context) error {
 	}
 	out, err := exec.CommandContext(ctx, "go", "install", modulePath).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("go install: %w%s", err, note(out))
+		suffix := ""
+		if s := strings.TrimSpace(string(out)); s != "" {
+			suffix = ": " + s
+		}
+		return fmt.Errorf("go install: %w%s", err, suffix)
 	}
 	return nil
 }
@@ -95,12 +99,4 @@ func versionLabel(v string) string {
 		return "v0.0.0-dev"
 	}
 	return v
-}
-
-// note returns a short suffix of command output for error context.
-func note(out []byte) string {
-	if s := strings.TrimSpace(string(out)); s != "" {
-		return ": " + s
-	}
-	return ""
 }

@@ -42,9 +42,10 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 	_, _ = fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
 	if cascade := cascadeIssue(idx, old, ops); cascade != "" {
 		b.WriteString("- " + cascade + "\n")
-	} else if self := selfReplaceIssue(idx, ops); self != "" {
-		// the no-op is its own cause, any file-side blame would misattribute
-		b.WriteString("- " + self + "\n")
+	} else if idx >= 1 && idx <= len(ops) && ops[idx-1].OldText == ops[idx-1].NewText {
+		// an op repeating its oldText as newText is the no-op cause; any file-side
+		// blame would misattribute
+		b.WriteString("- oldText equals newText, so nothing changes; put what the file currently holds in oldText and your intended change in newText\n")
 	} else if issues := diagnoseNoMatch(old, buf); len(issues) > 0 {
 		for _, it := range issues {
 			_, _ = fmt.Fprintf(&b, "- %s\n", it)
@@ -77,15 +78,6 @@ func soleDifference(old, text string) string {
 		return ""
 	}
 	return fmt.Sprintf("the file has %q differing from your oldText", b)
-}
-
-// selfReplaceIssue reports when an op repeats its oldText as its newText, leaving
-// the text it wants to write as the text it searched for.
-func selfReplaceIssue(idx int, ops []editOp) string {
-	if idx < 1 || idx > len(ops) || ops[idx-1].OldText != ops[idx-1].NewText {
-		return ""
-	}
-	return "oldText equals newText, so nothing changes; put what the file currently holds in oldText and your intended change in newText"
 }
 
 // cascadeIssue reports when an earlier op's newText would create old, which is why

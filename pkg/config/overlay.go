@@ -53,7 +53,8 @@ func graftObject(dst, prev *object, t reflect.Type) {
 			continue // governed by over: present or absent as the struct says
 		}
 		if _, exists := dst.m[k]; !exists {
-			dst.set(k, prev.m[k])
+			dst.keys = append(dst.keys, k)
+			dst.m[k] = prev.m[k]
 		}
 	}
 	for _, k := range dst.keys {
@@ -153,12 +154,4 @@ func opaque(t reflect.Type) bool {
 	return e.Kind() == reflect.Interface ||
 		e.Implements(unmarshalerType) ||
 		reflect.PointerTo(e).Implements(unmarshalerType)
-}
-
-// set stores a child under key, appending new keys to the insertion order.
-func (o *object) set(key string, v *val) {
-	if _, ok := o.m[key]; !ok {
-		o.keys = append(o.keys, key)
-	}
-	o.m[key] = v
 }

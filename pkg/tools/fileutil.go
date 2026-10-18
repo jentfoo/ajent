@@ -107,7 +107,11 @@ func writePerm(path string) os.FileMode {
 // before the NUL scan: png, webp, bmp and tiff all carry NUL bytes in their
 // headers, so the byte scan alone would call them binary.
 func detect(data []byte) (out fileKind) {
-	if hasImageSig(data) {
+	// png, webp and bmp all carry NUL bytes in their headers, so the sniff runs
+	// first; the bare jpeg marker stands in for img.Sniff because a jpeg whose
+	// frame header sits beyond the sniff window fails DecodeConfig, and 0xff 0xd8
+	// cannot start text (look-alikes like "BMW ..." and sibling RIFF files stay out)
+	if _, ok := img.Sniff(data); ok || (len(data) >= 2 && data[0] == 0xff && data[1] == 0xd8) {
 		return fileImage
 	}
 	sniff := data
@@ -118,18 +122,6 @@ func detect(data []byte) (out fileKind) {
 		return fileBinary
 	}
 	return fileText
-}
-
-// hasImageSig reports whether the registered decoders accept data's header as
-// an image, so look-alike text ("BMW ...") and sibling RIFF files (wav, avi)
-// stay out. The bare jpeg marker stands in for it: a jpeg whose frame header
-// sits beyond the sniff window fails DecodeConfig, and 0xff 0xd8 cannot start
-// text.
-func hasImageSig(data []byte) bool {
-	if _, ok := img.Sniff(data); ok {
-		return true
-	}
-	return len(data) >= 2 && data[0] == 0xff && data[1] == 0xd8
 }
 
 // numberedLinePrefix is what numberLines writes ahead of every line: a six-wide

@@ -136,15 +136,14 @@ func TestMissingErrorHint(t *testing.T) {
 	})
 }
 
-func TestSelfReplaceIssue(t *testing.T) {
+// TestMissingSelfReplace pins the no-op cause: an op whose oldText equals its
+// newText leaves the text it searched for as the text it would write.
+func TestMissingSelfReplace(t *testing.T) {
 	t.Parallel()
 
-	ops := []editOp{{OldText: "a", NewText: "b"}, {OldText: "same", NewText: "same"}}
-
-	assert.Empty(t, selfReplaceIssue(1, ops))
-	assert.Contains(t, selfReplaceIssue(2, ops), "nothing changes")
-	assert.Empty(t, selfReplaceIssue(1, nil)) // a short op list must not panic
-	assert.Empty(t, selfReplaceIssue(0, ops))
+	out := missingError(2, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}, {OldText: "same", NewText: "same"}})
+	assert.Contains(t, out, "nothing changes")
+	assert.NotContains(t, missingError(1, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}}), "nothing changes")
 }
 
 func TestCascadeIssue(t *testing.T) {

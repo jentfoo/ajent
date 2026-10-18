@@ -100,7 +100,11 @@ func (c *Completer) classify(text string, pos int) completeCtx {
 		ctx.kind = completePath
 	default:
 		// a /command with args before the cursor
-		if ls := lineStartCell(cells, max(ctx.start-1, 0)); ls < n && cells[ls] == "/" {
+		ls := max(ctx.start-1, 0) // the first cell on the previous token's line
+		for ls > 0 && cells[ls-1] != "\n" {
+			ls--
+		}
+		if ls < n && cells[ls] == "/" {
 			ctx.kind, ctx.start = completeArg, ls
 		}
 	}
@@ -119,7 +123,7 @@ func (c *Completer) Complete(text string, pos int) (int, []tui.Completion) {
 	case completeArg:
 		return c.commandArgComplete(ctx)
 	case completePath:
-		return c.pathComplete(ctx)
+		return atComplete(c.paths, ctx.cells, ctx.pos)
 	}
 	return ctx.pos, nil
 }
@@ -172,11 +176,6 @@ func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) 
 	return offer(argStart, ctx.pos, textCompletions(cmd.Complete(ctx.spanText(argStart))))
 }
 
-// pathComplete offers workspace paths after @.
-func (c *Completer) pathComplete(ctx completeCtx) (int, []tui.Completion) {
-	return atComplete(c.paths, ctx.cells, ctx.pos)
-}
-
 // spanText returns the buffer from start up to the cursor.
 func (ctx completeCtx) spanText(start int) string {
 	if start >= ctx.pos {
@@ -221,11 +220,3 @@ func tokenEnd(cells []string, pos int) int {
 
 // isTokenBreakCell reports whether cell ends a completion token.
 func isTokenBreakCell(cell string) bool { return cell == " " || cell == "\t" || cell == "\n" }
-
-// lineStartCell returns the index of the first cell on pos's line.
-func lineStartCell(cells []string, pos int) int {
-	for pos > 0 && cells[pos-1] != "\n" {
-		pos--
-	}
-	return pos
-}

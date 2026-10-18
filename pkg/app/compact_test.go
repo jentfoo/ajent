@@ -1223,25 +1223,3 @@ func TestEndTurnClearsStalled(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, did)
 }
-
-func TestVerbatimTokens(t *testing.T) {
-	t.Parallel()
-
-	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 200000} // compacts at 160k
-
-	cases := []struct {
-		name     string
-		fraction float64
-		want     int
-	}{
-		{"tenth_of_the_compaction_point", 0.1, 16000},
-		{"zero_defers_to_compact", 0, 0},
-		{"negative_defers_to_compact", -0.5, 0},
-		{"whole_defers_to_compact", 1, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, verbatimTokens(model, tc.fraction))
-		})
-	}
-}

@@ -129,6 +129,15 @@ func TestCheckUpdateNotice(t *testing.T) {
 	})
 }
 
+// loadUpdateCache reads the update cache, any failure yielding a zero value.
+func loadUpdateCache(path string, c *UpdateCache) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	_ = json.Unmarshal(data, c)
+}
+
 func TestParseVersion(t *testing.T) {
 	t.Parallel()
 

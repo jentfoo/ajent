@@ -49,20 +49,6 @@ func cursorTo(row, col int) string {
 	return csi + strconv.Itoa(row) + ";" + strconv.Itoa(col) + "H"
 }
 
-func cursorUp(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return csi + strconv.Itoa(n) + "A"
-}
-
-func cursorRight(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	return csi + strconv.Itoa(n) + "C"
-}
-
 // sgr builds a Select Graphic Rendition sequence from the given parameters.
 func sgr(params ...int) string {
 	if len(params) == 0 {

@@ -38,12 +38,6 @@ func PromptTexts(ps []Prompt) []string {
 	return out
 }
 
-// PromptTexts returns the transcript's recorded prompt texts in Prompts' order,
-// refreshing the cache under the same rules.
-func (p *TranscriptIndex) PromptTexts() []string {
-	return PromptTexts(p.Prompts())
-}
-
 // Prompts returns the workspace's recorded user prompts, newest first and
 // deduplicated so each distinct text keeps only its most recent occurrence. A
 // directory with no sessions yields an empty slice without error.
@@ -116,7 +110,7 @@ func filePrompts(path string) []Prompt {
 		if md.Message.Role != llm.RoleUser || md.Injected {
 			continue // assistant/tool messages and system-injected context are not prompts
 		}
-		txt := messageText(md)
+		txt := llm.JoinText(md.Message.Content)
 		if txt == "" {
 			continue
 		}

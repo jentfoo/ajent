@@ -49,14 +49,6 @@ type injection struct {
 	body  int64           // expected result bytes, for the submit reserve
 }
 
-// estimate sizes the call + result pair this injection lands. It bills the same
-// framing EstimateMessages charges once the pair is appended, so the bar does not
-// step as the reads arrive.
-func (p injection) estimate() int {
-	return tokens.EstimateToolPair(
-		llm.ToolCallBlock{ID: p.id, Name: p.name, Input: p.input}, p.body, tokens.KindCode)
-}
-
 // newInjection plans one call, marshalling its arguments now so the reserve and
 // the landed pair are sized from exactly the same call.
 func newInjection(run int64, name, idKind, path, full string, body int64) injection {
@@ -207,8 +199,10 @@ func (x *Expander) Expand(text string) Result {
 			continue
 		}
 		// a shape too big on its own is annotated whatever else the message holds:
-		// the per-ref limit is about the file, not the budget
-		if overInjectLimit(m, tools.RefInjectLimit()) {
+		// the per-ref limit is about the file, not the budget. Lines and bytes each
+		// bind only when configured.
+		mtr := tools.RefInjectLimit()
+		if (mtr.Lines > 0 && m.Lines > mtr.Lines) || (mtr.Bytes > 0 && m.Bytes > int64(mtr.Bytes)) {
 			out = splice(out, ref, annotate(ref, m))
 			notices = append(notices, "@"+ref.Path+" too large; annotated")
 			continue
@@ -233,10 +227,13 @@ func (x *Expander) Expand(text string) Result {
 		spent += int(m.Bytes)
 	}
 	// sized here rather than per branch: an injection that forgot to add its own
-	// cost is exactly how ls came to reserve nothing at all
+	// cost is exactly how ls came to reserve nothing at all. Each pair bills the
+	// same framing EstimateMessages charges once appended, so the bar does not
+	// step as the reads arrive.
 	var est int
 	for _, p := range plan {
-		est += p.estimate()
+		est += tokens.EstimateToolPair(
+			llm.ToolCallBlock{ID: p.id, Name: p.name, Input: p.input}, p.body, tokens.KindCode)
 	}
 	res := Result{Text: out, Est: est, Notices: notices}
 	if len(plan) > 0 {
@@ -258,7 +255,13 @@ func (x *Expander) Expand(text string) Result {
 						continue
 					}
 				}
-				msgs = append(msgs, x.injectPair(ctx, p)...)
+				// a vanished tool drops the pair silently; InjectPair's error is
+				// swallowed too: a failed injection annotates rather than fails the prompt
+				if tool, ok := x.reg.Lookup(p.name); ok {
+					pair, _ := agent.InjectPair(ctx, tool, x.sink,
+						agent.ToolCall{ID: p.id, Name: p.name, Input: p.input}, p.name+" "+p.path)
+					msgs = append(msgs, pair...)
+				}
 			}
 			return msgs
 		}
@@ -323,28 +326,6 @@ func lsCall(run int64, path, dir string) injection {
 // references within one run from colliding.
 func callID(run int64, kind, path string) string {
 	return fmt.Sprintf("%s%d-%s%s", idPrefix, run, kind, path)
-}
-
-// overInjectLimit reports whether m exceeds the per-file inject threshold.
-func overInjectLimit(m tools.Measurement, ref tools.Limit) bool {
-	if ref.Lines > 0 && m.Lines > ref.Lines {
-		return true
-	}
-	if ref.Bytes > 0 && m.Bytes > int64(ref.Bytes) {
-		return true
-	}
-	return false
-}
-
-// injectPair runs one planned call and returns its call + result pair.
-func (x *Expander) injectPair(ctx context.Context, p injection) []llm.Message {
-	tool, ok := x.reg.Lookup(p.name)
-	if !ok {
-		return nil
-	}
-	msgs, _ := agent.InjectPair(ctx, tool, x.sink,
-		agent.ToolCall{ID: p.id, Name: p.name, Input: p.input}, p.name+" "+p.path)
-	return msgs
 }
 
 // annotate returns the replacement text for a large/non-text reference: the

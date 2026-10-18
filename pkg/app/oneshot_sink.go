@@ -41,14 +41,6 @@ func levelName(l agent.Level) string {
 	}
 }
 
-// agentLevelOf maps a warn flag onto a notice level.
-func agentLevelOf(warn bool) agent.Level {
-	if warn {
-		return agent.LevelWarn
-	}
-	return agent.LevelInfo
-}
-
 // textSink streams the model's prose to stdout as it arrives and reports
 // everything else (notices, tool calls, failures) on stderr. A redirected
 // stdout holds the answer alone while a terminal still shows progress.

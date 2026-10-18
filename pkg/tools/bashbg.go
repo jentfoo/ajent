@@ -79,16 +79,13 @@ func (t *bashTool) executeBackground(root context.Context, cwd string, p bashPar
 		_ = errF.Close()
 	}()
 
-	return agent.ToolResult{Content: llmBlock(backgroundSummary(pid, outPath, errPath))}, nil
-}
-
-// backgroundSummary is the model-facing handoff: the pid to kill and the files
-// to tail, so a later call can inspect or stop the run.
-func backgroundSummary(pid int, outPath, errPath string) string {
-	p := strconv.Itoa(pid)
-	return "started in background, pid " + p + "\n" +
+	// model-facing handoff: the pid to kill and the files to tail, so a later
+	// call can inspect or stop the run
+	pidStr := strconv.Itoa(pid)
+	summary := "started in background, pid " + pidStr + "\n" +
 		"stdout log: " + outPath + "\n" +
 		"stderr log: " + errPath + "\n" +
-		"stop it with: kill " + p + "\n" +
+		"stop it with: kill " + pidStr + "\n" +
 		"review the logs with: tail -f " + outPath + " " + errPath
+	return agent.ToolResult{Content: llmBlock(summary)}, nil
 }

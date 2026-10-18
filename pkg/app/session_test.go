@@ -831,26 +831,13 @@ func TestCheckSessionTargetErrorMapping(t *testing.T) {
 	})
 }
 
-func TestSubmittedEcho(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"prompt_echoes", "refactor the parser", "refactor the parser"},
-		{"blank_prompt_silent", "   ", ""},
-		// only dispatched prompts reach this path: escaped text that looks like a
-		// command or shell line was already classified, so it echoes verbatim
-		{"escaped_shell_echos", "!git status", "!git status"},
-		{"multiline_echos_verbatim", "line one\nline two", "line one\nline two"},
+// sessionLabel names a transcript the way --resume takes it back.
+func sessionLabel(r *sessRec) string {
+	entries, ok := sessionEntries(r)
+	if !ok {
+		return ""
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, submittedEcho(tc.in))
-		})
-	}
+	return labelOf(entries)
 }
 
 func TestSessionHint(t *testing.T) {

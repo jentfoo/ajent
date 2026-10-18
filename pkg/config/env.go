@@ -64,7 +64,7 @@ func scalarLeaves(t reflect.Type, prefix string) []leafPath {
 	var out []leafPath
 	for _, fd := range declaredFields(t) {
 		p := join(prefix, fd.name)
-		if derefKind(fd.typ) == reflect.Struct && !isRawMessage(fd.typ) {
+		if derefKind(fd.typ) == reflect.Struct && fd.typ != rawMessageType {
 			out = append(out, scalarLeaves(deref(fd.typ), p)...)
 			continue
 		}
@@ -78,9 +78,6 @@ func scalarLeaves(t reflect.Type, prefix string) []leafPath {
 	}
 	return out
 }
-
-// isRawMessage reports whether t is encoding/json.RawMessage.
-func isRawMessage(t reflect.Type) bool { return t == rawMessageType }
 
 func derefKind(t reflect.Type) reflect.Kind { return deref(t).Kind() }
 

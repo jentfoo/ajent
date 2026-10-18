@@ -31,7 +31,9 @@ func argPath(p string) string {
 // ~ or ~/ expands to the user's home directory, and other relative paths are taken
 // from Cwd. Nothing is refused.
 func (p PathPolicy) Resolve(path string) (string, error) {
-	path = trimRefPrefix(path)
+	if len(path) > 1 && path[0] == '@' && !isSlash(path[1]) {
+		path = strings.TrimPrefix(path, "@") // a model echoing an @file reference still resolves
+	}
 	var candidate string
 	if expanded, ok := expandTilde(path); ok {
 		candidate = expanded // absolute home path, no base needed
@@ -43,7 +45,10 @@ func (p PathPolicy) Resolve(path string) (string, error) {
 				return "", fmt.Errorf("tools: cannot resolve cwd: %w", err)
 			}
 		}
-		candidate = cleanAbs(base, path)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(base, path)
+		}
+		candidate = filepath.Clean(path)
 	}
 	resolved, ok := evalPrefix(candidate)
 	if !ok { // nothing exists yet, the cleaned absolute is still a fine key
@@ -69,14 +74,6 @@ func expandTilde(path string) (string, bool) {
 	return filepath.Join(home, rest), true
 }
 
-// trimRefPrefix drops one leading @ so a model echoing an @file reference as a tool path still resolves.
-func trimRefPrefix(path string) string {
-	if len(path) > 1 && path[0] == '@' && !isSlash(path[1]) {
-		return strings.TrimPrefix(path, "@")
-	}
-	return path
-}
-
 // isSlash reports whether c separates path components.
 func isSlash(c byte) bool { return c == '/' || c == '\\' }
 
@@ -84,14 +81,6 @@ func isSlash(c byte) bool { return c == '/' || c == '\\' }
 // treated as one concrete path and must instead match many.
 func HasGlob(s string) bool {
 	return strings.ContainsAny(s, "*?[")
-}
-
-// cleanAbs returns the absolute cleaned form of path joined to base.
-func cleanAbs(base, path string) string {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(base, path)
-	}
-	return filepath.Clean(path)
 }
 
 // evalPrefix resolves symlinks on the longest existing prefix of candidate,

@@ -1,6 +1,9 @@
 package tui
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // inlineRenderer writes history straight to the main screen and redraws the live
 // block immediately below it. Once a line is committed it belongs to the
@@ -245,7 +248,9 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 			climb++ // skipped: only its newline boundary was crossed
 		}
 	}
-	b.WriteString(cursorUp(climb - 1))
+	if climb-1 > 0 { // cursorUp's n<=0 guard folded here
+		b.WriteString(csi + strconv.Itoa(climb-1) + "A")
+	}
 	b.WriteString("\r")
 	return emitted
 }

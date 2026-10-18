@@ -1,11 +1,6 @@
 package tui
 
-import (
-	"strconv"
-	"strings"
-
-	"github.com/jentfoo/ajent/pkg/strutil"
-)
+import "strings"
 
 // outputHeadLines is how many lines of a tool's output reach history before the
 // remainder collapses into one summary line.
@@ -68,11 +63,3 @@ func (h *outputHead) commit(whole string) string {
 // hidden reports how many lines were counted but not shown. shown tracks every
 // line actually committed, so it equals lines in full mode and the count is zero.
 func (h *outputHead) hidden() int { return max(0, h.lines-h.shown) }
-
-// summary returns the collapse line for whatever was hidden, "" when nothing.
-func (h *outputHead) summary() string {
-	if n := h.hidden(); n > 0 {
-		return "… +" + strconv.Itoa(n) + " lines, " + strutil.HumanSize(int64(h.bytes))
-	}
-	return ""
-}

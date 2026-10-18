@@ -84,7 +84,7 @@ func Prepare(data []byte) (Result, error) {
 		return Result{}, ErrTooLarge
 	}
 	animated := animatedPNG(data, mediaType)
-	if !animated && withinLimits(cfg.Width, cfg.Height, len(data)) {
+	if !animated && cfg.Width <= MaxPixels && cfg.Height <= MaxPixels && base64Fits(len(data)) {
 		switch mediaType {
 		case typePNG, typeJPEG, typeGIF, typeWebP: // provider-accepted as-is
 			return Result{Data: data, MediaType: mediaType,
@@ -285,9 +285,6 @@ func toNRGBA(src image.Image) *image.NRGBA {
 	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
 	return dst
 }
-func withinLimits(w, h, n int) bool {
-	return w <= MaxPixels && h <= MaxPixels && base64Fits(n)
-}
 
 // animatedPNG reports whether data is a png carrying an animation control
 // chunk. Left alone such a file would ride to the provider verbatim and some
@@ -319,46 +316,35 @@ func animatedPNG(data []byte, mediaType string) bool {
 func encodeFit(src image.Image, w, h int) (data []byte, mediaType string, fw, fh int, ok bool) {
 	clamp := min(1, float64(MaxPixels)/float64(w), float64(MaxPixels)/float64(h))
 	for _, f := range shrinkFactors {
-		cw, ch := scaleTo(w, h, f*clamp)
+		scale := f * clamp
+		cw := max(int(float64(w)*scale+0.5), 1)
+		ch := max(int(float64(h)*scale+0.5), 1)
 		cand := src
 		if cw != w || ch != h {
-			cand = resize(src, cw, ch)
+			dst := image.NewNRGBA(image.Rect(0, 0, cw, ch))
+			draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
+			cand = dst
 		}
 		if b, err := encodePNG(cand); err == nil && base64Fits(len(b)) {
 			return b, typePNG, cw, ch, true
 		}
 		// jpeg keeps no alpha: composite over white first, so a fallback from
 		// png renders transparency as white rather than whatever rgb hid beneath
-		flat := flattenWhite(cand)
+		cb := cand.Bounds()
+		flat := image.NewNRGBA(image.Rect(0, 0, cb.Dx(), cb.Dy()))
+		draw.Draw(flat, flat.Bounds(), image.White, image.Point{}, draw.Src)
+		draw.Draw(flat, flat.Bounds(), cand, cb.Min, draw.Over)
 		for _, q := range jpegQualities {
-			if b, err := encodeJPEG(flat, q); err == nil && base64Fits(len(b)) {
+			var buf bytes.Buffer
+			if err := jpeg.Encode(&buf, flat, &jpeg.Options{Quality: q}); err != nil {
+				continue
+			}
+			if b := buf.Bytes(); base64Fits(len(b)) {
 				return b, typeJPEG, cw, ch, true
 			}
 		}
 	}
 	return nil, "", 0, 0, false
-}
-
-// resize downscales src to w x h with a high-quality cubic filter.
-func resize(src image.Image, w, h int) *image.NRGBA {
-	dst := image.NewNRGBA(image.Rect(0, 0, w, h))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, src.Bounds(), draw.Over, nil)
-	return dst
-}
-
-// flattenWhite composites src over an opaque white canvas, dropping alpha the
-// way jpeg requires while rendering transparency as white.
-func flattenWhite(src image.Image) *image.NRGBA {
-	b := src.Bounds()
-	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
-	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Over)
-	return dst
-}
-
-// scaleTo rounds w x h by f, never below 1.
-func scaleTo(w, h int, f float64) (int, int) {
-	return max(int(float64(w)*f+0.5), 1), max(int(float64(h)*f+0.5), 1)
 }
 
 // base64Fits reports whether n bytes fit the size ceiling once base64 encoded.
@@ -368,15 +354,6 @@ func base64Fits(n int) bool { return base64.StdEncoding.EncodedLen(n) <= MaxBase
 func encodePNG(src image.Image) ([]byte, error) {
 	var b bytes.Buffer
 	if err := png.Encode(&b, src); err != nil {
-		return nil, err
-	}
-	return b.Bytes(), nil
-}
-
-// encodeJPEG encodes src as jpeg at the given quality.
-func encodeJPEG(src image.Image, q int) ([]byte, error) {
-	var b bytes.Buffer
-	if err := jpeg.Encode(&b, src, &jpeg.Options{Quality: q}); err != nil {
 		return nil, err
 	}
 	return b.Bytes(), nil

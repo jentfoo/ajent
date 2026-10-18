@@ -362,8 +362,14 @@ func fuzzyWindow(old, rep, window []string) (int, bool) {
 			return 0, false // the drift is in the part of the line rep leaves alone
 		}
 		// the span checks above are measured on old, but the apply writes rep over
-		// window. Punctuation only window holds would be deleted unnoticed
-		if t := trailingPunct(window[j]); t != "" && !strings.HasSuffix(rep[j], t) {
+		// window. Punctuation only window holds would be deleted unnoticed: compare
+		// the run of non-token characters ending each canonical line (callers pass
+		// canonical lines, which hold no trailing whitespace)
+		i := len(window[j])
+		for i > 0 && !isTokenByte(window[j][i-1]) {
+			i--
+		}
+		if t := window[j][i:]; t != "" && !strings.HasSuffix(rep[j], t) {
 			return 0, false
 		}
 		worst = max(worst, max(ae-p, be-p))
@@ -410,17 +416,6 @@ func rewrittenSpan(line, rep string) (int, int, bool) {
 
 // trimIndent returns s without its leading whitespace.
 func trimIndent(s string) string { return s[len(leadingWS(s)):] }
-
-// trailingPunct returns the run of non-token characters ending s, the structure
-// a replacement has to carry over. Callers pass canonical lines, which hold no
-// trailing whitespace.
-func trailingPunct(s string) string {
-	i := len(s)
-	for i > 0 && !isTokenByte(s[i-1]) {
-		i--
-	}
-	return s[i:]
-}
 
 // isTokenByte reports whether c can sit inside an identifier or number.
 func isTokenByte(c byte) bool {

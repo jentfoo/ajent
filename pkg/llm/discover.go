@@ -80,16 +80,6 @@ func SaveUserCache(entries map[string]CacheEntry) error {
 	return SaveCache(path, entries)
 }
 
-// ttlFor returns how long a flavor's discovery result stays fresh.
-func ttlFor(f Flavor) time.Duration {
-	switch f {
-	case FlavorLMStudio, FlavorLlamaCpp:
-		return localTTL
-	default:
-		return hostedTTL
-	}
-}
-
 // fresh reports whether an entry is still within its time to live.
 func fresh(e CacheEntry, ttl time.Duration, now time.Time) bool {
 	if e.CheckedAt == 0 || len(e.Models) == 0 {
@@ -105,17 +95,6 @@ type modelParser func(body []byte) ([]ModelConfig, error)
 // that family speaks. It backs up flavors whose own endpoint cannot describe what
 // is loaded.
 const openAIModelsPath = "/v1/models"
-
-// resolveDiscoveryPath joins a discovery endpoint onto a provider's base URL,
-// collapsing a /v1 prefix the base already carries. The OpenAI model list lives at
-// "/v1/models" on a bare host and at "/models" relative to a base that ends in
-// "/v1". Asking for both produces a 404.
-func resolveDiscoveryPath(basePath, path string) string {
-	if strings.HasPrefix(path, "/v1/") && hasV1Suffix(basePath) {
-		return strings.TrimPrefix(path, "/v1")
-	}
-	return path
-}
 
 // hasV1Suffix reports whether a URL path already ends in the /v1 API prefix.
 func hasV1Suffix(p string) bool {
@@ -271,7 +250,11 @@ func Discover(ctx context.Context, f File, cache map[string]CacheEntry, opts Dis
 			continue // explicitly opted out
 		}
 		prev := out[name]
-		if !opts.Force && fresh(prev, ttlFor(flavor), now()) {
+		ttl := hostedTTL // a flavor's discovery result stays fresh per its kind
+		if flavor == FlavorLMStudio || flavor == FlavorLlamaCpp {
+			ttl = localTTL
+		}
+		if !opts.Force && fresh(prev, ttl, now()) {
 			continue
 		}
 
@@ -292,7 +275,14 @@ func candidateEndpoint(c *httpClient, cand discoveryCandidate) (*httpClient, str
 	if cand.root {
 		c = rootedClient(c)
 	}
-	return c, resolveDiscoveryPath(c.base.Path, cand.path)
+	// collapse a /v1 prefix the base already carries: the model list lives at
+	// "/v1/models" on a bare host and at "/models" relative to a base ending in
+	// "/v1"; asking for both produces a 404
+	p := cand.path
+	if strings.HasPrefix(p, "/v1/") && hasV1Suffix(c.base.Path) {
+		p = strings.TrimPrefix(p, "/v1")
+	}
+	return c, p
 }
 
 // discoverOne builds a client for a provider and refreshes its entry, trying each

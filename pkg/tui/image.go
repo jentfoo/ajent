@@ -2,6 +2,7 @@ package tui
 
 import (
 	"math/rand"
+	"strconv"
 
 	"github.com/jentfoo/ajent/pkg/img"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -93,7 +94,8 @@ func (u *UI) releaseOldestImage() {
 		return
 	}
 	delete(u.imgIDs, oldest)
-	u.render.query(kittyDelete(oldest))
+	// q=2 for the same reason as the transmit; d=I frees placements and data
+	u.render.query(esc + "_Ga=d,q=2,d=I,i=" + strconv.FormatUint(uint64(oldest), 10) + esc + "\\")
 }
 
 // watchCells consumes cell-size replies until the input closes.

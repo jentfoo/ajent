@@ -239,21 +239,7 @@ func EntryMessageText(e Entry) string {
 	default:
 		return "" // tool results and other roles are not prompt text
 	}
-	return messageText(md)
-}
-
-// messageText joins an entry's non-empty text blocks into one newline-delimited string.
-func messageText(md MessageData) string {
-	var sb strings.Builder
-	for _, b := range md.Message.Content {
-		if tb, ok := b.(llm.TextBlock); ok && strings.TrimSpace(tb.Text) != "" {
-			if sb.Len() > 0 {
-				sb.WriteRune('\n')
-			}
-			sb.WriteString(tb.Text)
-		}
-	}
-	return sb.String()
+	return llm.JoinText(md.Message.Content)
 }
 
 // treeRowInfo is rowFor's internal descriptor: what a pickable entry looks like

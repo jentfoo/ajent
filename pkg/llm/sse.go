@@ -53,9 +53,6 @@ func NewSSEReader(r io.Reader, maxFrame int) *SSEReader {
 	return &SSEReader{br: bufio.NewReader(r), maxFrame: maxFrame, src: r}
 }
 
-// LastEventID returns the most recent id field, for Last-Event-ID resumption.
-func (r *SSEReader) LastEventID() string { return r.lastID }
-
 // Close closes the underlying reader when it is an io.Closer.
 func (r *SSEReader) Close() error {
 	r.closed = true

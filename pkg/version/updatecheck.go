@@ -86,8 +86,10 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 		fetch = opts.Fetch
 	}
 
-	var c UpdateCache
-	loadUpdateCache(cacheFile, &c)
+	var c UpdateCache // any read failure yields a zero value
+	if data, err := os.ReadFile(cacheFile); err == nil {
+		_ = json.Unmarshal(data, &c)
+	}
 
 	// refresh a stale cached tag, on failure keep the old value and still compare
 	// against it, so going offline past the TTL does not hide a known update.
@@ -125,15 +127,6 @@ func CheckUpdateNotice(ctx context.Context, cacheFile string, opts UpdateCheckOp
 	c.NoticedAt = now().Unix()
 	_ = saveUpdateCache(cacheFile, c) // best effort, a failed write only skips the next dedupe
 	return fmt.Sprintf("update available: ajent %s → %s (run /update or --update)", Version, remote.String()), nil
-}
-
-// loadUpdateCache reads the update cache, any failure yielding a zero value.
-func loadUpdateCache(path string, c *UpdateCache) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	_ = json.Unmarshal(data, c)
 }
 
 // saveUpdateCache writes the update cache atomically.

@@ -23,7 +23,13 @@ func highlight(t Theme, lang, code string) []string {
 	if t.CodeStyle == "" || lang == "" {
 		return nil
 	}
-	format := formatterFor(t.Profile)
+	var format chroma.Formatter // nil below Color256
+	switch t.Profile {
+	case Color256:
+		format = formatters.TTY256
+	case ColorTrue:
+		format = formatters.TTY16m
+	}
 	if format == nil {
 		return nil
 	}
@@ -90,18 +96,6 @@ func splitStyledLines(s string) []string {
 		out = append(out, tail)
 	}
 	return out
-}
-
-// formatterFor returns the chroma formatter for the profile, nil below Color256.
-func formatterFor(p ColorProfile) chroma.Formatter {
-	switch p {
-	case Color256:
-		return formatters.TTY256
-	case ColorTrue:
-		return formatters.TTY16m
-	default:
-		return nil
-	}
 }
 
 // cachedLexer returns the lexer for lang, nil when chroma has none.

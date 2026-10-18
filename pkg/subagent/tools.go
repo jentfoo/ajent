@@ -126,7 +126,18 @@ func (t *pollTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Out
 	snap, complete, batched := t.m.poll(ctx, j.id)
 
 	res, status := pollOutcome(ctx, snap, complete, j.pollProgress(), j.statusOf())
-	return withJob(nameDisplay(res, j.id, batched), j.id, status), nil
+	// head a batched poll's committed output with the sub-agent it came from: only
+	// display copy is touched (the model asked for this id and reads Content), while
+	// the human sees a payload that no longer sits under its own tool header once
+	// parallel polls land together
+	if batched && res.Display != "" {
+		res.Display = j.id + " results:\n" + res.Display
+	}
+	// tag the result with its job and status so a host-driven poller can tell a
+	// still-running report from a terminal one without matching payload prose;
+	// invisible to the model
+	res.Details = map[string]string{"id": j.id, "status": status.String()}
+	return res, nil
 }
 
 // pollOutcome resolves one agent_poll wait into its result and reported job
@@ -152,26 +163,6 @@ func pollOutcome(ctx context.Context, snap Job, complete bool, progress string, 
 		}
 		return result(out), snap.Status
 	}
-}
-
-// nameDisplay heads a batched poll's committed output with the sub-agent it came
-// from. Only the display copy is touched: the model asked for this id and reads
-// Content, while the human sees a payload that no longer sits under its own tool
-// header once parallel polls land together.
-func nameDisplay(r agent.ToolResult, id string, batched bool) agent.ToolResult {
-	if !batched || r.Display == "" {
-		return r
-	}
-	r.Display = id + " results:\n" + r.Display
-	return r
-}
-
-// withJob tags a poll result with the job it names and that job's status, so a
-// host-driven poller can tell a still-running report from a terminal one without
-// matching the payload prose. Invisible to the model.
-func withJob(r agent.ToolResult, id string, s Status) agent.ToolResult {
-	r.Details = map[string]string{"id": id, "status": s.String()}
-	return r
 }
 
 // listTool lists every job and its status.

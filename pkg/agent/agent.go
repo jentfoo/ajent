@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jentfoo/ajent/pkg/httputil"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -101,7 +102,7 @@ type Agent struct {
 // fan-out so the loop always emits on one field, events go nowhere with none
 // supplied.
 func New(state *State, opts Options) *Agent {
-	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
+	a := &Agent{state: state, opts: opts, retrySleep: httputil.SleepContext}
 	switch len(opts.Sinks) {
 	case 0:
 		a.sink = NopSink{}
@@ -198,21 +199,6 @@ func (a *Agent) PromptBatch(ctx context.Context, inputs []Input) error {
 	return a.runTurns(ctx, inputs)
 }
 
-// sleepCtx waits for d or ctx's end, so an interrupt releases a stream backoff.
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	if d <= 0 {
-		return ctx.Err()
-	}
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
-}
-
 // WithState runs fn against the live state, reporting false when a turn is running. Rewind and
 // compaction both rewrite context this way, so every holder of *State observes the change.
 func (a *Agent) WithState(fn func(*State)) bool {
@@ -227,14 +213,19 @@ func (a *Agent) WithState(fn func(*State)) bool {
 }
 
 // recount replaces the ledger's estimate with the provider tokenizer's exact count
-// of what buildRequest would send. The turn loop calls it while running (so it must
-// not take the agent lock).
+// of what buildRequest would send, via the provider's llm.Counter endpoint. It returns
+// llm.ErrNoTokenizer when the provider has no usable counting endpoint. The turn loop
+// calls it while running (so it must not take the agent lock).
 func (a *Agent) recount(ctx context.Context) (int, error) {
 	p, err := a.opts.Provider(a.state.Model)
 	if err != nil {
 		return 0, err
 	}
-	n, err := tokens.Recount(ctx, p, a.buildRequest())
+	counter, ok := p.(llm.Counter)
+	if !ok {
+		return 0, llm.ErrNoTokenizer
+	}
+	n, err := counter.CountTokens(ctx, a.buildRequest())
 	if err != nil {
 		return 0, err
 	}

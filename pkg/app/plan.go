@@ -89,8 +89,13 @@ func newPlanController(d planDeps) *plan.Controller {
 			d.ag.Interrupt()
 		},
 
-		ToolNames:    d.toolsReg.Names,
-		PlannerTools: func() []string { return plannerExtras(d.toolsReg) },
+		ToolNames: d.toolsReg.Names,
+		// the planner may delegate read-only research to the enabled sub-agent tools
+		PlannerTools: func() []string {
+			all := bulk.SliceToSet(d.toolsReg.AllNames(tools.SourceBuiltin))
+			return bulk.SliceFilterInPlace(func(n string) bool { _, ok := all[n]; return ok },
+				[]string{subAgentToolStart, subAgentToolPoll, subAgentToolList})
+		},
 		SetTools: func(names []string) {
 			// a phase scope narrows deliberately, which /tools refuses to do after the
 			// first prompt, but it is user-initiated and restored on every exit path.
@@ -228,14 +233,6 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}
 	return nil
-}
-
-// plannerExtras returns the enabled sub-agent tools a planner may delegate
-// read-only research to, empty when none are registered.
-func plannerExtras(reg *tools.Registry) []string {
-	candidates := []string{subAgentToolStart, subAgentToolPoll, subAgentToolList}
-	all := bulk.SliceToSet(reg.AllNames(tools.SourceBuiltin))
-	return bulk.SliceFilterInPlace(func(n string) bool { _, ok := all[n]; return ok }, candidates)
 }
 
 // askUser adapts the TUI onto the ask_user tool's asker. It reports declined on

@@ -37,11 +37,13 @@ func TestTaskPromptFramesInstructionsAndTask(t *testing.T) {
 	assert.Contains(t, q, "Task:\nfind \n it") // inner whitespace preserved
 }
 
-func TestChildSnippetsIsSingleContract(t *testing.T) {
+func TestTaskPrompt(t *testing.T) {
 	t.Parallel()
 
-	s := childSnippets(true)
-	if assert.Len(t, s, 1) {
-		assert.Equal(t, childContract(true), s[0])
-	}
+	p := taskPrompt("find it", "")
+	assert.Equal(t, "Task:\nfind it", p)
+
+	q := taskPrompt("  find \n it ", "\nbe concise\n")
+	assert.Contains(t, q, "Extra instructions:\nbe concise")
+	assert.Contains(t, q, "Task:\nfind \n it") // inner whitespace preserved
 }

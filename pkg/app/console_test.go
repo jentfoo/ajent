@@ -51,7 +51,8 @@ func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
 	c := &uiConsole{starts: starts}
 	assert.False(t, c.Dispatched())
 
-	starts.mark() // the pump dispatches the first prompt
+	starts.dispatched.mark() // the pump dispatches the first prompt
+	starts.committed.mark()
 	assert.True(t, c.Dispatched())
 	assert.True(t, starts.committed.marked()) // dispatch commits the block too
 }

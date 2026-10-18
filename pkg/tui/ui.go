@@ -3,6 +3,7 @@ package tui
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -719,7 +720,10 @@ func (u *UI) streamingRows(w int) []string {
 	if len(rows) == 0 {
 		return nil
 	}
-	if !u.previewGap() {
+	// committing the buffered block opens with a blank line when needed: mirrors
+	// writeMarkdown's separator, and gap() behind it. No gap while the very first
+	// content is pending, or whenever the committed history already ends blank.
+	if !u.textStart && (!u.started || u.lastBlank) {
 		return rows
 	}
 	return append([]string{""}, rows...) // the separator writeMarkdown commits, or the block shifts down a row
@@ -744,12 +748,6 @@ func (u *UI) previewRows(w int) []string {
 	}
 	u.streamKey, u.streamW, u.streamRows, u.streamOK = src, w, rows, true
 	return rows
-}
-
-// previewGap reports whether committing the buffered block opens with a blank
-// line. Mirrors writeMarkdown's separator, and gap() behind it.
-func (u *UI) previewGap() bool {
-	return u.textStart || (u.started && !u.lastBlank)
 }
 
 // wrapPreview breaks a preview line the way this renderer commits it: inline
@@ -806,8 +804,13 @@ func (u *UI) Output(id, delta string) {
 	if head := styleLines(u.theme.Dim, r.head.add(delta)); head != "" {
 		u.commit(head, flowWrap)
 	}
-	if r.head.hidden() > 0 {
-		u.setActivityLocked(outputKey+id, outputRow(r), unranked)
+	// the transient row a long-running tool shows past its head
+	if n := r.head.hidden(); n > 0 {
+		name := r.name
+		if name == "" {
+			name = "tool"
+		}
+		u.setActivityLocked(outputKey+id, name+" · "+strconv.Itoa(n)+" lines · "+strutil.HumanSize(int64(r.head.bytes)), unranked)
 	}
 }
 
@@ -872,19 +875,11 @@ func (u *UI) toolLabel() string {
 	return ""
 }
 
-// outputRow renders the transient row a long-running tool shows past its head.
-func outputRow(r *toolRun) string {
-	name := r.name
-	if name == "" {
-		name = "tool"
-	}
-	return name + " · " + strconv.Itoa(r.head.hidden()) + " lines · " + strutil.HumanSize(int64(r.head.bytes))
-}
-
 // commitSummary appends h's collapse line, indented and dim, when anything is hidden.
 func (u *UI) commitSummary(h *outputHead) {
-	if sum := h.summary(); sum != "" {
-		u.commit(styleLines(u.theme.Dim, indentLines(sum, userContinue, userContinue)), flowWrap)
+	if n := h.hidden(); n > 0 { // the collapse line for whatever was hidden
+		line := "… +" + strconv.Itoa(n) + " lines, " + strutil.HumanSize(int64(h.bytes))
+		u.commit(styleLines(u.theme.Dim, indentLines(line, userContinue, userContinue)), flowWrap)
 	}
 }
 
@@ -1646,7 +1641,9 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 			// large paste: store the content and insert a placeholder so the input
 			// block stays small. The placeholder is expanded before sending.
 			u.pasteSeq++
-			placeholder := pastePlaceholder(text, u.pasteSeq)
+			// the marker text for a large paste; seq makes it unique so two pastes of
+			// the same line count never share an entry
+			placeholder := fmt.Sprintf("[pasted %d lines #%d]", strings.Count(text, "\n")+1, u.pasteSeq)
 			u.pastes = append(u.pastes, pasteEntry{placeholder: placeholder, content: text})
 			u.editor.Insert(placeholder)
 		} else {

@@ -174,9 +174,14 @@ func (h *planHarness) host() plan.Host {
 		Running:     h.ag.Running,
 		Abort:       h.ag.Interrupt,
 
-		ToolNames:    toolsReg.Names,
-		PlannerTools: func() []string { return plannerExtras(toolsReg) },
-		SetTools:     toolsReg.SetEnabled,
+		ToolNames: toolsReg.Names,
+		// the planner may delegate read-only research to the enabled sub-agent tools
+		PlannerTools: func() []string {
+			all := bulk.SliceToSet(toolsReg.AllNames(tools.SourceBuiltin))
+			return bulk.SliceFilterInPlace(func(n string) bool { _, ok := all[n]; return ok },
+				[]string{subAgentToolStart, subAgentToolPoll, subAgentToolList})
+		},
+		SetTools: toolsReg.SetEnabled,
 		AddTools: func(ts []agent.Tool) {
 			for _, tool := range ts {
 				toolsReg.RegisterFrom(plan.Source, tool, true)

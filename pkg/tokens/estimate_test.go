@@ -47,13 +47,13 @@ func TestEstimateText(t *testing.T) {
 func TestEstimateBytes(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, 250, EstimateBytes(1000, KindProse))
-	assert.Equal(t, 313, EstimateBytes(1000, KindCode)) // 312.5 rounds up, never truncates
-	assert.Equal(t, 357, EstimateBytes(1000, KindJSON))
-	assert.Equal(t, 278, EstimateBytes(1000, KindOpaque))
-	assert.Equal(t, 250, EstimateBytes(1000, Kind(99))) // unknown kind reads as prose
-	assert.Zero(t, EstimateBytes(0, KindCode))
-	assert.Zero(t, EstimateBytes(-5, KindCode))
+	assert.Equal(t, 250, estimateBytes(1000, KindProse))
+	assert.Equal(t, 313, estimateBytes(1000, KindCode)) // 312.5 rounds up, never truncates
+	assert.Equal(t, 357, estimateBytes(1000, KindJSON))
+	assert.Equal(t, 278, estimateBytes(1000, KindOpaque))
+	assert.Equal(t, 250, estimateBytes(1000, Kind(99))) // unknown kind reads as prose
+	assert.Zero(t, estimateBytes(0, KindCode))
+	assert.Zero(t, estimateBytes(-5, KindCode))
 }
 
 func TestEstimateBlocksToolResultIsCode(t *testing.T) {

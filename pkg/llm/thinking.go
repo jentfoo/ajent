@@ -145,7 +145,10 @@ func applyThinkingTokenBudget(body *compatRequest, req Request, lvl Level, on bo
 	}
 	budget := min(req.Model.Caps.Budgets[lvl], max(0, ceiling-minAnswerTokens))
 	if budget > 0 {
-		body.setExtra(field, json.RawMessage(strconv.Itoa(budget)))
+		if body.extra == nil { // records one configuration named body key
+			body.extra = make(map[string]json.RawMessage, 1)
+		}
+		body.extra[field] = json.RawMessage(strconv.Itoa(budget))
 	}
 }
 
@@ -173,7 +176,12 @@ func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Le
 		}
 		var value any = on
 		if obj.Var != "thinking.enabled" {
-			e, ok := chatTemplateEffort(caps, l)
+			// on resolves through the level map with the bare level as fallback,
+			// off only when an explicit off entry exists
+			e, ok := levelValue(caps, l)
+			if l == LevelOff {
+				e, ok = offValue(caps, "")
+			}
 			if !ok {
 				continue // unresolved effort is dropped
 			}
@@ -184,15 +192,7 @@ func chatTemplateValues(vals map[string]json.RawMessage, caps Capabilities, l Le
 	return out
 }
 
-// chatTemplateEffort maps a level onto the provider effort an object routes to: on resolves
-// through LevelMap with the bare level as fallback, off only when an explicit off entry exists.
-func chatTemplateEffort(caps Capabilities, l Level) (string, bool) {
-	if l != LevelOff {
-		return levelValue(caps, l)
-	}
-	return offValue(caps, "")
-}
-
+// ThinkingFormat values name the wire encoding a provider expects.
 type ThinkingFormat uint8
 
 const (

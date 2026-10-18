@@ -67,7 +67,9 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			if !ok {
 				break // both queues drained
 			}
-			if turnsStart(next) {
+			// a turn starts on text, extra blocks or an after-context request;
+			// framing-only inputs (Before, delivery callbacks) fold into the next turn
+			if next.Text != "" || len(next.Blocks) > 0 || next.After != nil {
 				head, have = next, true
 				break
 			}
@@ -136,13 +138,6 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			}
 		}
 	}
-}
-
-// turnsStart reports whether an input carries a turn's message: text, extra
-// blocks, or the after-context it asked for. Framing-only inputs (Before,
-// delivery callbacks) fold into the next turn instead of starting one.
-func turnsStart(in Input) bool {
-	return in.Text != "" || len(in.Blocks) > 0 || in.After != nil
 }
 
 // runTurn drives one user turn: stream, dispatch tools, repeat until the model
@@ -447,7 +442,12 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 			report(usage)
 			return msg, usage, stop, serr
 		}
-		open.close(sink)
+		if open.thinking {
+			sink.EndThinking()
+		}
+		if open.text {
+			sink.EndText()
+		}
 		sink.Notice(fmt.Sprintf("stream failed, retrying in %s: %s",
 			delay.Round(100*time.Millisecond), serr), LevelWarn)
 		if waitErr := a.retrySleep(ctx, delay); waitErr != nil {
@@ -459,16 +459,6 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 
 // openBlocks records the content blocks a failed stream left unterminated.
 type openBlocks struct{ thinking, text bool }
-
-// close ends the open blocks so a retry streams into a fresh region.
-func (o openBlocks) close(sink Sink) {
-	if o.thinking {
-		sink.EndThinking()
-	}
-	if o.text {
-		sink.EndText()
-	}
-}
 
 // streamOnce runs a single model call and forwards every delta to the sink. It
 // folds events into an Accumulator so rendering and assembly share a loop.
@@ -517,7 +507,10 @@ func (a *Agent) streamOnce(ctx context.Context, sink Sink, provider llm.Provider
 		// interrupted mid-stream: the partial message records its real reason
 		stop = llm.StopAborted
 	}
-	return msg, usage, stop, open, streamErr(st, &acc)
+	if serr := st.Err(); serr != nil {
+		return msg, usage, stop, open, serr
+	}
+	return msg, usage, stop, open, acc.Err()
 }
 
 // buildRequest assembles the llm.Request the next provider call will receive,
@@ -589,15 +582,6 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 		sink.Usage(ev.Usage)
 		t.Partial(ev.Usage)
 	}
-}
-
-// streamErr resolves the error for a drained stream: the provider's final error,
-// or none after a deliberate Close.
-func streamErr(st llm.Stream, acc *llm.Accumulator) error {
-	if err := st.Err(); err != nil {
-		return err
-	}
-	return acc.Err()
 }
 
 // dispatch runs tool calls in parallel where every call is Parallel and the
@@ -743,10 +727,6 @@ func (a *Agent) appendToolResults(msg llm.Message, results []llm.ToolResultBlock
 }
 
 // modelOrigin returns the Origin stamp for an assistant message produced by the current model.
-func (a *Agent) modelOrigin() *llm.Origin {
-	return &llm.Origin{Provider: a.state.Model.Provider, Dialect: a.state.Model.Caps.Dialect, Model: a.state.Model.ID}
-}
-
 // append records one message in state and notifies the OnMessage hook so a
 // session can persist it as the loop appends it.
 func (a *Agent) append(info MessageInfo) {
@@ -754,7 +734,11 @@ func (a *Agent) append(info MessageInfo) {
 	// can be degraded correctly on the next request, user and tool messages stay bare.
 	if info.Message.Role == llm.RoleAssistant && info.Stop != llm.StopUnknown {
 		n := info.Message
-		n.Origin = a.modelOrigin()
+		n.Origin = &llm.Origin{
+			Provider: a.state.Model.Provider,
+			Dialect:  a.state.Model.Caps.Dialect,
+			Model:    a.state.Model.ID,
+		}
 		n.Stop = info.Stop
 		info.Message = n
 	}

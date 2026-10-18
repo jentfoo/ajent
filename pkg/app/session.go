@@ -69,22 +69,6 @@ func sessionHint(r *sessRec) string {
 	return r.hint
 }
 
-func sessionLabel(r *sessRec) string {
-	entries, ok := sessionEntries(r)
-	if !ok {
-		return ""
-	}
-	return labelOf(entries)
-}
-
-func (r *sessRec) name() string {
-	entries, ok := sessionEntries(r)
-	if !ok {
-		return ""
-	}
-	return session.NameOf(entries)
-}
-
 func sessionEntries(r *sessRec) ([]session.Entry, bool) {
 	if r == nil || r.w == nil {
 		return nil, false
@@ -104,19 +88,9 @@ func rootID(entries []session.Entry) string {
 	return entries[i].ID
 }
 
-// abandoned reports whether entries describe a transcript worth dropping at
-// exit: unnamed and holding no message.
-func abandoned(entries []session.Entry) bool {
-	if session.NameOf(entries) != "" {
-		return false // --session resumes by name, so a named session is worth keeping
-	}
-	return !slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage })
-}
-
-// exitLabel ends the run's recording: an abandoned session (unnamed, nothing
-// recorded) is removed with its head cursor so it never becomes a dead picker
-// row or steals "most recent", reporting "" so no resume hint names it. Any
-// other transcript returns the label a `--resume` command takes.
+// exitLabel ends the run's recording, reporting "" so no resume hint names a
+// dropped transcript. Any other transcript returns the label a `--resume`
+// command takes.
 func (r *sessRec) exitLabel() string {
 	if r == nil || r.w == nil {
 		return ""
@@ -125,7 +99,10 @@ func (r *sessRec) exitLabel() string {
 	if !ok {
 		return "" // unreadable: neither dropped nor advertised
 	}
-	if r.store != nil && abandoned(entries) {
+	if r.store != nil && session.NameOf(entries) == "" &&
+		!slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage }) {
+		// unnamed and holding no message: removed with its head cursor so it never
+		// becomes a dead picker row or steals "most recent"
 		_ = r.store.Remove(r.w.Path())
 		return ""
 	}
@@ -265,7 +242,13 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		}
 		return w, snap, note, err
 	case ResumeID:
-		info, ferr := preTarget(store, cwd, target, pre)
+		var info session.Info
+		var ferr error
+		if preAdoptable(store, cwd, pre) {
+			info = pre // adopt the live-store hit so the workspace parses once
+		} else {
+			info, ferr = store.Find(cwd, target)
+		}
 		if ferr != nil {
 			return nil, snapshot{}, "", ferr
 		} else if info.Blocked { // refused here so Open never touches a newer transcript
@@ -332,15 +315,6 @@ func openSnapshot(path string) (*session.Writer, snapshot, error) {
 		return nil, snapshot{}, oerr
 	}
 	return w, snapshot{entries: entries, warns: warns, size: fi.Size(), mod: fi.ModTime()}, nil
-}
-
-// preTarget resolves the resume target, adopting pre's path when it still
-// belongs to the live store so the workspace parses once.
-func preTarget(store *session.Store, cwd, target string, pre session.Info) (session.Info, error) {
-	if preAdoptable(store, cwd, pre) {
-		return pre, nil
-	}
-	return store.Find(cwd, target)
 }
 
 // preAdoptable reports whether pre may serve as the open's locator: resolved,
@@ -443,8 +417,9 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	var entries []session.Entry
 	var rwarns []string
 	snap := r.snapshot
-	r.snapshot = snapshot{} // consumed: later rebuilds re-read live state
-	if snap.entries != nil && snapshotFresh(r.w.Path(), snap) {
+	r.snapshot = snapshot{}         // consumed: later rebuilds re-read live state
+	fi, serr := os.Stat(r.w.Path()) // another process's appends force a live re-read
+	if snap.entries != nil && serr == nil && fi.Size() == snap.size && fi.ModTime().Equal(snap.mod) {
 		entries, rwarns = snap.entries, snap.warns // the open-time parse: startup reads once
 	} else {
 		var err error
@@ -493,13 +468,6 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
 	return entries, head, append(rwarns, warns...)
-}
-
-// snapshotFresh reports whether the transcript still matches the snapshot's
-// stamped size and mtime, so another process's appends force a live re-read.
-func snapshotFresh(path string, snap snapshot) bool {
-	fi, err := os.Stat(path)
-	return err == nil && fi.Size() == snap.size && fi.ModTime().Equal(snap.mod)
 }
 
 func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {

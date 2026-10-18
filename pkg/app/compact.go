@@ -81,11 +81,6 @@ func (c *compactor) endTurn() {
 	c.warned.Store(false)
 }
 
-// compaction returns the live compaction settings.
-func (c *compactor) compaction() config.Compaction {
-	return c.cfg()
-}
-
 // run performs one compaction for reason, returning whether anything changed. A manual run refuses
 // while a turn streams or another compaction runs. An automatic run only acts when Used has crossed
 // the model's compaction point. Step and overflow runs fire mid-turn from the turn's own goroutine.
@@ -108,7 +103,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		defer done()
 	}
 	model := c.st.Model
-	cfg := c.compaction()
+	cfg := c.cfg()
 	if autoReason(reason) {
 		if !cfg.Auto {
 			return false, nil // automatic reduction disabled by config
@@ -181,6 +176,11 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	if instructions == "" && c.focus != nil {
 		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
 	}
+	// a fraction outside (0,1) defers to pkg/compact's own default bound
+	vt := 0
+	if f := cfg.VerbatimFraction; f > 0 && f < 1 {
+		vt = int(float64(tokens.CompactAt(model)) * f)
+	}
 	opts := compact.Options{
 		Cwd:            config.Cwd(),
 		Instructions:   instructions,
@@ -188,7 +188,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		Base:           base,
 		Resolve:        c.reg.Resolve,
 		MinSteps:       cfg.MinSteps,
-		VerbatimTokens: verbatimTokens(model, cfg.VerbatimFraction),
+		VerbatimTokens: vt,
 	}
 	res, cerr := compact.Compact(ctx, branch, model, run, opts)
 	if cerr != nil {
@@ -279,15 +279,6 @@ func (c *compactor) declineAuto(reason agent.CompactReason) {
 	c.warned.Store(true) // this notice is the turn's reminder
 	c.notify("automatic compaction could not reduce this session; run /compact with "+
 		"instructions, switch models, or rewind", agent.LevelWarn)
-}
-
-// verbatimTokens converts a configured fraction into a token ceiling against the model's compaction
-// point. A fraction outside (0,1) returns 0, leaving the bound to pkg/compact's own default.
-func verbatimTokens(m llm.Model, fraction float64) int {
-	if fraction <= 0 || fraction >= 1 {
-		return 0
-	}
-	return int(float64(tokens.CompactAt(m)) * fraction)
 }
 
 // reportLine describes a compaction honestly: before/after tokens plus how much

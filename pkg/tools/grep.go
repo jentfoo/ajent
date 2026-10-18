@@ -137,13 +137,6 @@ func (p grepParams) capNote(mode string, spent bool, max int) string {
 	if !spent || (p.Limit > 0 && mode != grepCount && !blocks) {
 		return ""
 	}
-	return resultCapNote(max)
-}
-
-// resultCapNote names the match cap a truncated result hit. Count output notes
-// whenever anything was withheld: a trimmed count reads as authoritative in a
-// way cut-off content lines do not.
-func resultCapNote(max int) string {
 	return fmt.Sprintf("... result cap of %d matches reached; narrow the pattern or raise limit", max)
 }
 
@@ -347,7 +340,10 @@ func (t *grepTool) finalize(out, note string) agent.ToolResult {
 }
 
 // rgOnPath reports whether ripgrep is available.
-func rgOnPath() bool { return lookPath("rg") }
+func rgOnPath() bool {
+	_, err := exec.LookPath("rg")
+	return err == nil
+}
 
 // runRg streams ripgrep output until the report is complete or one more item
 // arrives past the match budget, then cancels rg so a deep tree with many

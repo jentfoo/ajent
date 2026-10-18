@@ -69,17 +69,10 @@ func encodeULID(id [16]byte) string {
 func readBits5(b []byte, start int) byte {
 	var v uint32
 	for k := range 5 { // bits at start..start+4, MSB first
-		if bitAt(b, start+k) {
+		i := start + k
+		if i < len(b)*8 && b[i/8]&(0x80>>uint(i%8)) != 0 {
 			v |= 1 << (4 - k)
 		}
 	}
 	return byte(v)
-}
-
-// bitAt reports whether the bit at index i is set.
-func bitAt(b []byte, i int) bool {
-	if i >= len(b)*8 {
-		return false
-	}
-	return b[i/8]&(0x80>>uint(i%8)) != 0
 }

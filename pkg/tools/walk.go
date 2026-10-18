@@ -9,15 +9,10 @@ import (
 	"time"
 )
 
-// lookPath reports whether an executable is on PATH.
-func lookPath(name string) bool {
-	_, err := exec.LookPath(name)
-	return err == nil
-}
-
 // IsGitRepo reports whether root is inside a git work tree.
 func IsGitRepo(ctx context.Context, root string) bool {
-	return runQuiet(ctx, "git", "-C", root, "rev-parse", "--is-inside-work-tree") == "true"
+	return strings.TrimSpace(runQuietRaw(ctx,
+		"git", "-C", root, "rev-parse", "--is-inside-work-tree")) == "true"
 }
 
 // IsSkippedDir reports whether path lies under a VCS or dependency directory.
@@ -107,14 +102,9 @@ func WithinRoot(root, path string) (string, bool) {
 	return rel, true
 }
 
-// runQuiet runs a command with a short timeout and returns trimmed stdout or
-// empty on failure, so an unresponsive child cannot hang the tool.
-func runQuiet(ctx context.Context, args ...string) string {
-	return strings.TrimSpace(runQuietRaw(ctx, args...))
-}
-
-// runQuietRaw is runQuiet without the trim, for NUL-separated output where
-// whitespace belongs to a record.
+// runQuietRaw runs a command with a short timeout and returns raw stdout or
+// empty on failure, so an unresponsive child cannot hang the tool. NUL-separated
+// callers keep whitespace as part of a record.
 func runQuietRaw(ctx context.Context, args ...string) string {
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

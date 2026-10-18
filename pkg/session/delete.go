@@ -48,7 +48,13 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 		_, _ = fmt.Fprintf(out, "  %s  %s\n", info.Label(), describeInfo(info))
 	}
 	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", strutil.Plural(len(stale), "session"))
-	if !confirmed(in) {
+	// EOF (no terminal, or stdin closed) declines rather than deleting blind
+	sc := bufio.NewScanner(in)
+	answer := ""
+	if sc.Scan() {
+		answer = strings.ToLower(strings.TrimSpace(sc.Text()))
+	}
+	if answer != "y" && answer != "yes" {
 		_, _ = fmt.Fprintln(out, "Cancelled; nothing was deleted.")
 		return nil
 	}
@@ -64,17 +70,6 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 	}
 	_, _ = fmt.Fprintf(out, "Deleted %s.\n", strutil.Plural(removed, "session"))
 	return errors.Join(errs...)
-}
-
-// confirmed reads one line and reports whether it agrees. EOF (no terminal, or
-// stdin closed) declines rather than deleting blind.
-func confirmed(in io.Reader) bool {
-	sc := bufio.NewScanner(in)
-	if !sc.Scan() {
-		return false
-	}
-	answer := strings.ToLower(strings.TrimSpace(sc.Text()))
-	return answer == "y" || answer == "yes"
 }
 
 // describeInfo summarises a saved session for the delete output.

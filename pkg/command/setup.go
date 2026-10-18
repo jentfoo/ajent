@@ -64,16 +64,6 @@ var providerSetupChoices = []setupChoice{
 	{name: "xiaomi", label: "Xiaomi MiMo"},
 }
 
-// discovers reports whether the wizard may probe the endpoint for its model
-// list: the custom row always, hosted flavors per their catalogue entry.
-func (ch setupChoice) discovers() bool {
-	if ch.name == customProviderName {
-		return true
-	}
-	prof, ok := llm.LookupFlavor(ch.name)
-	return ok && prof.Discover
-}
-
 // group names the picker section a row renders under.
 func (ch setupChoice) group() string {
 	if ch.name == customProviderName {
@@ -90,7 +80,11 @@ func (ch setupChoice) group() string {
 // The written provider is merged into any existing file and loaded into the
 // live registry. It reports tui.ErrCancelled when dismissed.
 func ProviderSetup(ctx context.Context, c Console) error {
-	idx, err := c.Pick(ctx, "Choose a model provider", providerSetupItems(),
+	items := make([]tui.PickItem, len(providerSetupChoices)) // menu rows under their group headers
+	for i, ch := range providerSetupChoices {
+		items[i] = tui.PickItem{Label: ch.label, Detail: ch.name, Group: ch.group()}
+	}
+	idx, err := c.Pick(ctx, "Choose a model provider", items,
 		tui.PickOptions{Placeholder: filterPlaceholder})
 	if err != nil {
 		return err
@@ -111,7 +105,11 @@ func ProviderSetup(ctx context.Context, c Console) error {
 	}
 	warns, err := saveUserFile(file)
 	if err != nil {
-		return fmt.Errorf("could not write %s: %w", modelsUserPath(), err)
+		path, perr := config.UserPath(llm.ModelsFileName) // the user models file path for messages
+		if perr != nil {
+			path = "~/.ajent/" + llm.ModelsFileName
+		}
+		return fmt.Errorf("could not write %s: %w", path, err)
 	}
 	for _, w := range warns {
 		c.Notify(w, levelWarn)
@@ -154,15 +152,6 @@ func mergeUserFile(file llm.File) (llm.File, error) {
 		base.DefaultModel = file.DefaultModel
 	}
 	return base, nil
-}
-
-// providerSetupItems renders the menu rows under their group headers.
-func providerSetupItems() []tui.PickItem {
-	items := make([]tui.PickItem, len(providerSetupChoices))
-	for i, ch := range providerSetupChoices {
-		items[i] = tui.PickItem{Label: ch.label, Detail: ch.name, Group: ch.group()}
-	}
-	return items
 }
 
 // setupCredentials collects the endpoint secret: the flavor's environment
@@ -209,7 +198,12 @@ func setupCredentials(ctx context.Context, c Console, choice setupChoice) (llm.P
 	if prof.APIKeyEnv != "" {
 		placeholder = "paste key, or leave empty to use $" + prof.APIKeyEnv + " later"
 	}
-	key, err := c.InputSecret(ctx, apiKeyLabel(choice.name, prof.APIKeyEnv), placeholder)
+	// the prompt names the credential for a hosted provider
+	label := choice.name + " API key"
+	if prof.APIKeyEnv != "" {
+		label += " ($" + prof.APIKeyEnv + ")"
+	}
+	key, err := c.InputSecret(ctx, label, placeholder)
 	if err != nil {
 		return cfg, err
 	}
@@ -226,7 +220,13 @@ func setupModels(ctx context.Context, c Console, choice setupChoice, cfg llm.Pro
 	var file llm.File
 	var entry llm.CacheEntry
 
-	if choice.discovers() {
+	// the custom row always probes; hosted flavors per their catalogue entry
+	mayProbe := choice.name == customProviderName
+	if !mayProbe {
+		prof, ok := llm.LookupFlavor(choice.name)
+		mayProbe = ok && prof.Discover
+	}
+	if mayProbe {
 		c.Notify("discovering models…", levelInfo)
 		pctx, cancel := context.WithTimeout(ctx, llm.DiscoverTimeout)
 		defer cancel()
@@ -314,21 +314,4 @@ func inheritFlavorPath(defaultURL, entered string) string {
 		return entered
 	}
 	return strings.TrimRight(entered, "/") + def.Path
-}
-
-// apiKeyLabel names the credential prompt for a hosted provider.
-func apiKeyLabel(name, env string) string {
-	if env == "" {
-		return name + " API key"
-	}
-	return name + " API key ($" + env + ")"
-}
-
-// modelsUserPath returns the user models file path for messages.
-func modelsUserPath() string {
-	path, err := config.UserPath(llm.ModelsFileName)
-	if err != nil {
-		return "~/.ajent/" + llm.ModelsFileName
-	}
-	return path
 }

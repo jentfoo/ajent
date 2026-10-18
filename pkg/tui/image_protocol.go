@@ -114,12 +114,6 @@ func kittyTransmit(id uint32, data []byte, cols, rows int) string {
 	return b.String()
 }
 
-// kittyDelete renders the deletion sequence for one image id, freeing its
-// placements and data. q=2 for the same reason as the transmit.
-func kittyDelete(id uint32) string {
-	return esc + "_Ga=d,q=2,d=I,i=" + strconv.FormatUint(uint64(id), 10) + esc + "\\"
-}
-
 // iterm2Sequence renders one image as an OSC 1337 inline file sized in cells.
 // There is no chunking and no deletion: the whole payload rides one sequence.
 // doNotMoveCursor keeps the cursor where it was, like kitty's placement, so

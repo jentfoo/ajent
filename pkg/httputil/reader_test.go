@@ -85,12 +85,12 @@ func TestSleepContext(t *testing.T) {
 	t.Parallel()
 
 	t.Run("zero_returns_immediately", func(t *testing.T) {
-		assert.NoError(t, sleepContext(t.Context(), 0))
+		assert.NoError(t, SleepContext(t.Context(), 0))
 	})
 
 	t.Run("cancelled_context_reports_the_cause", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
-		assert.ErrorIs(t, sleepContext(ctx, time.Hour), context.Canceled)
+		assert.ErrorIs(t, SleepContext(ctx, time.Hour), context.Canceled)
 	})
 }

@@ -41,7 +41,13 @@ func applyModel(ctx context.Context, arg string, c Console) (llm.Model, bool, er
 	if arg != "" {
 		target, rerr := c.Models().Resolve(arg)
 		if rerr != nil {
-			reportResolveError(c, arg, rerr)
+			// explain why the name did not select a model
+			var ambiguous *llm.ErrAmbiguousModel
+			if errors.As(rerr, &ambiguous) {
+				c.Notify(arg+" matches "+strings.Join(ambiguous.Candidates, ", "), levelWarn)
+			} else {
+				c.Notify("no model matches "+arg, levelWarn)
+			}
 			return llm.Model{}, false, nil
 		}
 		m = target
@@ -115,16 +121,6 @@ func modelDetail(m llm.Model) string {
 		parts = append(parts, "reasoning")
 	}
 	return strings.Join(parts, " · ")
-}
-
-// reportResolveError explains why a name did not select a model.
-func reportResolveError(c Console, arg string, err error) {
-	var ambiguous *llm.ErrAmbiguousModel
-	if errors.As(err, &ambiguous) {
-		c.Notify(arg+" matches "+strings.Join(ambiguous.Candidates, ", "), levelWarn)
-		return
-	}
-	c.Notify("no model matches "+arg, levelWarn)
 }
 
 // reasoningCommand sets the session reasoning level. With no argument it reports

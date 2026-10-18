@@ -62,9 +62,13 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 	stripThinking := cd.Reduce != nil && cd.Reduce.StripThinking
 
 	if keep > 0 && cd.Summary != "" {
+		// framed as a user message because providers reject a leading system
+		// message that is not the top-level system field; the framing marks the
+		// provenance so the model knows what it lost
+		const head = "The conversation history before this point was compacted into the following summary:\n\n"
 		msgs = append(msgs, llm.Message{
 			Role:    llm.RoleUser,
-			Content: llm.BlockList{llm.TextBlock{Text: summaryFraming(cd.Summary)}},
+			Content: llm.BlockList{llm.TextBlock{Text: head + "<summary>\n" + EscapeTagLiterals(cd.Summary) + "\n</summary>"}},
 		})
 	}
 
@@ -193,17 +197,6 @@ func stubResult(tr llm.ToolResultBlock, s Stub) llm.ToolResultBlock {
 	out, _ := tools.Elide(text, tools.Limit{Bytes: s.Limit})
 	tr.Content = llm.BlockList{llm.TextBlock{Text: out}}
 	return tr
-}
-
-// summaryFraming wraps a compaction summary with its provenance so the model
-// knows what it lost. Kept as a user message because providers reject a leading
-// system message that is not the top-level system field.
-func summaryFraming(s string) string {
-	if s == "" {
-		return ""
-	}
-	const head = "The conversation history before this point was compacted into the following summary:\n\n"
-	return head + "<summary>\n" + EscapeTagLiterals(s) + "\n</summary>"
 }
 
 // tagEscaper neutralises the close tags framing compaction's data blocks: a

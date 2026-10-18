@@ -91,8 +91,8 @@ func (r *idleReader) didFire() bool {
 	return r.fired
 }
 
-// sleepContext waits for d, or until ctx is done.
-func sleepContext(ctx context.Context, d time.Duration) error {
+// SleepContext waits for d, or until ctx is done.
+func SleepContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()
 	}

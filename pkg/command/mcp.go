@@ -88,9 +88,13 @@ func mcpList(ctx context.Context, c Console, s MCPServers) {
 	b.WriteString("\n| server | state | transport | tools | latency |\n")
 	b.WriteString("|--------|-------|-----------|------:|---------:|\n")
 	for _, r := range rows {
+		latency := "—" // rendered compactly for table cells
+		if r.Latency != 0 {
+			latency = r.Latency.Round(time.Millisecond).String()
+		}
 		_, _ = fmt.Fprintf(&b, "| %s | %s | %s | %d | %s |\n",
 			r.Name, r.State, orDash(r.Transport),
-			r.ToolCount, latencyStr(r.Latency))
+			r.ToolCount, latency)
 	}
 	c.Print(b.String())
 }
@@ -117,14 +121,6 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
-}
-
-// latencyStr renders a duration compactly for table cells.
-func latencyStr(d time.Duration) string {
-	if d == 0 {
-		return "—"
-	}
-	return d.Round(time.Millisecond).String()
 }
 
 // mcpCompletion offers verbs, then server names after connect/disconnect/logs.

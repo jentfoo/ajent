@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 )
@@ -207,13 +206,6 @@ const pasteThreshold = 2048
 type pasteEntry struct {
 	placeholder string
 	content     string
-}
-
-// pastePlaceholder returns the marker text inserted for a large paste. seq makes
-// it unique, so two pastes of the same line count never share an entry.
-func pastePlaceholder(text string, seq int) string {
-	lines := strings.Count(text, "\n") + 1
-	return fmt.Sprintf("[pasted %d lines #%d]", lines, seq)
 }
 
 // expandPastes replaces any paste placeholders in v with their stored content so

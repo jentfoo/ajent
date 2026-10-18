@@ -154,22 +154,25 @@ func TestSSEReaderIsDone(t *testing.T) {
 func TestSSEReaderLastEventID(t *testing.T) {
 	t.Parallel()
 
+	// LastEventID reports the most recent id field, for resumption.
+	lastID := func(r *SSEReader) string { return r.lastID }
+
 	t.Run("tracks_latest", func(t *testing.T) {
 		r := NewSSEReader(strings.NewReader("id: 1\ndata: a\n\nid: 2\ndata: b\n\n"), 0)
 		_, err := r.Next(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, "1", r.LastEventID())
+		assert.Equal(t, "1", lastID(r))
 
 		_, err = r.Next(t.Context())
 		require.NoError(t, err)
-		assert.Equal(t, "2", r.LastEventID())
+		assert.Equal(t, "2", lastID(r))
 	})
 
 	t.Run("nul_in_id_ignored", func(t *testing.T) {
 		r := NewSSEReader(strings.NewReader("id: a\x00b\ndata: x\n\n"), 0)
 		_, err := r.Next(t.Context())
 		require.NoError(t, err)
-		assert.Empty(t, r.LastEventID())
+		assert.Empty(t, lastID(r))
 	})
 }
 

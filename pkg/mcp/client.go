@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"maps"
 	"net/http"
 	"os"
@@ -132,12 +131,6 @@ func Connect(ctx context.Context, name string, cfg ServerConfig) (*Client, error
 	return c, nil
 }
 
-// Transport reports the transport kind as a short label for /mcp.
-func (c *Client) Transport() string { return c.tran }
-
-// ServerName returns the configured server name.
-func (c *Client) ServerName() string { return c.name }
-
 // SetNotice installs a sink for non-fatal warnings during discovery and calls.
 func (c *Client) SetNotice(f func(string)) { c.onWarn = f }
 
@@ -160,7 +153,10 @@ func transportKind(cfg ServerConfig) string {
 	if cfg.Command != "" { // no explicit transport: a command implies stdio
 		return TransportStdio
 	}
-	return cfg.NetworkKind() // http or sse
+	if cfg.Transport == TransportSSE { // legacy url servers stream over sse, else http
+		return TransportSSE
+	}
+	return TransportHTTP
 }
 
 // init negotiates the protocol version, naming ours and the server's on a mismatch.
@@ -299,7 +295,11 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 	seen := map[string]struct{}{} // cursors already followed
 	var cursor string
 	for {
-		resp, err := c.sendRaw(ctx, string(mcp.MethodToolsList), listToolParams(cursor))
+		params := map[string]any{}
+		if cursor != "" {
+			params["cursor"] = cursor
+		}
+		resp, err := c.sendRawAttempts(ctx, string(mcp.MethodToolsList), params, rawRetries)
 		if err != nil {
 			return nil, fmt.Errorf("tools/list: %w", err)
 		}
@@ -332,14 +332,6 @@ func (c *Client) Tools(ctx context.Context) ([]ToolDef, error) {
 		cursor = page.NextCursor
 	}
 	return uniqueTools(out, c.warn), nil
-}
-
-func listToolParams(cursor string) any {
-	p := map[string]any{}
-	if cursor != "" {
-		p["cursor"] = cursor
-	}
-	return p
 }
 
 // uniqueTools drops later duplicates of an already-accepted name, so a server
@@ -456,16 +448,6 @@ func (c *Client) OnNotification(h func(mcp.JSONRPCNotification)) {
 	c.c.OnNotification(func(n mcp.JSONRPCNotification) { go h(n) })
 }
 
-// stderr returns the stdio child's captured stderr reader, or nil for network
-// servers. The manager feeds it to /mcp logs.
-func (c *Client) stderr() io.Reader {
-	r, ok := mcpclient.GetStderr(c.c)
-	if !ok || r == nil {
-		return nil
-	}
-	return r
-}
-
 // writeProgress streams one progress line to a call's live output, if any. It
 // ignores tokens with no matching in-flight call.
 func (c *Client) writeProgress(key int64, text string) {
@@ -512,12 +494,6 @@ func (c *Client) Close() error {
 		_ = syscall.Kill(-c.cmd.Process.Pid, syscall.SIGKILL)
 	}
 	return err
-}
-
-// sendRaw sends one raw-seam request, retrying transient transport failures so a
-// dropped or reset stdio response cannot fail discovery outright.
-func (c *Client) sendRaw(ctx context.Context, method string, params any) (*transport.JSONRPCResponse, error) {
-	return c.sendRawAttempts(ctx, method, params, rawRetries)
 }
 
 // sendRawAttempts sends one request up to retries resends. Each attempt is bounded by

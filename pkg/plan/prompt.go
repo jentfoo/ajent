@@ -60,7 +60,11 @@ func reviewKickoff(plan, gitStatus, diffStat, summary string) string {
 		"so each one must be self-contained and name the files it concerns.\n\n")
 	b.WriteString("<plan>\n" + strings.TrimSpace(plan) + "\n</plan>\n")
 	b.WriteString("\nThis is the plan as the user approved it, which may differ from the draft.\n")
-	b.WriteString("\n<git_status>\n" + fallback(gitStatus, "(no changes reported)") + "\n</git_status>\n")
+	status := gitStatus // blank reports no changes
+	if strings.TrimSpace(status) == "" {
+		status = "(no changes reported)"
+	}
+	b.WriteString("\n<git_status>\n" + status + "\n</git_status>\n")
 	if diffStat != "" {
 		b.WriteString("\n<git_diff_stat>\n" + diffStat + "\n</git_diff_stat>\n")
 	}
@@ -86,12 +90,4 @@ func capReport(lastRound string) string {
 		msg += ". The last review asked for: " + strings.TrimSpace(lastRound)
 	}
 	return msg
-}
-
-// fallback returns s, or alt when s is blank.
-func fallback(s, alt string) string {
-	if strings.TrimSpace(s) == "" {
-		return alt
-	}
-	return s
 }

@@ -262,7 +262,11 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 		case llm.RoleUser:
 			for _, blk := range m.Content {
 				if tr, ok := blk.(llm.ToolResultBlock); ok {
-					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(stubbedText(tr, stubs), clip))
+					text := llm.FirstBlockText(tr.Content)
+					if s, ok := stubs[tr.CallID]; ok && s.Text != "" {
+						text = s.Text // the plan's stub replaces the raw result
+					}
+					_, _ = fmt.Fprintf(b, "[Tool result]: %s\n", strutil.Clip(text, clip))
 				}
 			}
 			if t := llm.JoinText(m.Content); t != "" {
@@ -276,7 +280,10 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 						b.WriteString("[Assistant]: " + c.Text + "\n")
 					}
 				case llm.ToolCallBlock:
-					_, _ = fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n", c.Name, strutil.Clip(string(c.Input), capCallInput(clip)))
+					// the input is argument shape rather than output, never needing
+					// the full allowance
+					_, _ = fmt.Fprintf(b, "[Assistant tool calls]: %s(%s)\n",
+						c.Name, strutil.Clip(string(c.Input), min(clip, 512)))
 				}
 			}
 		default:
@@ -285,30 +292,10 @@ func serialise(b *strings.Builder, v *branchView, start, end int, stubs map[stri
 	}
 }
 
-// stubbedText returns what a tool result contributes to the transcript: its stub
-// replacement when the plan has one.
-func stubbedText(tr llm.ToolResultBlock, stubs map[string]session.Stub) string {
-	text := llm.FirstBlockText(tr.Content)
-	s, ok := stubs[tr.CallID]
-	if ok && s.Text != "" {
-		return s.Text
-	}
-	return text
-}
-
 // clipLadder is tried in order until the transcript fits the model window.
 // MaxInt keeps tool output whole, which is the normal outcome: serialisation
 // already compresses a branch several-fold before any clipping.
 var clipLadder = []int{math.MaxInt, 8192, 4096, 2048, 1024, 512}
-
-// capCallInput bounds a tool call's JSON input, which is argument shape rather
-// than output and never needs the full allowance.
-func capCallInput(clip int) int {
-	if clip > 512 {
-		return 512
-	}
-	return clip
-}
 
 // fitPlan is the sizing fitPrompt settled on.
 type fitPlan struct {

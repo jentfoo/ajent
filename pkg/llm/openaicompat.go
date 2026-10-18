@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"maps"
 	"net/http"
 	"strings"
 
@@ -129,7 +128,7 @@ func buildCompatBody(req Request, profile compatProfile) ([]byte, error) {
 		body.PromptCacheKey = clampPromptCacheKey(req.SessionID)
 	}
 	// configured extra keys win over everything, including our own dynamic ones
-	return marshalWithExtra(body, mergeExtra(body.extra, caps.ExtraBody))
+	return marshalMerged(body, mergeExtra(body.extra, caps.ExtraBody))
 }
 
 // applyVercelGateway emits provider_options.gateway from configured {only,order} routing.
@@ -142,21 +141,6 @@ func applyVercelGateway(body *compatRequest, raw json.RawMessage) {
 		return // nothing usable
 	}
 	body.ProviderOptions = map[string]any{"gateway": g}
-}
-
-// marshalWithExtra folds any configured extra body keys into the request, which
-// is the escape hatch for vendor parameters we do not model.
-func marshalWithExtra(body compatRequest, extra map[string]json.RawMessage) ([]byte, error) {
-	data, err := json.Marshal(body)
-	if err != nil || len(extra) == 0 {
-		return data, err
-	}
-	var merged map[string]json.RawMessage
-	if err = json.Unmarshal(data, &merged); err != nil {
-		return nil, err
-	}
-	maps.Copy(merged, extra)
-	return json.Marshal(merged)
 }
 
 // kimiLoadedTools returns the top level tool list, dropping tools a result

@@ -308,24 +308,31 @@ func TestPrepareJPEGFallback(t *testing.T) {
 
 // the jpeg arm keeps no alpha: compositing over white must win over whatever
 // rgb sat beneath, here black under random alpha
-func TestFlattenWhite(t *testing.T) {
+func TestPrepareAlphaPngFlattensToWhite(t *testing.T) {
 	t.Parallel()
 
-	src := image.NewNRGBA(image.Rect(0, 0, 64, 48))
+	// black pixels under pseudo-random alpha leave ~1 uncompressed byte per
+	// pixel, so the fixture busts the encoded-size ceiling and lands on jpeg
+	src := image.NewNRGBA(image.Rect(0, 0, 1950, 1950))
 	rng := rand.New(rand.NewSource(1))
 	for i := 3; i < len(src.Pix); i += 4 {
 		src.Pix[i] = byte(rng.Intn(256))
 	}
-	out := flattenWhite(src)
+	res, err := Prepare(pngBytes(t, src))
+	require.NoError(t, err)
+	assert.Equal(t, typeJPEG, res.MediaType)
+
+	dec, err := jpeg.Decode(bytes.NewReader(res.Data))
+	require.NoError(t, err)
 	var sum int64
-	for y := range 48 {
-		for x := range 64 {
-			r, _, _, _ := out.NRGBAAt(x, y).RGBA()
-			sum += int64(r)
+	for y := 0; y < dec.Bounds().Dy(); y++ {
+		for x := 0; x < dec.Bounds().Dx(); x++ {
+			r, _, _, _ := dec.At(x, y).RGBA()
+			sum += int64(r >> 8)
 		}
 	}
-	mean := sum / int64(64*48)
-	assert.Greater(t, mean, int64(30000)) // mid-gray: white shows through
+	mean := sum / int64(dec.Bounds().Dx()) / int64(dec.Bounds().Dy())
+	assert.Greater(t, mean, int64(120)) // mid-bright: white shows through
 }
 
 func TestPrepareOversizeJpegShrinks(t *testing.T) {

@@ -137,9 +137,11 @@ func spanStubs(branch []session.Entry, lo, band int, cwd string) []session.Stub 
 				out = append(out, session.Stub{CallID: tr.CallID, Text: failedStub(c.name, tr)})
 			case dup && first != tr.CallID:
 				out = append(out, session.Stub{CallID: tr.CallID, Text: dupMarker})
-			case c.name == "read" && superseded(reads[c.path], tr.CallID):
+			case c.name == "read" && len(reads[c.path]) >= 2 && reads[c.path][len(reads[c.path])-1] != tr.CallID:
+				// only the newest successful read survives
 				out = append(out, session.Stub{CallID: tr.CallID, Text: supersededReadMarker})
-			case c.name == "edit" && c.path != "" && writtenAfter(writes[c.path], i):
+			case c.name == "edit" && c.path != "" && len(writes[c.path]) > 0 && writes[c.path][len(writes[c.path])-1].at > i:
+				// only the newest write counts
 				out = append(out, session.Stub{CallID: tr.CallID, Text: supersededEditMarker})
 			}
 		}
@@ -184,23 +186,4 @@ func canonicalPath(resolve func(string) (string, error), input json.RawMessage) 
 		return p.Path // bare fallback keeps superseded detection on a stable key
 	}
 	return r
-}
-
-// superseded reports whether callID is not the newest successful read of its
-// path; registration already dropped reads that failed or were denied.
-func superseded(ids []string, callID string) bool {
-	if len(ids) < 2 {
-		return false
-	}
-	return ids[len(ids)-1] != callID
-}
-
-// writtenAfter reports whether the newest write registered for a path landed
-// after branch position at; only successful writes are registered, appended in
-// scan order, so the last entry is the newest.
-func writtenAfter(wcs []writeCall, at int) bool {
-	if len(wcs) == 0 {
-		return false
-	}
-	return wcs[len(wcs)-1].at > at
 }

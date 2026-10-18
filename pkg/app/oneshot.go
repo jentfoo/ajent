@@ -199,7 +199,13 @@ func RunHeadless(o HeadlessOptions) int {
 			Registrar: registryAdapter{toolsReg},
 			Workspace: config.Cwd(),
 			Restore:   st.Tools,
-			Notice:    func(msg string, warn bool) { notify("mcp: "+msg, agentLevelOf(warn)) },
+			Notice: func(msg string, warn bool) {
+				level := agent.LevelInfo
+				if warn {
+					level = agent.LevelWarn
+				}
+				notify("mcp: "+msg, level)
+			},
 		})
 		defer mgr.Close()
 		mgr.LoadOnFirstMessage(ctx) // every remote tool must exist before the scope is applied
