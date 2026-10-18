@@ -79,6 +79,36 @@ func TestShellComplete(t *testing.T) {
 			assert.Contains(t, labelsOf(items), "echo", line)
 		}
 	})
+
+	// a newline restarts the command position too: each line of a multi-line
+	// run stages as one bash script, with or without padding after the break
+	t.Run("command_names_after_newline", func(t *testing.T) {
+		requireBash(t)
+		comp := newShellCompleter(t, "pkg")
+
+		for _, line := range []string{"!ls\nech", "!!ls\nech", "!ls\n ech", "!ls \n\n ech"} {
+			_, items := comp.Complete(line, len(line))
+			assert.Contains(t, labelsOf(items), "echo", line)
+		}
+	})
+
+	// a later word on a multi-line run still completes paths
+	t.Run("path_argument_second_line", func(t *testing.T) {
+		comp := newShellCompleter(t, "pkg")
+
+		start, items := comp.Complete("!ls\ncat pk", len("!ls\ncat pk"))
+		assert.Equal(t, 8, start)
+		assert.Equal(t, []string{"pkg/"}, labelsOf(items))
+	})
+
+	// an empty first word on a new line offers nothing, like a bare !
+	t.Run("empty_token_after_newline", func(t *testing.T) {
+		comp := newShellCompleter(t, "pkg")
+
+		start, items := comp.Complete("!ls\n", 4)
+		assert.Equal(t, 4, start)
+		assert.Empty(t, items)
+	})
 }
 
 func TestShellCmdStart(t *testing.T) {
@@ -107,6 +137,9 @@ func TestIsCmdPosition(t *testing.T) {
 		{"after_semicolon", "!ls; gr", true},
 		{"after_semicolon_unpadded", "!ls;gr", true},
 		{"after_subshell", "!(gr", true},
+		{"after_newline", "!ls\nech", true},
+		{"after_newline_padded", "!ls\n ech", true},
+		{"second_word_after_newline", "!ls\ncat ba", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

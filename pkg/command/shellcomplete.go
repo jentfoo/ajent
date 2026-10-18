@@ -79,10 +79,14 @@ func shellTokenStart(cells []string, pos, from int) int {
 }
 
 // isCmdPosition reports whether the token at start begins a command, i.e. only
-// whitespace or a separator lies between it and from.
+// whitespace or a separator lies between it and from. A newline counts too:
+// each line of a multi-line `!` run opens its own command.
 func isCmdPosition(cells []string, from, start int) bool {
 	i := start
 	for i > from && isTokenBreakCell(cells[i-1]) {
+		if cells[i-1] == "\n" {
+			return true
+		}
 		i--
 	}
 	if i <= from {
