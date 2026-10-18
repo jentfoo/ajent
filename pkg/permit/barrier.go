@@ -335,9 +335,16 @@ func (b *Barrier) Asker() tools.Asker {
 			return allowDecision()
 		}
 
+		// the guard's ask can predate a mode change landing in the dispatch gap,
+		// and this snapshot already names the new gate, so a verdict that allows
+		// outright never opens a dialog
+		if g.staticVerdict(ctx, call).Action == tools.ActionAllow {
+			return allowDecision()
+		}
+
 		prompter, _ := b.prompterSnapshot()
 		if prompter == nil { // nobody to ask; the auto modes still get a verdict
-			return b.unattendedAsk(ctx, m, call)
+			return b.unattendedAsk(ctx, call)
 		}
 
 		// the auto modes classify the call while the user types, the verdict racing
@@ -389,7 +396,7 @@ func (b *Barrier) Asker() tools.Asker {
 			// no dialog can open (plain render, a UI that went away): settle the ask
 			// exactly as a run without a prompter would, so permission behavior follows
 			// "can this session open a dialog", never which front end is attached
-			d := b.unattendedAsk(ctx, m, call)
+			d := b.unattendedAsk(ctx, call)
 			stop()
 			return d
 		}
@@ -450,8 +457,14 @@ func (b *Barrier) Asker() tools.Asker {
 }
 
 // unattendedAsk decides a prompted call with no UI: the auto modes take the
-// model verdict as final, every other mode has nobody to decide.
-func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall) tools.Decision {
+// model verdict as final, every other mode has nobody to decide. The live gate
+// is snapshotted so a mode change since the asker entered still applies.
+func (b *Barrier) unattendedAsk(ctx context.Context, call agent.ToolCall) tools.Decision {
+	g := b.gateNow()
+	if g.staticVerdict(ctx, call).Action == tools.ActionAllow {
+		return allowDecision()
+	}
+	m := g.mode
 	// a core writer never classifies, so an offered one outside auto+write's scope
 	// is withheld by the gate itself rather than left to a missing UI
 	if _, isWrite := coreWriteTools[call.Name]; isWrite && (m == ModeAuto || m == ModeAutoWrite) {
@@ -464,13 +477,18 @@ func (b *Barrier) unattendedAsk(ctx context.Context, m Mode, call agent.ToolCall
 	// head) never matches a grant either, so unattended it refuses outright
 	// rather than leaning on a model reading raw text
 	if call.Name == tools.ToolBash {
-		if !nameableForModel(bashCommand(call.Input), call.Input, b.gateNow().scope, b.Mode().allowsWrites()) {
+		if !nameableForModel(bashCommand(call.Input), call.Input, g.scope, m.allowsWrites()) {
 			return tools.Deny(unattendedDenyReason)
 		}
 	}
 	switch b.classifier.Classify(ctx, classifySubject(m, call)) {
 	case ClassAllow:
 		if ctx.Err() != nil { // the run ended under the verdict, nothing left to allow
+			return tools.Deny(unattendedDenyReason)
+		}
+		// a verdict from a replaced mode counts only when the live gate allows,
+		// mirroring the dialog path's racing-verdict discard
+		if b.Mode() != m && b.gateNow().staticVerdict(ctx, call).Action != tools.ActionAllow {
 			return tools.Deny(unattendedDenyReason)
 		}
 		b.resolveNotice("once", true)

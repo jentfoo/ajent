@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -830,7 +831,9 @@ func TestAskerAllowEmitsDescriptiveNotices(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			p := newFakePrompter() // a fresh prompter per case so waitDialog targets its own dialog
 			n := &noticeRecorder{}
-			b := newTestBarrierOpts(p, Options{Notice: n.record})
+			// block-all asks even for these read-only lines, whose static verdict
+			// would otherwise let the asker's live-gate re-check allow without a dialog
+			b := newTestBarrierOpts(p, withMode(Options{Notice: n.record}, ModeBlockAll))
 
 			got := runAndAnswer(t, p, b, "bash", c.input, c.opt)
 			assert.Equal(t, tools.ActionAllow, got.Action)
@@ -1448,9 +1451,11 @@ func (c *blockingClassifier) Classify(ctx context.Context, s Subject) Class {
 type gatedClassifier struct {
 	release chan struct{}
 	verdict Class
+	calls   atomic.Int64 // classifications entered, for mid-request waits
 }
 
 func (c *gatedClassifier) Classify(ctx context.Context, s Subject) Class {
+	c.calls.Add(1)
 	select {
 	case <-c.release:
 		return c.verdict
@@ -2044,4 +2049,157 @@ func TestCommandRefused(t *testing.T) {
 	t.Run("unrelated_entry", func(t *testing.T) {
 		assert.False(t, CommandRefused("make", []string{"git stash", "rm"}))
 	})
+}
+
+// TestFuzzCycleDuringAsk hammers every timing of a shift-right (auto -> auto+write)
+// against an in-scope write ask started in auto. Whatever moment the mode change
+// lands relative to the asker's own gate snapshot (before it, during the hold,
+// after open, after registration), the decision must end as Allow.
+func TestFuzzCycleDuringAsk(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	path := filepath.Join(root, "a.go")
+	input := []byte(`{"path":"` + path + `","content":"x"}`)
+
+	for _, delay := range []time.Duration{0, 50 * time.Microsecond, 200 * time.Microsecond,
+		1 * time.Millisecond, 3 * time.Millisecond, 8 * time.Millisecond} {
+		t.Run(fmt.Sprintf("delay_%s", delay), func(t *testing.T) {
+			p := newFakePrompter()
+			b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{root}}, ModeAuto))
+
+			var got tools.Decision
+			done := make(chan struct{})
+			go func() {
+				got = runAsk(b, t.Context(), "write", input)
+				close(done)
+			}()
+
+			var once sync.Once
+			time.AfterFunc(delay, func() { once.Do(func() { b.Cycle() }) })
+
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Fatal("ask never settled")
+			}
+			assert.Equal(t, tools.ActionAllow, got.Action)
+		})
+	}
+}
+
+// TestAskerStaleAskUnderAllowingMode pins the invariant behind the reported bug:
+// a guard verdict made under one mode must be re-validated against the live gate,
+// so an asker entered after auto+write took over never opens a dialog for a
+// workspace write the new mode allows outright.
+func TestAskerStaleAskUnderAllowingMode(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	p := newFakePrompter()
+	b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{root}}, ModeAuto))
+	b.Cycle() // the mode change completed before the asker runs
+
+	for _, name := range []string{"write", "edit"} {
+		input := []byte(`{"path":"` + filepath.Join(root, "a.go") + `"}`)
+		done := make(chan tools.Decision, 1)
+		go func() { done <- runAsk(b, t.Context(), name, input) }()
+
+		select {
+		case got := <-done:
+			assert.Equal(t, tools.ActionAllow, got.Action, name)
+		case <-time.After(time.Second):
+			t.Fatalf("%s ask never settled", name)
+		}
+	}
+	assert.Zero(t, p.count()) // no dialog flashed
+}
+
+// TestAskerStaleAskStillPromptsWhenModeAsks makes sure the re-validation only
+// short-circuits what the live gate would allow: an out-of-scope write under
+// auto+write still opens its dialog.
+func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	p := newFakePrompter()
+	b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{root}}, ModeAuto))
+	b.Cycle() // auto+write live, but the call targets /etc/hosts
+
+	var got tools.Decision
+	done := make(chan struct{})
+	go func() {
+		got = runAsk(b, t.Context(), "write", []byte(`{"path":"/etc/hosts"}`))
+		close(done)
+	}()
+	d := waitDialog(t, p)
+	require.NotNil(t, d)
+
+	d.answer(int(optDeny))
+	<-done
+	assert.Equal(t, tools.ActionDeny, got.Action)
+}
+
+// TestUnattendedAskVerdictAfterModeChange pins the unattended twin of the dialog
+// path's racing-verdict rule: a classification launched under one mode never
+// decides for the next, so only the live gate may allow what it approved
+func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		name string
+		next Mode
+		want tools.Action
+	}{
+		{"stale_verdict_discarded", ModeAllowRead, tools.ActionDeny},
+		{"live_gate_allows", ModeAllowAll, tools.ActionAllow},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
+			b := newTestBarrierOpts(nil, withMode(Options{Classifier: cl}, ModeAuto))
+
+			done := make(chan tools.Decision, 1)
+			go func() {
+				done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm -rf tmpbuild"}`))
+			}()
+			require.Eventually(t, func() bool { return cl.calls.Load() > 0 }, time.Second, 10*time.Millisecond)
+			b.SetMode(c.next) // the mode that launched the classifier no longer decides
+			close(cl.release)
+
+			select {
+			case got := <-done:
+				assert.Equal(t, c.want, got.Action)
+			case <-time.After(time.Second):
+				t.Fatal("ask never settled")
+			}
+		})
+	}
+}
+
+// TestOpenFailureHonorsModeChange covers the dialogless fallback: a mode change
+// during the typing hold still decides the call, since the unattended path
+// snapshots the live gate rather than the asker's entry mode
+func TestOpenFailureHonorsModeChange(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	p := newFakePrompter()
+	p.err = errors.New("ui gone")
+	b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{root}}, ModeAuto))
+
+	release := p.beginHold()
+	done := make(chan tools.Decision, 1)
+	go func() {
+		done <- runAsk(b, t.Context(), "write", []byte(`{"path":"`+filepath.Join(root, "a.go")+`","content":"x"}`))
+	}()
+	require.Eventually(t, func() bool { return p.holdCount() > 0 }, time.Second, 10*time.Millisecond)
+	b.Cycle() // auto -> auto+write while the dialog waits out typing
+	release()
+
+	select {
+	case got := <-done:
+		assert.Equal(t, tools.ActionAllow, got.Action)
+	case <-time.After(time.Second):
+		t.Fatal("ask never settled")
+	}
 }
