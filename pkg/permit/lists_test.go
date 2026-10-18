@@ -13,8 +13,8 @@ func TestReadOnlyCommandsContents(t *testing.T) {
 
 	want := []string{
 		"ls", "find", "grep", "diff", "which", "ps", "jq",
-		"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "du",
-		"date", "od",
+		"cat", "echo", "head", "tail", "wc", "cd", "pwd", "du",
+		"od",
 	}
 	assert.Len(t, readOnlyCommands, len(want))
 	for _, cmd := range want {
@@ -29,6 +29,16 @@ func TestNetworkNeverReadOnly(t *testing.T) {
 	for _, cmd := range []string{"curl", "wget", "nc"} {
 		_, ok := readOnlyCommands[cmd]
 		assert.False(t, ok, "%q must not be auto-allowed", cmd)
+	}
+}
+
+// bare heads with a write form stay off the list, gated by their own checkers
+func TestWriteFormHeadsNeverBare(t *testing.T) {
+	t.Parallel()
+
+	for _, cmd := range []string{"sed", "git", "awk", "rg", "sort", "date", "file"} {
+		_, ok := readOnlyCommands[cmd]
+		assert.False(t, ok, "%q must not be bare-allowed", cmd)
 	}
 }
 

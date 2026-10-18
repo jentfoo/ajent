@@ -58,6 +58,12 @@ func TestClassify(t *testing.T) {
 		{"awk print field allows", "", "awk '{print $1}' f", nil, VerdictAllow},
 		{"rg pre prompts", "", "rg --pre c p", nil, VerdictPrompt},
 		{"sort output prompts", "", "sort -o /tmp/e i", nil, VerdictPrompt},
+		{"date set prompts", "", "date -s 2025-01-01", nil, VerdictPrompt},
+		{"date set long prompts", "", "date --set=2025-01-01", nil, VerdictPrompt},
+		{"date bsd operand prompts", "", "date 031012002025", nil, VerdictPrompt},
+		{"date format allows", "", "date +%Y-%m-%d", nil, VerdictAllow},
+		{"file compile prompts", "", "file -C -m ./magic", nil, VerdictPrompt},
+		{"file plain allows", "", "file -b f.txt", nil, VerdictAllow},
 		// bash: in-place writes are hard rejects
 		{"sed -i reject", "", "sed -i s/a/b/ f", nil, VerdictReject},
 		{"sed --in-place reject", "", "sed --in-place='.bak' s/a/b/ f", nil, VerdictReject},

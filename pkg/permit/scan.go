@@ -10,7 +10,8 @@ import (
 type Scan struct {
 	// Segments split on unquoted control operators, quoted regions collapsing to "".
 	Segments []string
-	// Raw is the index-aligned verbatim counterpart of Segments, sed/awk/rg/sort reading it.
+	// Raw is the index-aligned verbatim counterpart of Segments, sed/awk/rg/sort/date/file
+	// reading it.
 	Raw []string
 	// Redirects are the targets of every > or >> found outside quotes, fd merges
 	// and /dev/null excluded, raw verbatim text when it differs from the target.
@@ -629,6 +630,10 @@ func segmentIsReadOnly(seg, raw string) bool {
 		return rgReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
 	case "sort":
 		return sortReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
+	case "date":
+		return dateReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
+	case "file":
+		return fileReadOnly(unwrapLaunchers(tokenizeRaw(raw)))
 	default:
 		_, ok := readOnlyCommands[head]
 		return ok

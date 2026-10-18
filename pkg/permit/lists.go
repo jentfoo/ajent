@@ -22,12 +22,12 @@ const (
 )
 
 // readOnlyCommands are verifiably side-effect-free, a matching head being auto-allowed.
-// Commands with an exec or write form (sed, git, awk, rg, sort) are not here:
-// they are verified per invocation in their own checkers instead.
+// Commands with an exec or write form (sed, git, awk, rg, sort, date, file) are not
+// here: they are verified per invocation in their own checkers instead.
 var readOnlyCommands = bulk.SliceToSet([]string{
 	"ls", tools.ToolFind, tools.ToolGrep, "diff", "which", "ps", "jq",
-	"cat", "echo", "head", "tail", "wc", "file", "cd", "pwd", "du",
-	"date", "od",
+	"cat", "echo", "head", "tail", "wc", "cd", "pwd", "du",
+	"od",
 })
 
 // workspaceWriteCommand is the flag grammar of one bounded directory command,
