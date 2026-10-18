@@ -69,6 +69,37 @@ func TestRelaxJSON(t *testing.T) {
 	})
 }
 
+func TestRelaxJSONReport(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       string
+		hasComments bool
+	}{
+		{"plain_json", `{"a":1}`, false},
+		{"trailing_comma_only", `{"a":1,}`, false},
+		{"nested_trailing_commas_only", `{"a":{"b":[1,],},}`, false},
+		{"comment_only", "{\n// note\n}", true},
+		{"comment_beside_trailing_comma", "{\"a\":1, // note\n}", true},
+		{"comment_spelled_in_a_string", `{"a":"// not a comment"}`, false},
+		{"url_slashes_are_not_a_comment", `{"baseUrl":"http://host//path"}`, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, hasComments := RelaxJSONReport([]byte(tc.input))
+			assert.Equal(t, tc.hasComments, hasComments)
+			assert.Len(t, out, len(tc.input)) // blanking, so offsets survive like RelaxJSON
+		})
+	}
+
+	t.Run("output_matches_relax_json", func(t *testing.T) {
+		in := []byte("{\"a\":1, // note\n}")
+		out, _ := RelaxJSONReport(in)
+		assert.Equal(t, string(RelaxJSON(in)), string(out))
+	})
+}
+
 func TestJSONError(t *testing.T) {
 	t.Parallel()
 

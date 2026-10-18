@@ -250,10 +250,12 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	case err != nil:
 		return nil, err
 	default:
-		if relaxed := RelaxJSON(raw); !bytes.Equal(relaxed, raw) {
+		// a trailing comma is fixed silently; only comments are content lost
+		relaxed, hasComments := RelaxJSONReport(raw)
+		if hasComments {
 			warns = append(warns, path+" has comments; saving will remove them")
-			raw = relaxed
 		}
+		raw = relaxed
 	}
 
 	// normalize odd-case keys before SetKey, so a canonical key is never

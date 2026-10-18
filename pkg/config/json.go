@@ -16,15 +16,24 @@ import (
 // place in the original file and a later syntax error can be reported against
 // what the user actually wrote.
 func RelaxJSON(data []byte) []byte {
-	out := bytes.Clone(data)
-	blankComments(out)
-	blankTrailingCommas(out)
+	out, _ := RelaxJSONReport(data)
 	return out
 }
 
-// blankComments overwrites // line comments with spaces.
-func blankComments(b []byte) {
-	var inString, escaped bool
+// RelaxJSONReport relaxes data like RelaxJSON and reports whether any // line
+// comment was blanked, so a caller can warn about lost comments specifically
+// instead of inferring them from any change.
+func RelaxJSONReport(data []byte) (out []byte, hasComments bool) {
+	out = bytes.Clone(data)
+	hasComments = blankComments(out)
+	blankTrailingCommas(out)
+	return out, hasComments
+}
+
+// blankComments overwrites // line comments with spaces, reporting whether any
+// were found.
+func blankComments(b []byte) bool {
+	var inString, escaped, found bool
 	for i := 0; i < len(b); i++ {
 		c := b[i]
 		switch {
@@ -39,11 +48,13 @@ func blankComments(b []byte) {
 		case c == '"':
 			inString = true
 		case c == '/' && i+1 < len(b) && b[i+1] == '/':
+			found = true
 			for ; i < len(b) && b[i] != '\n'; i++ {
 				b[i] = ' '
 			}
 		}
 	}
+	return found
 }
 
 // blankTrailingCommas overwrites a comma followed only by whitespace and a

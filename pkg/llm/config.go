@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -402,10 +401,12 @@ func SaveUserFile(f File) ([]string, error) {
 	case err != nil:
 		return nil, err
 	default:
-		if relaxed := config.RelaxJSON(raw); !bytes.Equal(relaxed, raw) {
+		// a trailing comma is fixed silently; only comments are content lost
+		relaxed, hasComments := config.RelaxJSONReport(raw)
+		if hasComments {
 			warns = append(warns, path+" has comments; saving will remove them")
-			raw = relaxed
 		}
+		raw = relaxed
 	}
 
 	out, err := config.OverlayJSON(raw, over, File{})

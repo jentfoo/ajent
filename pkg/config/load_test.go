@@ -299,10 +299,30 @@ func TestSave(t *testing.T) {
 
 		warns, err := s.Save("user", "reasoning.level", "high")
 		require.NoError(t, err)
-		assert.NotEmpty(t, warns) // comments are dropped but save succeeds
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "has comments") // comments are dropped but save succeeds
 
 		st := s.Settings()
 		assert.Equal(t, "high", st.Reasoning.Level)
+	})
+
+	t.Run("trailing_comma_only_file_saves_silently", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), "{\"model\": \"old\",\n}")
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.NoError(t, err)
+		assert.Empty(t, warns) // a trailing comma is fixed, not content lost
+
+		b, err := os.ReadFile(s.userPath)
+		require.NoError(t, err)
+		var raw map[string]any
+		require.NoError(t, json.Unmarshal(b, &raw))
+		assert.Equal(t, "old", raw["model"])
+		assert.Equal(t, "high", raw["reasoning"].(map[string]any)["level"])
 	})
 }
 

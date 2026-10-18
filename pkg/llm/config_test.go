@@ -426,6 +426,21 @@ func TestSaveUserFile(t *testing.T) {
 		assert.Empty(t, warnings)
 	})
 
+	t.Run("trailing_comma_only_saves_silently", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(path, []byte("{\n  \"providers\": {},\n}\n"), config.SecretPerm))
+
+		warns, err := SaveUserFile(want)
+		require.NoError(t, err)
+		assert.Empty(t, warns) // a trailing comma is fixed, not content lost
+
+		got, warnings, err := LoadUserFile()
+		require.NoError(t, err)
+		assert.Equal(t, want, got)
+		assert.Empty(t, warnings)
+	})
+
 	t.Run("malformed_existing_file_is_an_error", func(t *testing.T) {
 		path, err := config.UserPath(ModelsFileName)
 		require.NoError(t, err)
