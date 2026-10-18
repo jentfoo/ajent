@@ -342,6 +342,22 @@ func TestSteerQueue(t *testing.T) {
 		require.GreaterOrEqual(t, cleared, 1)
 	})
 
+	t.Run("abort_clears_empty_reserve", func(t *testing.T) {
+		fake := &fakeQueueUI{}
+		var cleared int
+		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, nil, nil)
+
+		// a direct dispatch: offer only marked the drain, nothing queued, and the
+		// pump reserved the estimate itself before the turn parked in the hold
+		require.False(t, q.offer(agent.Input{Text: "direct"}, "direct", 0))
+
+		q.abort() // interrupt path with nothing queued
+
+		assert.Empty(t, fake.prepended) // no rows: the editor draft stays untouched
+		assert.Empty(t, fake.lastQueued())
+		require.GreaterOrEqual(t, cleared, 1) // the submit reserve releases anyway
+	})
+
 	t.Run("take_attaches_staged", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var consumed int

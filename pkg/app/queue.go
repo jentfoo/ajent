@@ -301,20 +301,21 @@ func queuedLabel(it steerItem) string {
 
 // abort recovers every queued item into the editor, joined by newlines ahead of
 // any draft, and clears rows/items/accounting. Called before an interrupt so a
-// mid-turn message is never lost.
+// mid-turn message is never lost. The refresh runs on an empty queue too: a
+// directly dispatched prompt parked in the typing hold still holds its submit
+// reserve, and the interrupt that follows drops it without ever landing.
 func (s *steerQueue) abort() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if len(s.items) == 0 {
-		return
+	if len(s.items) > 0 {
+		labels := make([]string, len(s.items))
+		for i, it := range s.items {
+			labels[i] = restoredLabel(it)
+		}
+		s.items = nil
+		s.ui.PrependInput(strings.Join(labels, "\n"))
 	}
-	labels := make([]string, len(s.items))
-	for i, it := range s.items {
-		labels[i] = restoredLabel(it)
-	}
-	s.items = nil
-	s.ui.PrependInput(strings.Join(labels, "\n"))
 	s.refreshLocked()
 }
 

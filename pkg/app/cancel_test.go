@@ -371,6 +371,85 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	}
 }
 
+// TestControlAbortReleasesHeldReserve pins the interrupt-during-hold path: a
+// directly dispatched prompt parks in the AwaitInput hold before its message
+// lands, so Settled never fires. The queue's abort must release its submit
+// reserve anyway, or the context bar overcounts until the next submit.
+func TestControlAbortReleasesHeldReserve(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		control tui.Control
+	}{
+		{"ctrl_c", tui.ControlInterrupt},
+		{"escape", tui.ControlEscape},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inR, inW, err := os.Pipe()
+			require.NoError(t, err)
+			outR, outW, err := os.Pipe()
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				_ = inR.Close()
+				_ = inW.Close()
+				_ = outR.Close()
+				_ = outW.Close()
+			})
+			go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
+			ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+			require.NoError(t, err)
+			t.Cleanup(ui.Close)
+
+			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "abort-hold"})
+			require.NoError(t, err)
+			release := make(chan struct{})
+			entered := make(chan struct{})
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: []llm.Event{{Type: llm.EventDone}}}}}
+			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+			ag := agent.New(st, agent.Options{
+				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+				// the typing gate's boundary hold, pinned like a user mid-message
+				AwaitInput: func(context.Context) {
+					close(entered)
+					<-release
+				},
+				Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+			})
+
+			// wired as the driver wires it: submit reserves, clear releases
+			q := newSteerQueue(ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, nil, nil)
+			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+
+			quit := make(chan struct{})
+			controls := make(chan tui.Control, 4)
+			go controlLoop(context.Background(), ui, controls,
+				newHintBoard(func(string, string) {}), ag, q, stager, nil,
+				func() { close(quit) }, nil)
+
+			errCh := make(chan error, 1)
+			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "held prompt"}) }()
+			<-entered // the turn parks at the boundary, its message not yet landed
+
+			st.Tokens.SetSubmit(60) // the pump's direct dispatch already reserved
+			require.True(t, st.Tokens.Context().Estimated)
+
+			controls <- tc.control
+
+			require.Eventually(t, func() bool { return !st.Tokens.Context().Estimated },
+				5*time.Second, time.Millisecond, "the dropped prompt's reserve must clear")
+			close(release)
+
+			select {
+			case err := <-errCh:
+				require.NoError(t, err) // a clean abort, not a failed turn
+			case <-time.After(5 * time.Second):
+				t.Fatal("turn did not finish")
+			}
+		})
+	}
+}
+
 // TestControlAbortKeepsStagedOutput pins a turn mid-tool with a finished `!`
 // run staged and a prompt queued mid-turn, then drives Esc: the abort recovers
 // the prompt to the editor while the staged output stays in the stager (never
