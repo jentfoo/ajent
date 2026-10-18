@@ -10,9 +10,8 @@ import (
 // modulePath is the ajent module, reinstalled from @latest on update.
 const modulePath = "github.com/jentfoo/ajent@latest"
 
-// UpdateResult describes one completed self-update attempt. Exactly one of
-// Latest or Err being set distinguishes the three outcomes: up to date,
-// installed a newer version, or failed.
+// UpdateResult describes one completed self-update attempt. Check Err first for
+// failure, then Installed to tell an update from an already-current result.
 type UpdateResult struct {
 	Current   string // build version before the attempt (Version)
 	Latest    string // resolved @latest version, "" when resolution failed
@@ -21,8 +20,8 @@ type UpdateResult struct {
 }
 
 // SelfUpdate resolves the latest published ajent and, when it differs from the
-// running build, reinstalls via `go install`. It never panics, and failures come back
-// in Err. The current version is Version.
+// running build (Version), reinstalls via `go install`. Failures land in the
+// result's Err. The context cancels the underlying go commands.
 func SelfUpdate(ctx context.Context) UpdateResult {
 	return selfUpdateWith(ctx, Version, updateCmds{})
 }
@@ -61,8 +60,9 @@ func (u updateCmds) installLatest(ctx context.Context) error {
 	return nil
 }
 
-// selfUpdateWith is the pure decision core SelfUpdate wraps, with current and cmds
-// injectable so tests exercise every branch without a real go toolchain.
+// selfUpdateWith is SelfUpdate with the current version and go commands
+// injected, so tests exercise every outcome without a toolchain. Install runs
+// only for a non-empty resolved latest that differs from current.
 func selfUpdateWith(ctx context.Context, current string, cmds updateCmds) UpdateResult {
 	if current == "" {
 		current = Version

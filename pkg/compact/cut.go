@@ -38,8 +38,9 @@ func newBranchView(branch []session.Entry) *branchView {
 	return v
 }
 
-// setRetain sets the band-ceiling retention policy, resolving the turn bounds
-// Prepare's retention uses.
+// setRetain sets the retention policy sentTokens measures against, so estimates
+// match what a request prepared with that policy carries. Construction leaves
+// RetainAll, counting thinking any stricter request would drop.
 func (v *branchView) setRetain(retain llm.RetainPolicy) {
 	v.retain = retain
 	v.keepFrom, v.lastAssistant = -1, -1
@@ -185,11 +186,10 @@ func (v *branchView) verbatimCut(priorCut, minSteps, maxTokens int) int {
 	return v.withLivePrompt(cut, priorCut)
 }
 
-// withLivePrompt extends a band back over the user prompt that opens it, when one
-// sits immediately before. Without it a mid-turn compaction folds the question the
-// user just asked into the summary while keeping the answer to it verbatim. The
-// prompt is half of the live exchange, so whatever it weighs only affects how
-// many steps fit under the ceiling, not whether the prompt itself does.
+// withLivePrompt extends a band back over the user prompt that opens it when one
+// sits immediately before, however large. Without it a mid-turn compaction folds
+// the question the user just asked into the summary while keeping its answer
+// verbatim.
 func (v *branchView) withLivePrompt(cut, priorCut int) int {
 	for i := cut - 1; i >= priorCut; i-- {
 		if v.branch[i].Type != session.TypeMessage {

@@ -26,7 +26,7 @@ var readOnlyBuiltins = []string{"read", "grep", "find", "ls", "git_status", "git
 var gitToolNames = []string{"git_status", "git_log", "git_show", "git_diff"}
 
 // childBarred names tools no child may resolve regardless of read-only metadata or
-// enable state; the parent still auto-runs ask_user without approval under allow-read.
+// enable state. The parent still auto-runs ask_user without approval under allow-read.
 var childBarred = bulk.SliceToSet([]string{
 	"ask_user",                                                  // interactive: needs an endpoint a sub-agent has no right to reach
 	"dev_implement", "dev_review", "dev_revise", "dev_complete", // plan control tools, phase-mutating (pkg/plan)

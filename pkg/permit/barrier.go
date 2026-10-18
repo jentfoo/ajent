@@ -87,11 +87,9 @@ type Options struct {
 	WriteRoots     []string                   // auto+write's writable roots, empty allowing none
 }
 
-// NewBarrier builds a barrier with read-only metadata lookup ro, applying o's
-// inputs with grants last so the starting mode can never clear them. Classifier,
-// Notice and DryRun are required: both front ends install them from the same
-// registry that supplies ro, and a barrier without one fails mid-turn instead
-// of at wiring.
+// NewBarrier builds a Barrier from o, consulting ro for whether built-in tools
+// are read-only. Classifier, Notice and DryRun are required: construction
+// panics without one rather than leaving the gate unable to decide mid-run.
 func NewBarrier(ro func(string) bool, o Options) *Barrier {
 	if o.Classifier == nil || o.Notice == nil || o.DryRun == nil {
 		panic("permit: Classifier, Notice and DryRun are required at construction")
@@ -148,10 +146,9 @@ func (b *Barrier) Mode() Mode {
 	return b.mode
 }
 
-// SetMode swaps the live mode and re-evaluates any open dialog under it: a call
-// the new mode would allow outright is resolved as allow, while a mode change
-// away from the deciding auto mode cancels its racing classification so the
-// user decides. Never rewrites config.
+// SetMode swaps the live mode: earned session allows reset (construction
+// grants reapplied) and any open dialog re-evaluates under m, resolving as
+// allowed when the new mode would permit it outright. Never rewrites config.
 func (b *Barrier) SetMode(m Mode) {
 	b.mu.Lock()
 	old := b.mode
@@ -229,16 +226,14 @@ func (b *Barrier) Guard() tools.Guard {
 	}
 }
 
-// Prefetch starts classification for every call in a batch that will actually
-// reach the model classifier, warming the verdict cache so the asker consumes a
-// ready verdict behind its typing hold instead of waiting on a fresh request,
-// including a lone eligible call, since serial predecessors may run for a while
-// before it asks. It filters exactly as the unattended ask does: only auto-mode
+// Prefetch starts background classification for every call in calls that would
+// reach the model classifier at ask time (the unattended ask's filter: auto-mode
 // bash lines static analysis can name and non-write extension calls whose
-// static verdict is Ask and which are not already session-allowed go to the
-// model. Identical subjects launch one request. Launched goroutines observe ctx
-// (the turn's), so an abort stops them, and answering the dialog a request
-// fronts cancels it. Never blocks.
+// static verdict is Ask and not already session-allowed), so a later approval
+// dialog consumes a ready verdict instead of waiting on a fresh request.
+// Identical subjects share one request, launched goroutines observe ctx so an
+// abort stops them, and answering the dialog a request fronts cancels it.
+// Never blocks.
 func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 	g := b.gateNow()
 	for _, call := range calls {

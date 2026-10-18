@@ -402,8 +402,10 @@ func parseTool(raw json.RawMessage, server string, readOnly FlexStrings) (def To
 	return def, true, ""
 }
 
-// Call invokes a tool with raw arguments and maps the result content. Progress
-// deltas stream to out.
+// Call invokes a remote tool by name with raw JSON arguments and maps the
+// returned content into Result. Progress deltas stream to out while the call
+// runs. A non-nil error means no result arrived (transport failure), while a
+// tool-reported failure comes back as a Result with IsError set.
 func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, out agent.Output) (Result, error) {
 	c.mu.Lock()
 	token := c.nextID
@@ -436,11 +438,9 @@ func (c *Client) Call(ctx context.Context, name string, args json.RawMessage, ou
 }
 
 // OnNotification registers a handler for server notifications (progress,
-// tools/list_changed). Handlers are invoked asynchronously: mcp-go delivers
-// notifications on its transport's single reader goroutine, so doing blocking I/O
-// inside a handler would deadlock stdio, since the reader is what returns those
-// responses. Dispatching each notification to its own goroutine keeps that
-// invariant at this boundary for every current and future handler.
+// tools/list_changed). Each notification runs on its own goroutine, keeping a
+// slow or blocking handler from stalling the transport's response reader.
+// Handlers therefore run concurrently and out of order.
 func (c *Client) OnNotification(h func(mcp.JSONRPCNotification)) {
 	if c.c == nil {
 		return
@@ -525,7 +525,7 @@ func (c *Client) sendRawAttempts(ctx context.Context, method string, params any,
 	return nil, lastErr
 }
 
-// applyEra stamps the negotiated era onto a request; see applyEraVersion.
+// applyEra stamps the negotiated era onto a request (see applyEraVersion).
 func (c *Client) applyEra(method string, params any, id int64) (any, http.Header) {
 	return c.applyEraVersion(c.negotiated, method, params, id)
 }

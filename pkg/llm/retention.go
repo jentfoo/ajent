@@ -20,7 +20,7 @@ func resolveRetention(policy RetainPolicy, caps Capabilities) RetainPolicy {
 }
 
 // retentionBounds returns the index the current turn starts at and the index of
-// the last assistant message.
+// the last assistant message, -1 when there is none.
 //
 // A turn starts at a user message carrying something other than tool results,
 // because anthropic delivers tool results as user role messages and treating

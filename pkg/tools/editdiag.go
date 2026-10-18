@@ -151,15 +151,16 @@ func stripSpace(s string) string {
 	return b.String()
 }
 
-// buildContent maps a text's non-empty lines to their 1-based line numbers and the
-// count of blank (whitespace-only) lines immediately following each one. The empty
-// element a terminating newline leaves never counts as a blank line.
+// contentLine is one non-empty line with its 1-based number and the count of
+// blank (whitespace-only) lines immediately following it.
 type contentLine struct {
 	n     int // 1-based original line number
 	c     string
 	after int // blank lines until the next content line or end of text
 }
 
+// buildContent maps a text's non-empty lines onto contentLine values. The empty
+// element a terminating newline leaves never counts as a blank line.
 func buildContent(lines []string) []contentLine {
 	lines = dropTrailingEmpty(lines)
 	seq := make([]contentLine, 0, len(lines))

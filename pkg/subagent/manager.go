@@ -27,7 +27,7 @@ const (
 
 // Options configures a sub-agent Manager. The func-typed fields are supplied
 // at wiring time, so this package never imports pkg/tui or pkg/tools. Model,
-// Reasoning, Parent, Notice, Deliver and Tools are required; Activity and
+// Reasoning, Parent, Notice, Deliver and Tools are required. Activity and
 // Status are optional.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
@@ -284,7 +284,9 @@ func (m *Manager) leavePoll() bool {
 	return batched
 }
 
-// wait blocks on one job for the poll timeout (see Poll).
+// wait blocks on one job until completion, its poll timeout or a cancelled ctx.
+// complete reports whether snap holds the claimed terminal result. A running
+// job returns just its latest snapshot, a cancelled ctx an empty unclaimed Job.
 func (m *Manager) wait(ctx context.Context, id string) (Job, bool) {
 	j, ok := m.lookup(id)
 	if !ok {
@@ -582,7 +584,7 @@ func (m *Manager) noticeInput(ids []string) agent.Input {
 }
 
 // byJobNumber orders sub-N ids numerically, so batches read sub-1, sub-2, sub-10.
-// Unparseable ids sort first; the digits are read after the sub- prefix.
+// Unparseable ids sort first. The digits are read after the sub- prefix.
 func byJobNumber(a, b string) int {
 	na, _ := strconv.Atoi(strings.TrimPrefix(a, "sub-"))
 	nb, _ := strconv.Atoi(strings.TrimPrefix(b, "sub-"))

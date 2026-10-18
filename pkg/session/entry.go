@@ -37,7 +37,8 @@ type Entry struct {
 	Data     json.RawMessage `json:"data,omitempty"` // opaque payload whose shape follows Type
 }
 
-// Decode unmarshals the entry payload into v.
+// Decode unmarshals the entry payload into v. An entry without a payload leaves
+// v untouched and reports success.
 func (e Entry) Decode(v any) error {
 	if len(e.Data) == 0 {
 		return nil

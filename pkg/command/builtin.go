@@ -109,7 +109,7 @@ func RegisterBuiltins(r *Registry, c Console) {
 	})
 }
 
-// helpCommand renders a markdown list of commands through Console.Print.
+// helpCommand renders the command list and keybindings as markdown through Console.Print.
 func helpCommand(_ context.Context, _ string, c Console) error {
 	var b strings.Builder
 	b.WriteString("# Commands\n\n")
@@ -134,7 +134,8 @@ func helpCommand(_ context.Context, _ string, c Console) error {
 	return nil
 }
 
-// filterPrefix returns the entries of names that start with prefix, lowercased.
+// filterPrefix returns the entries of names matching prefix case-insensitively,
+// keeping their original case, or nil when nothing matches.
 func filterPrefix(names []string, prefix string) []string {
 	if prefix == "" {
 		return names

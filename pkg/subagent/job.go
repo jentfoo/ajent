@@ -35,7 +35,7 @@ func (s Status) String() string {
 	return "unknown"
 }
 
-// Job is a public snapshot of one investigation, for List and Poll callers.
+// Job is a public snapshot of one investigation, for List and agent_poll callers.
 type Job struct {
 	ID        string
 	Status    Status
@@ -49,7 +49,7 @@ type Job struct {
 
 // Elapsed returns the duration list and /agents should show for this job's status.
 // A job that never activated (still queued, or aborted before it ran) reports its
-// queue wait; anything else reports active runtime, frozen once finished.
+// queue wait. Anything else reports active runtime, frozen once finished.
 func (j Job) Elapsed() time.Duration {
 	if j.Activated.IsZero() {
 		return queueWait(j.Started, j.Ended)
@@ -57,7 +57,7 @@ func (j Job) Elapsed() time.Duration {
 	return runTime(j.Activated, j.Ended)
 }
 
-// queueWait is submission until finish for a job that never activated; it keeps
+// queueWait is submission until finish for a job that never activated. It keeps
 // counting while the job still waits on the semaphore.
 func queueWait(started, ended time.Time) time.Duration {
 	if !ended.IsZero() {
@@ -156,7 +156,7 @@ func (j *job) setQueued(now time.Time) {
 	}
 }
 
-// status returns the current status under lock.
+// statusOf returns the current status under lock.
 func (j *job) statusOf() Status {
 	j.mu.Lock()
 	defer j.mu.Unlock()

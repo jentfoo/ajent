@@ -20,7 +20,7 @@ func (n enumNames[T]) name(v T) string {
 	return nameUnknown
 }
 
-// marshalText encodes v as its configuration name.
+// marshalText encodes v as its configuration name, or an error when v has none.
 func (n enumNames[T]) marshalText(v T) ([]byte, error) {
 	s, ok := n[v]
 	if !ok {

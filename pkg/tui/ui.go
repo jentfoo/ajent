@@ -443,7 +443,9 @@ func (u *UI) Close() {
 	u.render.close(u.inFd)
 }
 
-// SetDeferHistory makes alt mode keep committed rows while only live rows change.
+// SetDeferHistory makes alt mode skip repainting committed rows when only live
+// rows change. Meant to bracket a heavy interaction over a large session (the
+// rewind picker), with a matching off afterwards.
 func (u *UI) SetDeferHistory(v bool) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -814,8 +816,9 @@ func (u *UI) Output(id, delta string) {
 	}
 }
 
-// SetOutputFull marks call id's streamed head to show every line, bypassing
-// outputHeadLines collapse. Ending the call clears it.
+// SetOutputFull marks call id's streamed output to reach history whole instead
+// of collapsing past its first few lines into a summary. Ending the call clears
+// it.
 func (u *UI) SetOutputFull(id string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -1290,9 +1293,8 @@ func (u *UI) Insert(text string) {
 }
 
 // SetOnEdit installs an input-change callback after construction, for hosts that
-// build their accounting state later than Options (e.g. main's driver). It may be
-// called again to swap the callback. drainEdits reads it per iteration so the new
-// one takes effect immediately.
+// build their accounting state later than Options. Calling it again swaps the
+// callback and the swap takes effect at once. A nil fn is ignored.
 func (u *UI) SetOnEdit(fn func(string)) {
 	if fn == nil {
 		return
@@ -1355,7 +1357,7 @@ func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 
 // SetPromptHistory installs the plain ↑/↓ recall source, scoped however the
 // host chooses. An empty list falls back to the history-search source's texts.
-// fn runs off the key loop; nil returns arrows to that fallback directly.
+// fn runs off the key loop and a nil restores that fallback directly.
 func (u *UI) SetPromptHistory(fn func() []string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()

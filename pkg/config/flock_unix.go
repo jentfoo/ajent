@@ -13,8 +13,8 @@ import (
 const flockSupported = true
 
 // lockExclusive takes an exclusive advisory lock without blocking, retrying only
-// EINTR. A held lock reports errLockContended; any other error means the platform
-// or filesystem cannot lock here and saving must degrade unlocked.
+// EINTR. A held lock reports errLockContended. Any other error means the
+// platform or filesystem cannot lock here and saving must degrade unlocked.
 func lockExclusive(f *os.File) error {
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)

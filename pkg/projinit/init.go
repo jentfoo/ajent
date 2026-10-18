@@ -215,7 +215,7 @@ func (r *Runner) pollAll(ctx context.Context, tool agent.Tool, ids []string, run
 }
 
 // pollOne waits for one investigation, re-polling past a timeout so only the
-// terminal call and result reach context.
+// terminal call and result are returned.
 func (r *Runner) pollOne(ctx context.Context, tool agent.Tool, id string, run int64) []llm.Message {
 	input, _ := json.Marshal(map[string]any{"id": id})
 	for attempt := 1; ctx.Err() == nil; attempt++ {
@@ -274,7 +274,8 @@ func runOf(id string) int64 {
 	return n
 }
 
-// detail reads one key from a tool result's Details map.
+// detail reads one key from a tool result's Details map, empty when absent or
+// when Details holds some other type.
 func detail(res agent.ToolResult, key string) string {
 	d, ok := res.Details.(map[string]string)
 	if !ok {

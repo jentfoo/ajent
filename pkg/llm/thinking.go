@@ -11,9 +11,9 @@ const (
 	minAnswerTokens = 1024
 )
 
-// applyThinking dispatches reasoning on or off onto the wire shape for
-// caps.Thinking, and writes nothing when reasoning is unsupported or this
-// request has none.
+// applyThinking writes reasoning onto body in the wire shape caps.Thinking
+// expects: an effort level or budget when on, explicit off markers where the
+// format carries them. No-op when the model cannot reason.
 func applyThinking(body *compatRequest, req Request) {
 	caps := req.Model.Caps
 	if !caps.Reasoning {
@@ -115,8 +115,9 @@ func applyThinking(body *compatRequest, req Request) {
 	applyThinkingTokenBudget(body, req, lvl, on)
 }
 
-// setReasoningEffort writes the top-level reasoning_effort for a level, gated on
-// the capability that is never a style override.
+// setReasoningEffort writes the top-level reasoning_effort for l, resolved
+// through caps.LevelMap with the level name as fallback. No-op unless the model
+// declares SupportsReasoningEffort.
 func setReasoningEffort(body *compatRequest, caps Capabilities, l Level) {
 	if !caps.SupportsReasoningEffort {
 		return

@@ -52,9 +52,9 @@ func NewRegistry(f File, cache map[string]CacheEntry, opts RegistryOptions) (*Re
 	return r, append(warnings, r.activateDefault(f)...)
 }
 
-// activateDefault activates the file's default model when it resolves, else the
-// first model on a registry that has none active. A default that resolves to
-// nothing is reported as a warning.
+// activateDefault selects what requests default to: f.DefaultModel when it
+// resolves, else the first known model unless one is already active. Returns a
+// warning for a configured default that does not resolve.
 func (r *Registry) activateDefault(f File) []string {
 	var warnings []string
 	if f.DefaultModel != "" {
@@ -76,7 +76,10 @@ func (r *Registry) activateDefault(f File) []string {
 	return warnings
 }
 
-// rebuild recomputes the model list from configuration plus cache.
+// rebuild replaces the registry's provider entries and sorted model list from f
+// plus cached discovery, keeping any active model selected. It returns warnings
+// for providers it disabled and models it skipped or listed more than once. No
+// network calls are made.
 func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	var warnings []string
 	var models []Model
@@ -219,7 +222,8 @@ func (r *Registry) applyCompactDefault() {
 	}
 }
 
-// zeroModelsWarning names the ways to populate a provider that resolved empty.
+// zeroModelsWarning builds the empty-provider warning, suggesting discovery
+// where supported and unset, and always declaring a models array.
 func zeroModelsWarning(name string, flavor Flavor, discover bool) string {
 	_, discoverable := discoverySpecs[flavor]
 	switch {

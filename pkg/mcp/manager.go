@@ -629,7 +629,8 @@ func (m *Manager) ServerNames() []string {
 	return out
 }
 
-// Status returns a per-server summary row for /mcp.
+// Status returns a per-server summary row for /mcp. Connected servers are
+// pinged to report latency and responsiveness.
 func (m *Manager) Status(ctx context.Context) []ServerStatus {
 	names := m.ServerNames()
 	out := make([]ServerStatus, 0, len(names))

@@ -28,7 +28,7 @@ type Frame struct {
 	Retry time.Duration
 }
 
-// IsDone reports the OpenAI style end of stream sentinel.
+// IsDone reports whether the frame data is the OpenAI "[DONE]" end-of-stream sentinel.
 func (f Frame) IsDone() bool { return string(f.Data) == DoneSentinel }
 
 // SSEReader parses a text/event-stream body. It knows nothing about any
@@ -53,7 +53,8 @@ func NewSSEReader(r io.Reader, maxFrame int) *SSEReader {
 	return &SSEReader{br: bufio.NewReader(r), maxFrame: maxFrame, src: r}
 }
 
-// Close closes the underlying reader when it is an io.Closer.
+// Close closes the underlying reader when it is an io.Closer. Later Next calls
+// return the latched stream error, io.EOF after a clean close.
 func (r *SSEReader) Close() error {
 	r.closed = true
 	if r.err == nil {

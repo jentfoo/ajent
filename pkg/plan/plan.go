@@ -296,8 +296,8 @@ func (c *Controller) stopLocked(msg string) {
 	c.notify(msg, agent.LevelInfo)
 }
 
-// setPhaseLocked records the phase, persists it and republishes the status
-// segment. Caller holds mu.
+// setPhaseLocked moves the workflow to p, keeping persisted state and the
+// status segment in step with it. Caller holds mu.
 func (c *Controller) setPhaseLocked(p Phase) {
 	c.phase = p
 	c.persistLocked()
@@ -309,7 +309,8 @@ func (c *Controller) setPhaseLocked(p Phase) {
 	c.h.Status("plan: "+p.String()+" (r"+round+")", "plan r"+round)
 }
 
-// applyScopeLocked switches the model and narrows the tool set for p. Caller holds mu.
+// applyScopeLocked swaps in the tool set for p. The model needs nothing here:
+// it changes with the branch via fork. Caller holds mu.
 func (c *Controller) applyScopeLocked(p Phase) {
 	if c.h.SetTools != nil {
 		c.h.SetTools(c.toolsFor(p))

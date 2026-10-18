@@ -36,7 +36,8 @@ func Dir() (string, error) {
 	return dir, nil
 }
 
-// UserPath returns name resolved inside the configuration directory.
+// UserPath returns name resolved inside the configuration directory, creating
+// it when missing like Dir does. Use Home to avoid that side effect.
 func UserPath(name string) (string, error) {
 	dir, err := Dir()
 	if err != nil {

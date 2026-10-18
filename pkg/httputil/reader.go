@@ -38,8 +38,8 @@ type idleReader struct {
 	fired bool
 }
 
-// Read resets the idle timer on progress, and reports ErrIdleTimeout when the
-// stream stalled rather than the transport error closing it produced.
+// Read resets the idle timer on progress, and reports ErrIdleTimeout once a
+// stall closed the underlying body.
 func (r *idleReader) Read(p []byte) (int, error) {
 	r.arm()
 	n, err := r.rc.Read(p)
@@ -91,7 +91,7 @@ func (r *idleReader) didFire() bool {
 	return r.fired
 }
 
-// SleepContext waits for d, or until ctx is done.
+// SleepContext waits for d, returning ctx.Err() if ctx finishes first.
 func SleepContext(ctx context.Context, d time.Duration) error {
 	if d <= 0 {
 		return ctx.Err()

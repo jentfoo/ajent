@@ -49,8 +49,9 @@ func (c *Controller) persistLocked() {
 	}
 }
 
-// resolveRole resolves a persisted model key, reported under its role name.
-// An unresolvable key abandons the restore with a notice and reports false.
+// resolveRole resolves a persisted model key for a named role, such as planner
+// or implementor. An unresolvable key abandons the restore with a notice naming
+// the role and reports false.
 func (c *Controller) resolveRole(role, key string) (llm.Model, bool) {
 	m, ok := c.h.ResolveModel(key)
 	if !ok {

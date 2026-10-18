@@ -280,11 +280,11 @@ const lsNominalBytes = 1024
 // 6144 bytes prices the pair near imageMaxTokens at the code byte ratio.
 const imageNominalBytes = 6144
 
-// measureRef resolves token to an absolute path and measures it; the returned
-// path is what expansion acts on. Parse keeps a trailing '.' or ':' inside the
-// token (dotted names and x:y need both), so a written form naming nothing real
-// is retried without them. The trimmed reading wins only by existing: ./x and
-// dotted names resolve exactly as written.
+// measureRef resolves token to an absolute path and measures it. The returned
+// path is what expansion acts on, full its absolute resolution. A written form
+// naming nothing real is retried without its trailing '.' or ':' (Parse keeps
+// them inside the token: dotted names and x:y need both). The trimmed reading
+// wins only by existing, so ./x and dotted names resolve exactly as written.
 func (x *Expander) measureRef(token string) (path, full string, m tools.Measurement, err error) {
 	path = token
 	if full, m, err = x.measureOne(path); err == nil {
@@ -322,7 +322,7 @@ func lsCall(run int64, path, dir string) injection {
 }
 
 // callID names one injected reference. The run number keeps a later reference to
-// the same path from reusing an id the context already holds; kind keeps two
+// the same path from reusing an id the context already holds. Kind keeps two
 // references within one run from colliding.
 func callID(run int64, kind, path string) string {
 	return fmt.Sprintf("%s%d-%s%s", idPrefix, run, kind, path)
@@ -363,7 +363,7 @@ func measurementText(m tools.Measurement) string {
 	}
 }
 
-// splice replaces the span of out covered by ref with repl.
+// splice returns out with the span of ref replaced by repl.
 func splice(out string, ref Ref, repl string) string {
 	return out[:ref.Start] + repl + out[ref.End:]
 }

@@ -66,8 +66,8 @@ type editOutcome struct {
 	shifts []lineShift // how this apply moved the lines it did not write
 }
 
-// resolveApply resolves the path and returns the current file text with the edits
-// applied in LF space, so DryRun and Preview share one code path.
+// resolveApply applies the call's edits without writing anything, returning
+// the file's before and after text in LF space.
 func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
 	p, err := decodeEditParams(call.Input)
 	if err != nil {
@@ -122,9 +122,10 @@ func (t *editTool) Close() {}
 // selfBounding: edit feedback is bounded by its own Elide pass.
 func (*editTool) selfBounding() {}
 
-// Execute applies every edit against the original buffer, then writes once so a
-// failure mid-list leaves the file byte-identical. The diff is rendered by the
-// guard wrapper before this runs.
+// Execute applies every edit and writes once, so a failure mid-list leaves
+// the file byte-identical. Each op matches the file as it stood before the
+// call, never an earlier op's output. The result diff is rendered by the guard
+// wrapper before this runs.
 func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
 	p, err := decodeEditParams(call.Input)
 	if err != nil {

@@ -54,15 +54,11 @@ func Prepare(req Request) Request {
 	return req
 }
 
-// splitInlineThinking recovers reasoning that leaked into an assistant text
-// block: chat-completions models mark reasoning with inline tags, and when a
-// turn desyncs mid stream the tail plus its close tag can arrive on the content
-// channel. Servers that render history through the model chat template read
-// those markers themselves, and one stray tag makes them re-emit the message for
-// every later assistant turn, multiplying the prompt far past what the
-// estimator counted. The recovered block then flows through the normal
-// retention, degradation and replay handling, so each model gets what it needs.
-// The transcript itself stays verbatim, only the request copy is restructured.
+// splitInlineThinking moves reasoning that leaked into an assistant text block
+// back out into thinking blocks for chat-completions models emitting tags on
+// the content channel. One stray tag makes template-rendering servers re-emit
+// the message every later turn, multiplying the prompt past what the estimator
+// counted. The transcript stays verbatim, only the request copy is restructured.
 func splitInlineThinking(msgs []Message, caps Capabilities) []Message {
 	if caps.Dialect != DialectOpenAICompletions || !caps.Reasoning {
 		return msgs
@@ -158,6 +154,7 @@ func splitThinkText(text, open, close, field string) BlockList {
 }
 
 // nextThinkTag finds whichever marker occurs first, returning it and its offset.
+// Neither present reports the open tag at -1.
 func nextThinkTag(text, open, close string) (string, int) {
 	tag, at := open, strings.Index(text, open)
 	if j := strings.Index(text, close); j >= 0 && (at < 0 || j < at) {
@@ -280,8 +277,12 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 	return out
 }
 
-// normalizeContent is the merged retention and cross-model degradation pass. Per-message it computes
-// keep from the policy and foreign from whether its origin matches target, then rewrites blocks once.
+// normalizeContent merges retention with cross-model degradation: thinking kept,
+// degraded to text or dropped per the resolved policy against target origin,
+// foreign text signatures stripped, tool-call ids normalized for the target.
+//
+// Call ids rewrite consistently across one request, keeping every result
+// attached to its call. Assistant messages emptied by the pass are dropped.
 func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, target Origin) []Message {
 	policy = resolveRetention(policy, caps)
 	keepFrom, lastAssistant := retentionBounds(msgs)
@@ -362,8 +363,10 @@ func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, ta
 	return out
 }
 
-// degradeForeignBlocks rewrites a message's foreign blocks: text signatures are
-// dropped and tool-call ids normalized with the matching result rewritten in step.
+// degradeForeignBlocks strips text signatures and normalizes tool-call ids on a
+// foreign message, recording rewrites in rename so its results follow. A
+// same-origin message keeps its blocks but still gets every result call id
+// mapped through rename and the placeholder ladder applied.
 func degradeForeignBlocks(m Message, caps Capabilities, target Origin, rename map[string]string) Message {
 	out := slices.Clone(m.Content)
 	if !originForeign(m.Origin, target) {

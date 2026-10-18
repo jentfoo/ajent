@@ -308,7 +308,8 @@ func editOverrides(ctx context.Context, c Console) ([]settingChange, error) {
 	return nil, nil
 }
 
-// detail renders a key's raw value with its source layer.
+// detail renders a key's stored value and its source layer. The bool reports
+// whether the key had a value to show.
 func detail(c Console, key string) (string, bool) {
 	v, src, ok := c.Settings().Explain(key)
 	if !ok || len(v) == 0 {
@@ -566,7 +567,7 @@ func toolNames(c Console) []string {
 	return slices.Clone(c.Tools().Names())
 }
 
-// detailOrDefault renders a row's value and source, or the default layer.
+// detailOrDefault renders a key's value and source, or "(default)" when unset.
 func detailOrDefault(c Console, key string) string {
 	d, ok := detail(c, key)
 	if !ok {

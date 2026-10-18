@@ -556,7 +556,8 @@ func (s *responsesStream) onDelta(ev respEvent, typ EventType) []Event {
 	return []Event{out}
 }
 
-// onSummaryDone notes one reasoning summary part finished.
+// onSummaryDone defers a blank-line separator onto the open reasoning item so
+// the next thinking delta joins completed summary parts with it. Emits no events.
 func (s *responsesStream) onSummaryDone(ev respEvent) []Event {
 	if it := s.items[ev.OutputIndex]; it != nil {
 		it.pendingSep = true

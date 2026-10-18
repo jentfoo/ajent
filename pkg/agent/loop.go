@@ -460,8 +460,9 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 // openBlocks records the content blocks a failed stream left unterminated.
 type openBlocks struct{ thinking, text bool }
 
-// streamOnce runs a single model call and forwards every delta to the sink. It
-// folds events into an Accumulator so rendering and assembly share a loop.
+// streamOnce runs one model call attempt, forwarding every delta to the sink.
+// The returned message holds what streamed before failure or interruption, and
+// openBlocks names block types left unterminated for a retry to close.
 func (a *Agent) streamOnce(ctx context.Context, sink Sink, provider llm.Provider, req llm.Request, keepThink bool) (llm.Message, llm.Usage, llm.StopReason, openBlocks, error) {
 	var open openBlocks
 	st, err := provider.Stream(ctx, req)
@@ -538,9 +539,7 @@ func (a *Agent) buildRequest() llm.Request {
 	}
 }
 
-// forward maps one event onto sink calls and ledger updates. Block boundaries
-// come from the end events, deltas stream through so rendering and assembly share
-// a loop.
+// forward maps one stream event onto its sink emissions and spend-ledger updates.
 func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Event) {
 	t := a.state.Tokens
 	switch ev.Type {

@@ -29,8 +29,8 @@ func OverlayJSON(base, over []byte, schema any) ([]byte, error) {
 	return indentJSON(root.marshal())
 }
 
-// graft lays the parts of prev dst cannot express onto dst. t is the schema type
-// at this position; everything it declares belongs to dst alone.
+// graft lays the parts of prev dst cannot express onto dst. t is the schema
+// type at this position, and everything it declares belongs to dst alone.
 func graft(dst, prev *val, t reflect.Type) {
 	if dst == nil || prev == nil || opaque(t) {
 		return

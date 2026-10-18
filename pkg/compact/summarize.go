@@ -149,10 +149,9 @@ func summarise(ctx context.Context, v *branchView, spanStart, end int, stubs []s
 	return summariseRegion(ctx, v, spanStart, end, prev, stubs, model, run, opts)
 }
 
-// summariseRegion folds [start, end) into a checkpoint, walking left to right
-// with one run call per chunk that fits, chaining each summary into the next as
-// prev. It returns the final summary and how many messages the chain covered, so
-// nothing is cut from context without reaching the summary.
+// summariseRegion folds [start, end) into a checkpoint merged onto prev, running
+// the model once per chunk that fits. It returns the final summary and how many
+// messages it covered, so nothing is cut from context without reaching the summary.
 func summariseRegion(ctx context.Context, v *branchView, start, end int, prev string, stubs []session.Stub, model llm.Model, run RunPrompt, opts Options) (string, int, error) {
 	var kept int
 	merge := prev
@@ -220,8 +219,8 @@ func priorSummary(branch []session.Entry) string {
 }
 
 // buildPrompt assembles one user message for the summariser: conversation tags,
-// a previous summary when merging, and any /compact focus instruction. dropped
-// notes inside the tags that the transcript is missing its oldest entries.
+// a previous summary when merging, and any /compact focus instruction. A true
+// dropped notes inside the tags that the transcript is missing its oldest entries.
 func buildPrompt(v *branchView, start, end int, prev, instructions string, stubs []session.Stub, clip int, dropped bool) string {
 	var b strings.Builder
 	b.WriteString("<conversation>\n")
@@ -352,8 +351,8 @@ func (v *branchView) dropToFit(start, end int, prev, instructions string, stubs 
 
 // promptBudget reports how many tokens the summariser user message may occupy:
 // the window less the reply, the system block that rides beside it, and a margin
-// for estimator error. Only the system block is subtracted, because the instruction
-// any previous summary live inside the message being measured. Zero means the
+// for estimator error. Only the system block is subtracted, because instructions
+// and any previous summary live inside the message being measured. Zero means the
 // window is unknown and no bound applies.
 func promptBudget(model llm.Model, maxOut int) int {
 	if model.ContextWindow <= 0 {

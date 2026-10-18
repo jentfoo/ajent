@@ -39,7 +39,7 @@ type LogEvent struct {
 }
 
 // Options configures the client New returns. Only bounds the transport itself
-// enforces belong here, the rest of a call described by Request.
+// enforces belong here, per-call fields live in Request.
 type Options struct {
 	Timeouts  Timeouts
 	Transport http.RoundTripper // test seam, bypasses the shared client cache
@@ -54,8 +54,10 @@ type transportKey struct {
 	connect, tls, header time.Duration
 }
 
-// New returns a hardened *http.Client for one set of timeout bounds. Pass it to
-// Do, which carries the per-call URL, headers and user agent.
+// New returns a hardened *http.Client for one set of timeout bounds. Equal
+// bounds return the same cached client unless Options.Transport overrides it,
+// so the result is shared and must not be modified. Pass it to Do, which
+// carries the per-call URL, headers and user agent.
 func New(opts Options) *http.Client {
 	if opts.Transport != nil {
 		return newClient(opts.Transport)

@@ -110,8 +110,9 @@ func (k *TokenizerKind) UnmarshalText(data []byte) error {
 	return tokenizerNames.unmarshalText(data, k, "tokenizer kind")
 }
 
-// defaultBudgets fills a per-level ladder from the compiled in rungs for one
-// model's output limit. Later parts consume it when no explicit budget is set.
+// defaultBudgets builds the per-level thinking budget ladder from the compiled
+// in rungs scaled to one model's output limit, omitting levels that get nothing.
+// It seeds caps.Budgets before configured ThinkingBudgets overlay their entries.
 func defaultBudgets(maxOutput int) map[Level]int {
 	out := make(map[Level]int, 7)
 	for _, l := range []Level{LevelMinimal, LevelLow, LevelMedium, LevelHigh, LevelXHigh, LevelMax} {

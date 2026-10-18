@@ -29,6 +29,8 @@ func Plural(n int, unit string) string {
 	return strconv.Itoa(n) + " " + unit + "s"
 }
 
+// FormatTokens abbreviates a token count as 950, 12.5k or 1.2M: decimal units,
+// one decimal place, trailing .0 dropped.
 func FormatTokens(n int) string {
 	switch {
 	case n >= 1_000_000:
@@ -63,8 +65,8 @@ func Clip(s string, n int) string {
 }
 
 // HumanSize abbreviates a byte count as 259b, 3.5kb or 1.2mb: binary units,
-// one decimal place, trailing .0 dropped. Units switch on the rounded value, so
-// a quantity never renders as 1024kb (which equals 1mb).
+// one decimal place, trailing .0 dropped. Quantities just below 1mb round up
+// to mb, so nothing renders as "1024kb".
 func HumanSize(n int64) string {
 	const (
 		kb = 1024.0

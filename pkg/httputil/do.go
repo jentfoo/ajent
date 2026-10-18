@@ -12,7 +12,8 @@ import (
 )
 
 // ErrorFunc builds the caller's error for a non-2xx response, and reports
-// whether the attempt should be retried.
+// whether the attempt should be retried. The body arrives size capped and
+// scrubbed of credentials.
 type ErrorFunc func(status int, body []byte, retryAfter time.Duration) (error, bool)
 
 // Request describes one call. Headers win over the User-Agent and JSON
@@ -65,9 +66,11 @@ func unwrapAttempt(err error) error {
 
 // Do performs one request with retries against hc, returning a response whose
 // headers have arrived and whose status is 2xx, or 304 for a conditional get.
+// Once retries are exhausted a non-2xx status returns the error Request.Error
+// builds, or *Error.
 //
-// Every retry happens here, before any body byte is read, so no caller can
-// re-emit deltas that were already delivered.
+// Retries finish before any body byte is read, so streamed content is never
+// replayed.
 func Do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error) {
 	h := r.hooks
 	if h.now == nil {

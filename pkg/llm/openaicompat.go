@@ -334,7 +334,8 @@ func compatMessageFor(m Message, caps Capabilities, on bool) ([]compatMessage, e
 	return append(results, msg), nil
 }
 
-// compatContent renders blocks as a plain string, or as parts when an image is present.
+// compatContent renders blocks as a plain string, or as parts when an image is
+// present. An error reports images on a model without image input.
 func compatContent(blocks BlockList, caps Capabilities) ([]compatPart, string, error) {
 	if !HasImageBlocks(blocks) {
 		return nil, blocksText(blocks), nil
@@ -384,8 +385,9 @@ func blocksText(blocks BlockList) string {
 	return strings.Join(texts, "\n")
 }
 
-// compatTools converts tool schemas. strict applies the provider's default wire
-// shape (strict: false) when the capability gate is set.
+// compatTools converts tool schemas to the chat-completions wire form. When
+// strict is set every tool carries an explicit "strict": false rather than
+// omitting the field.
 func compatTools(tools []ToolSchema, strict bool) []compatTool {
 	out := make([]compatTool, len(tools))
 	for i, t := range tools {

@@ -588,7 +588,8 @@ func orRetain(dst RetainPolicy, p *RetainPolicy) RetainPolicy {
 	return dst
 }
 
-// mergeExtra overlays src keys onto base verbatim body additions.
+// mergeExtra overlays src keys onto a clone of base as verbatim request body
+// additions. Neither input map is modified.
 func mergeExtra(base, src map[string]json.RawMessage) map[string]json.RawMessage {
 	out := maps.Clone(base)
 	if out == nil {
@@ -598,7 +599,9 @@ func mergeExtra(base, src map[string]json.RawMessage) map[string]json.RawMessage
 	return out
 }
 
-// rawSamplingParams re-encodes opaque sampling params as verbatim body keys.
+// rawSamplingParams re-encodes opaque sampling params as verbatim request body
+// keys. Empty input returns nil, and a value json cannot encode is dropped
+// rather than failing the model.
 func rawSamplingParams(params map[string]any) map[string]json.RawMessage {
 	if len(params) == 0 {
 		return nil

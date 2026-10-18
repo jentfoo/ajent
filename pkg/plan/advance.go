@@ -192,7 +192,8 @@ func (c *Controller) implementKickoffText() string {
 	return implementKickoff(c.approvedPlan, latest)
 }
 
-// reviewKickoffText returns the review kickoff over live git state. Caller holds mu.
+// reviewKickoffText returns the review kickoff with a fresh capture of the
+// working tree. Caller holds mu.
 func (c *Controller) reviewKickoffText(ctx context.Context) string {
 	var status, diffStat string
 	if c.h.Git != nil {

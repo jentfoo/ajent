@@ -14,11 +14,11 @@ func pathMatch(pattern, name string) bool {
 	return err == nil && ok
 }
 
-// filterTools applies a server's allow/deny lists and exact-name exclusions to discovered tools.
-// A tool must be allowed AND not denied: an explicit deny wins over a matching allow, so a broad
-// allow cannot re-admit something refused, an empty allow list admits everything not denied,
-// exclude drops by exact name regardless of globs; an empty allow list admits
-// everything the deny list and excludes did not catch.
+// filterTools applies a server's allow/deny globs and exact-name exclusions,
+// returning the tools that pass. A tool must be allowed and not denied or
+// excluded: an explicit deny wins over a matching allow, so a broad allow
+// cannot re-admit a refused name, while an empty allow list admits everything
+// the deny list and excludes did not catch.
 func filterTools(defs []ToolDef, f ToolFilter, exclude []string) []ToolDef {
 	return bulk.SliceFilter(func(d ToolDef) bool {
 		if slices.Contains(exclude, d.Name) {

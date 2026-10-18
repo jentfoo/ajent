@@ -59,7 +59,7 @@ Add a further section for any convention the survey actually observed.` + distil
 The survey is the source of truth: correct anything it contradicts, add what it shows is missing, and keep the existing structure and wording where they are still right. This is a correction pass, not a rewrite.` + distillRules
 )
 
-// codeTask returns the survey task for one disjoint slice of the tree.
+// codeTask returns the sub-agent prompt covering one disjoint slice of the tree.
 func codeTask(paths []string) string {
 	return fmt.Sprintf(codeTaskFmt, strings.Join(paths, ", "))
 }

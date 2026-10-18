@@ -138,8 +138,8 @@ func progressRow(p agent.ToolProgress) string {
 // Diff commits a colorized file edit.
 func (s *Sink) Diff(path, before, after string) { s.ui.Diff(path, before, after) }
 
-// Usage is kept on the interface for pass-through sinks but no longer drives the
-// bar, which Context does instead. It renders nothing here.
+// Usage renders nothing, context accounting reaches the status bar through
+// Context alone.
 func (s *Sink) Usage(llm.Usage) {}
 
 // Context updates the context bar from the ledger's snapshot.

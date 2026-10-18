@@ -33,7 +33,9 @@ type bridgeTool struct {
 	diag     func(string)
 }
 
-// Bridge turns a discovered tool into an agent.Tool that calls back into c.
+// Bridge returns an agent.Tool named server__def.Name that executes by calling
+// c with def's name and input schema. opts tune read-only parallelism, the
+// per-call timeout and where call failures are logged.
 func Bridge(server string, def ToolDef, c *Client, opts BridgeOptions) agent.Tool {
 	return &bridgeTool{
 		name:     server + "__" + def.Name,
@@ -48,7 +50,8 @@ func Bridge(server string, def ToolDef, c *Client, opts BridgeOptions) agent.Too
 
 func (b *bridgeTool) Name() string { return b.name }
 
-// Label returns the bare tool name, falling back to it on bad input too.
+// Label returns the server's own tool name for UI display, falling back to
+// the namespaced one when unset.
 func (b *bridgeTool) Label(_ agent.ToolCall) string {
 	if b.label != "" {
 		return b.label

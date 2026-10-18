@@ -97,8 +97,8 @@ func (h *EditorHistory) append(msg string, hidden bool) {
 
 // Recent returns the workspace's submitted messages newest first, deduplicated to
 // each text's most recent occurrence and capped at maxHistoryLines. Messages appended
-// by this process but not yet durable are included without re-reading. A missing or
-// unreadable file yields nil.
+// by this process but not yet durable are included without re-reading, so a missing
+// or unreadable file still yields those.
 func (h *EditorHistory) Recent() []string {
 	if h == nil {
 		return nil

@@ -82,8 +82,8 @@ func drainStderr(r io.Reader) string {
 
 // startHTTP launches the fakeserver over Streamable HTTP and returns its base URL
 // once it accepts connections. The server binds an ephemeral port itself (port 0)
-// and prints the actual address, which we read back from its stderr — no shared,
-// release-and-rebind port that another test could steal between close and bind.
+// and prints the actual address, which we read back from its stderr so tests
+// do not share a release-and-rebind port another could steal between close and bind.
 func startHTTP(t *testing.T, args ...string) string {
 	t.Helper()
 

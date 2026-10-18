@@ -190,7 +190,7 @@ var nestedInterpreters = bulk.SliceToSet([]string{"sh", "bash", "zsh", "dash", "
 
 // headOf returns the command name a segment runs after unwrapping launchers, or
 // ("",false) when none can be named reliably. Only a slash-free first token names
-// anything — PATH lookup is the one resolution this analysis trusts — so ./bin/cat
+// anything (PATH lookup is the one resolution this analysis trusts), so ./bin/cat
 // or /tmp/x/git name no command: an executable written earlier under an allowlisted
 // name must never inherit its verdict, and such a segment never auto-allows nor
 // matches a grant. A double quote is refused with it: the token overlaps a quoted

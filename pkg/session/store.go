@@ -391,8 +391,6 @@ func nameRune(r rune) bool {
 		r == '-' || r == '_' || r == '.' || r == '/'
 }
 
-// dirName returns the session directory name for the absolute workspace path
-
 // slug encodes abs as a flat lowercase name: path segments joined with "_", with anything
 // outside [a-z0-9] dropped. A path outside home keeps its leading separator as a "_" prefix.
 // An over-long name keeps its tail, where the project name is.

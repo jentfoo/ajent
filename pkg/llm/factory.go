@@ -21,7 +21,11 @@ type ProviderOptions struct {
 	BaseURL string
 }
 
-// NewProvider builds the adapter serving one configured provider.
+// NewProvider returns the streaming adapter serving one configured provider.
+// The API key comes from cfg or the flavor's conventional environment variable.
+//
+// It fails when no base URL resolves, an expected API key is missing, or the
+// dialect is unknown to this build.
 func NewProvider(name string, cfg ProviderConfig, flavor Flavor, opts ProviderOptions) (Provider, error) {
 	env := opts.Env
 	if env == nil {

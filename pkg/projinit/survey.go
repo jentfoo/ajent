@@ -37,8 +37,8 @@ var ownedElsewhere = bulk.SliceToSet([]string{
 	"Makefile", "go.sum", "package-lock.json", "yarn.lock",
 })
 
-// docFiles returns the files /init reads for itself (every README plus any
-// existing AGENTS.md) and whether that AGENTS.md was among them.
+// docFiles returns the relative names of the files /init reads for itself (every
+// README plus any existing AGENTS.md) and whether that AGENTS.md was among them.
 func docFiles(cwd string) ([]string, bool) {
 	matches, _ := filepath.Glob(filepath.Join(cwd, "README*"))
 	slices.Sort(matches)

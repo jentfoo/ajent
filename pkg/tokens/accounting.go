@@ -113,10 +113,11 @@ func (a *Accounting) Base() int {
 	return int(a.base)
 }
 
-// Response records one completed response: snaps exact terms to u, folds spend
-// into totals/per-model split, and feeds the calibration factor. predicted is what
+// Response records one completed response, folding its spend into the totals and
+// per-model split. A usage report makes the context bar exact again, a zero-usage
+// one adds its output to the pending estimate instead. predicted is what
 // EstimateRequest reported before streaming. keepThink reports whether retention
-// replays this response's reasoning into the next request.
+// replays this reasoning into the next request.
 func (a *Accounting) Response(key string, u llm.Usage, predicted int, keepThink bool) {
 	a.mu.Lock()
 	prompt := u.Input + u.CacheRead + u.CacheWrite
@@ -154,9 +155,9 @@ func (a *Accounting) Response(key string, u llm.Usage, predicted int, keepThink 
 	a.cal.Feed(key, predicted, prompt)
 }
 
-// Partial records a mid-stream usage snapshot. An input-bearing one covers the
-// whole request prompt, so it supersedes every appended term: outputExact and
-// pending drop while live keeps growing, the response itself never rides input.
+// Partial records a mid-stream usage snapshot for a response still streaming. A
+// snapshot carrying input already covers the whole request prompt, so it supersedes
+// every estimate accumulated before it while streamed output keeps adding up.
 func (a *Accounting) Partial(u llm.Usage) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -184,8 +185,9 @@ func (a *Accounting) Stream(est int) {
 	a.live += float64(est)
 }
 
-// Rebase replaces the exact context term with a count from the provider's
-// tokenizer, clearing both estimate buckets. Used covers everything appended so far.
+// Rebase replaces prior context terms with an authoritative count from the
+// provider's own tokenizer. Used then covers everything appended so far, so later
+// appends ride on top.
 func (a *Accounting) Rebase(used int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()

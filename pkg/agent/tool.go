@@ -23,6 +23,10 @@ type Tool interface {
 	Description() string
 	Schema() llm.ToolSchema
 	Mode() ExecutionMode
+	// Execute runs one model-requested call. Stream display output to out while
+	// the call runs or return it in ToolResult.Display, never both. ctx cancels on
+	// interrupt and tools should stop promptly when it fires. A failure returns as
+	// err, a result with IsError set, or both.
 	Execute(ctx context.Context, call ToolCall, out Output) (ToolResult, error)
 	Close() // release process-level resources at teardown; no-op for most tools
 }

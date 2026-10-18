@@ -149,6 +149,7 @@ func finalizeClassified(e *APIError, status int, retryAfter time.Duration) *APIE
 
 // resolveKey returns the API key for a provider. The configured environment
 // variable wins, then a literal key, then the dialect's conventional variable.
+// With none set it returns an ErrNoAPIKey naming the variable to set.
 func resolveKey(provider, literal, envVar, defaultEnv string, env func(string) string) (string, error) {
 	if envVar != "" {
 		if v := env(envVar); v != "" {

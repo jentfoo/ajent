@@ -16,8 +16,8 @@ type Image struct {
 	W, H      int    // pixel dimensions from the header, 0 when unknown
 }
 
-// String renders the honest placeholder, the one llm.ImagePlaceholder form
-// shared by replay and MCP display.
+// String returns the text stand-in naming this image, the single placeholder
+// form shared by transcript replay and MCP display.
 func (im Image) String() string { return llm.ImagePlaceholder(im.Data, im.Label) }
 
 // imageLine builds one committed image line. Where the mode can draw (inline

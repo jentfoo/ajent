@@ -35,7 +35,9 @@ func (p *ScriptedProvider) Name() string {
 	return p.ProviderName
 }
 
-// Stream records req and replays the next scripted turn.
+// Stream records req and replays the next scripted turn. It returns ctx.Err()
+// when already cancelled, ErrScriptExhausted once out of turns, or the turn's
+// own Err before any event.
 func (p *ScriptedProvider) Stream(ctx context.Context, req Request) (Stream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

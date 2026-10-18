@@ -173,7 +173,9 @@ func failedStub(name string, tr llm.ToolResultBlock) string {
 	return "[tool " + name + " failed: " + strutil.Clip(line, 80) + "]"
 }
 
-// canonicalPath resolves the path argument of a tool call input to one key.
+// canonicalPath resolves a tool call's path argument to the single key supersession
+// detection compares against. Empty when the input names no path, falling back to
+// the raw text when resolution fails.
 func canonicalPath(resolve func(string) (string, error), input json.RawMessage) string {
 	var p struct {
 		Path string `json:"path"`

@@ -114,7 +114,10 @@ func (m *editMatcher) canonicalize() {
 	m.ready = true
 }
 
-// find resolves old in the shared buffer, escalating tiers exactly as before.
+// find locates old in the matcher's buffer, trying byte-exact matching first
+// and escalating through tolerant tiers (unicode lookalikes, uniform
+// reindenting, bounded near-miss drift). It returns every site found plus the
+// tier that located them, or nil with tierExact when nothing did.
 func (m *editMatcher) find(old, replacement string) ([]match, matchTier) {
 	if ms := exactMatches(m.buf, old, replacement); len(ms) > 0 {
 		return ms, tierExact

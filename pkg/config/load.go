@@ -48,8 +48,10 @@ type Set struct {
 	valid     bool       // false after any layer mutation until the next resolve
 }
 
-// Load reads and merges every configuration layer for workspace. Warnings are
-// returned rather than fatal so a typo never blocks startup.
+// Load reads and merges every configuration layer for workspace in precedence
+// order: defaults, user file, project file, local file, AJENT_* environment
+// variables, then opts.Flags. Warnings are returned rather than fatal so a typo
+// never blocks startup.
 func Load(opts Options) (*Set, []string, error) {
 	if opts.Workspace == "" {
 		opts.Workspace = "."
@@ -157,7 +159,7 @@ func (s *Set) SetSession(key string, value any) error {
 }
 
 // ClearSession removes keys from the session layer so lower layers apply again.
-// Keys the layer does not declare are ignored; a whole subtree key drops every
+// Keys the layer does not declare are ignored. A whole subtree key drops every
 // override beneath it.
 func (s *Set) ClearSession(keys ...string) error {
 	s.mu.Lock()
@@ -238,8 +240,9 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) []string {
 	return warns
 }
 
-// Save writes key into the user or project layer file and re-resolves. Warnings
-// report content that saving will drop (comments), while errors are write failures.
+// Save writes key into the named file layer ("user" or "project") and
+// re-resolves. Warnings report content that saving will drop (comments), while
+// errors are write failures.
 func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	target := s.layerForSave(layer)
 	if target == nil {

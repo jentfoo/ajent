@@ -18,7 +18,8 @@ func decorateOpenRouter(routing *Routing) func(*compatRequest, Request) {
 	}
 }
 
-// compatRoutingFrom maps the configured routing onto its wire form.
+// compatRoutingFrom converts a resolved routing onto its wire form, cloning
+// slice fields so later edits cannot alias the configuration. r must not be nil.
 func compatRoutingFrom(r *Routing) *compatRouting {
 	return &compatRouting{
 		Order:               slices.Clone(r.Order),

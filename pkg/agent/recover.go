@@ -16,7 +16,7 @@ const maxFaultDetail = 200
 // returned result is the fault result, done is called once with it, and sink
 // gets a LevelError notice naming the fault site (a cancelled ctx drops the
 // notice). faulted is true only after a recovered panic, when res is the fault
-// result and err is nil. Goexit is never recovered; panic(nil) surfaces as a
+// result and err is nil. Goexit is never recovered. A panic(nil) surfaces as a
 // non-nil PanicNilError since Go 1.21.
 func RecoverTool(ctx context.Context, done func(ToolResult), sink Sink, call ToolCall,
 	fn func() (ToolResult, error)) (res ToolResult, err error, faulted bool) {

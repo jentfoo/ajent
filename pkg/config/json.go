@@ -87,8 +87,10 @@ func blankTrailingCommas(b []byte) {
 	}
 }
 
-// JSONError returns err with the file, line and column it happened at, plus the
-// offending line, so a malformed configuration file says where to look.
+// JSONError returns err annotated with the file, line and column it happened
+// at, plus the offending source line, so a malformed configuration file says
+// where to look. Secret values on that line are masked, making the result safe
+// to print or log.
 func JSONError(path string, data []byte, err error) error {
 	offset, ok := jsonErrorOffset(err)
 	if !ok {
@@ -132,8 +134,8 @@ func redactSecretLine(line string) string {
 // secretValueSpan reports the span of text to mask for a known-secret key whose
 // quoted name starts at line[i]. The name must sit in key position: a quote
 // directly following a colon is a value that merely spells a key name, as in
-// "model": "token", so it is left alone. A string value is masked exactly;
-// anything else, or a missing colon, leaves the value's end unknown and masks
+// "model": "token", so it is left alone. A string value is masked exactly.
+// Anything else, or a missing colon, leaves the value's end unknown and masks
 // the rest of the line. ok is false when there is no value to hide.
 func secretValueSpan(line string, i int) (start, end int, ok bool) {
 	if p := prevNonBlank(line, i); p >= 0 && line[p] == ':' {

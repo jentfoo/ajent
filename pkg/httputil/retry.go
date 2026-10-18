@@ -31,9 +31,10 @@ type RetryPolicy struct {
 	Jitter   float64 // fraction of the delay, 0 to 1
 }
 
-// BackoffDelay returns how long to wait after the given one based attempt failed, and whether
-// waiting is worthwhile at all. A server supplied retryAfter wins, unless it is longer than we
-// are willing to stall for. rnd is a jitter sample in [0,1).
+// BackoffDelay returns how long to wait before the next retry after attempt
+// (1 based) failed, and reports whether another attempt is worthwhile at all.
+// A server supplied retryAfter wins unless it exceeds the longest wait this
+// package honours. rnd is a jitter sample in [0,1).
 func BackoffDelay(p RetryPolicy, attempt int, retryAfter time.Duration, rnd float64) (time.Duration, bool) {
 	if p.Attempts <= 0 {
 		p.Attempts = defaultAttempts

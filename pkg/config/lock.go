@@ -24,7 +24,7 @@ var errLockContended = errors.New("config: advisory lock held by another process
 // LockSave holds the cross-process exclusion around one read-modify-write save of
 // ajent-owned state (user config layer, models.json): an exclusive, bounded,
 // best-effort flock on saves.lock in the config directory. The returned release
-// func is never nil and safe to defer; every failure mode degrades silently.
+// func is never nil and safe to defer. Every failure mode degrades silently.
 func LockSave() (release func()) {
 	noop := func() {}
 	if !flockSupported {

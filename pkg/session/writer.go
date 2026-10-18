@@ -13,11 +13,11 @@ import (
 
 // Writer appends entries to one JSONL file with line-atomic writes, fsyncing at turn boundaries.
 type Writer struct {
-	f      *os.File // nil for Discard
-	path   string   // transcript file, empty for Discard, drives HEAD persistence
-	head   string   // last appended entry id (or the rewind target after SetHead)
-	n      int      // entry count, persisted with the cursor to spot unsynced appends
-	closed bool     // further appends error after Close
+	f      *os.File
+	path   string // transcript file, drives HEAD persistence
+	head   string // last appended entry id (or the rewind target after SetHead)
+	n      int    // entry count, persisted with the cursor to spot unsynced appends
+	closed bool   // further appends error after Close
 
 	mu sync.Mutex
 }
@@ -181,7 +181,7 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 	return e, nil
 }
 
-// Path returns the transcript file path, or empty for a Discard writer.
+// Path returns the transcript file path.
 func (w *Writer) Path() string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -210,7 +210,7 @@ func (w *Writer) SetHead(id string) {
 }
 
 // persistHeadLocked records the branch cursor so resume continues from here.
-// Caller holds the lock, and it is a no-op on Discard writers whose path is empty.
+// Caller holds the lock.
 func (w *Writer) persistHeadLocked() error {
 	if w.path == "" {
 		return nil

@@ -28,7 +28,9 @@ func CheckSecretPerms(path string) string {
 		strconv.FormatUint(uint64(mode), 8) + "), it may hold an API key; chmod 600 it"
 }
 
-// WriteFileAtomic writes data atomically, so a crash mid-write never leaves a partial file.
+// WriteFileAtomic writes data to path with perm atomically, so readers see
+// either the old or the new content and a crash mid-write never leaves a
+// partial file. Missing parent directories are created.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, dirPerm); err != nil {

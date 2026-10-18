@@ -91,7 +91,7 @@ func (s *Store) Prompts(workspace string) ([]Prompt, error) {
 	return out, nil
 }
 
-// filePrompts returns one transcript's user text blocks in file order.
+// filePrompts returns one transcript's recorded user prompts, newest first.
 func filePrompts(path string) []Prompt {
 	entries, _, err := Read(path)
 	if err != nil {

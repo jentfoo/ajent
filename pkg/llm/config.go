@@ -449,8 +449,8 @@ func compatWarnings(o *Compat, d Dialect) []string {
 	return out
 }
 
-// mergeCompat returns a new block holding base with every field over sets laid
-// on top. A nil argument on either side leaves the other untouched.
+// mergeCompat layers every set field of over onto base into a new block. A nil
+// argument on either side returns the other unchanged.
 func mergeCompat(base, over *Compat) *Compat {
 	if over == nil {
 		return base

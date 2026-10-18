@@ -87,9 +87,9 @@ func (f *FlexStrings) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// MarshalJSON renders a config duration as a millisecond count. Test support:
-// configuration files are read-only so production never writes one, but round-trip
-// tests need the numeric-ms encoding to stay faithful (the internal value is ns).
+// MarshalJSON renders the duration as a JSON number of milliseconds, matching
+// the numeric form UnmarshalJSON accepts. Config files are never written by
+// ajent, so only round-trip tests exercise this.
 func (d FlexDuration) MarshalJSON() ([]byte, error) {
 	return json.Marshal(int64(time.Duration(d) / time.Millisecond))
 }

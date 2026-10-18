@@ -100,9 +100,11 @@ var remote = func() bool {
 
 // CopyOptions adjusts one Copy call, the zero value taking the defaults.
 type CopyOptions struct {
-	// TTY receives the OSC 52 escape. It must serialize its writes with
-	// everything else painting the same terminal (the TUI supplies its own),
-	// or the escape can interleave mid-frame.
+	// TTY receives the OSC 52 escape. Set it whenever a copy may run in a
+	// remote session, where the escape can be the only path to the user's
+	// clipboard. It must serialize its writes with everything else painting
+	// the same terminal (the TUI supplies its own), or the escape can
+	// interleave mid-frame.
 	TTY io.Writer
 }
 
@@ -112,13 +114,14 @@ var stdoutIsTTY = func() bool {
 	return term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// Copy writes text to the system clipboard, returning an error with install
-// guidance on total failure. Success means a native writer verifiably
-// accepted the payload, or on a remote session with a terminal on stdout that
-// the OSC 52 fallback was emitted. There OSC 52 also accompanies a native
-// success, since a forwarded display can accept a write that never reaches the
-// user's machine. opts.TTY routes the escape through a caller-owned terminal
-// sink serialized with that caller's own writes.
+// Copy writes text to the system clipboard, preferring native writers and
+// falling back to the OSC 52 terminal escape on remote sessions. A cancelled
+// ctx aborts the copy before or during a write. Success means a native writer
+// exited cleanly, or on a remote session with a terminal on stdout that the
+// fallback was emitted. On such sessions the escape also accompanies a native
+// success because a forwarded display can accept a write that never reaches
+// the user's machine. Total failure returns an error naming what was tried
+// plus install guidance.
 func Copy(ctx context.Context, text string, opts CopyOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err

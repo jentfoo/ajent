@@ -83,8 +83,8 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request) (Stream, er
 	return newAnthropicStream(ctx, resp, p.name), nil
 }
 
-// CountTokens returns the exact input token count. It is a billed network round
-// trip, so callers use it on demand rather than per keystroke.
+// CountTokens returns the exact input token count from the provider. It costs a
+// network round trip per call, so callers use it on demand rather than per keystroke.
 func (p *anthropicProvider) CountTokens(ctx context.Context, req Request) (int, error) {
 	body, err := buildAnthropicBody(req)
 	if err != nil {
@@ -236,7 +236,9 @@ func anthropicEffort(caps Capabilities, l Level) string {
 	}
 }
 
-// levelBudget maps a reasoning level onto a token budget.
+// levelBudget returns the default thinking token budget for a level, zero when
+// the level is off or unknown. Clamped under maxOutput so reasoning keeps an
+// answer window.
 func levelBudget(l Level, maxOutput int) int {
 	var budget int
 	switch l {
@@ -552,7 +554,9 @@ func applyCacheBreakpoints(body *antRequest, keepLast int, longTTL bool, cacheOn
 	}
 }
 
-// anthropicClassifier maps a Messages API error response.
+// anthropicClassifier returns the error classifier for the Messages API. The
+// returned func builds an APIError from status and body, reports context
+// overflow on 400s, and hints at the compat flag a rejected setting asks for.
 func anthropicClassifier(provider string) func(int, []byte) error {
 	return func(status int, body []byte) error {
 		var wire antErrBody
@@ -768,7 +772,10 @@ func (s *anthropicStream) onMessageDelta(ev antEvent) []Event {
 	return []Event{{Type: EventUsage, Usage: s.usage}}
 }
 
-// finish drains any open block and emits the terminal event.
+// finish emits the one terminal EventDone carrying stop reason and usage. A
+// non-EOF cause becomes its error with StopError, and an EOF without a terminal
+// frame reports ErrStreamTruncated unless the caller closed or cancelled. Open
+// blocks are dropped without end events.
 func (s *anthropicStream) finish(cause error) []Event {
 	if s.done {
 		return nil

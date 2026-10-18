@@ -231,8 +231,8 @@ func reasoningOn(caps Capabilities, l Level) bool {
 func ClampLevel(m Model, l Level) Level { return clampLevel(m.Caps, l) }
 
 // MaxOutputFor clamps an output cap to the tokens left in the window after input
-// and reserve. It returns the model's own cap when the window is unknown, and the
-// available window when no cap is set, and never below one token.
+// and reserve. The model's own cap stands when the window is unknown. Otherwise a
+// missing cap uses the available window, and the result is at least one token.
 func MaxOutputFor(m Model, inputTokens int) int {
 	if m.ContextWindow <= 0 {
 		return m.MaxOutput // window unknown: the model cap stands

@@ -14,7 +14,7 @@ type keyRename struct {
 // canonicalizeKeys rewrites object keys that match Settings only by letter case
 // to each field's declared name, so merge, provenance and typed decode agree on
 // one spelling. Keys nothing declares pass through untouched. Returns the
-// rewritten JSON plus one rename per renamed path; malformed input is returned
+// rewritten JSON plus one rename per renamed path. Malformed input is returned
 // unchanged for the caller's own decode to report.
 func canonicalizeKeys(data []byte) ([]byte, []keyRename) {
 	root, err := parseNode(data)

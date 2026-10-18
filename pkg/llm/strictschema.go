@@ -21,7 +21,8 @@ const strictTypeObject = "object"
 
 // makeStrictAnthropicSchema rewrites a tool schema into the strict subset
 // anthropic requires: no unions, every property required or null-wrapped and
-// additionalProperties false. It reports false when a schema cannot be made strict.
+// additionalProperties false. It reports false when a schema cannot be made
+// strict, returning the input unchanged.
 func makeStrictAnthropicSchema(raw json.RawMessage) (json.RawMessage, bool) {
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil || root["type"] != strictTypeObject {
@@ -37,7 +38,8 @@ func makeStrictAnthropicSchema(raw json.RawMessage) (json.RawMessage, bool) {
 	return out, true
 }
 
-// strictAnthropicNode makes one schema node strict in place.
+// strictAnthropicNode makes one schema node strict in place and reports whether
+// it could be. False means the shape is not expressible strictly.
 func strictAnthropicNode(s map[string]any) bool {
 	if slices.ContainsFunc(unsupportedStrictKeys, func(k string) bool { _, ok := s[k]; return ok }) {
 		return false

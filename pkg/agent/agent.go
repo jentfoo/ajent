@@ -98,9 +98,8 @@ type Agent struct {
 	cancel   context.CancelFunc
 }
 
-// New returns an agent bound to state. Sinks are resolved once into a single
-// fan-out so the loop always emits on one field, events go nowhere with none
-// supplied.
+// New returns an agent bound to state. Events emit through every sink in
+// opts.Sinks in registration order, or nowhere when it is empty.
 func New(state *State, opts Options) *Agent {
 	a := &Agent{state: state, opts: opts, retrySleep: httputil.SleepContext}
 	switch len(opts.Sinks) {
@@ -125,7 +124,7 @@ func (a *Agent) Running() bool {
 
 // BaseEstimate returns the token estimate of what rides with every request: the
 // system block, plus the tool schemas when tools is true. It reports 0 while a
-// turn is running, which owns State.
+// turn is running, since the loop owns State then.
 func (a *Agent) BaseEstimate(tools bool) int {
 	a.mu.Lock()
 	defer a.mu.Unlock()

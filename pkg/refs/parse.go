@@ -19,8 +19,8 @@ type Ref struct {
 }
 
 // Parse returns every @path reference in text. @ matches only at a word
-// boundary (start of line, or after whitespace / `(`, `[`, a quote) so
-// `email@example.com` is prose. The path token stops at whitespace or trailing
+// boundary (start of line, or after whitespace, an opener, a backtick or a
+// quote) so `email@example.com` is prose. The path token stops at whitespace or trailing
 // punctuation, and a trailing `(...)` measurement is absorbed into Note so
 // re-expansion replaces it.
 func Parse(text string) []Ref {

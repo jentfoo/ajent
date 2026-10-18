@@ -46,10 +46,11 @@ type Result struct {
 // It is wired by the driver to a real provider stream.
 type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 
-// Compact folds everything before the verbatim band into a checkpoint. Both ends
-// are measured through ContextMessages against the branch as a prior compaction
-// already left it, so the reported saving is the saving the next request gets. A
-// nil result means nothing worth doing changed.
+// Compact folds everything before the verbatim band into one summary checkpoint,
+// ready to record on the branch as a compaction entry. Result.Before and
+// Result.After estimate next-request input tokens without and with that
+// recording, so their difference is what the caller saves. A nil result means
+// nothing worth doing changed.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
 	minSteps, verbatimTokens := resolveVerbatim(model, opts)
 

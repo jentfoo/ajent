@@ -25,8 +25,10 @@ type Sink interface {
 	EndThinking()
 	Text(delta string)
 	EndText()
-	// ToolStart opens a tool call's header. full marks a call whose streamed
-	// output must be shown in full rather than collapsed to its head.
+	// ToolStart opens a tool call's header and returns its completion callback,
+	// invoked exactly once by the loop with the final result, so it must be
+	// non-nil. full marks a call whose streamed output shows in full rather
+	// than collapsed to its head.
 	ToolStart(call ToolCall, label string, full bool) func(ToolResult)
 	ToolOutput(callID, delta string)
 	// ToolProgress reports a call the model is still streaming, so a long set of

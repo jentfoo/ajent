@@ -90,6 +90,7 @@ func optionsFor(name, command string) ([]string, []int) {
 	return slices.Clone(bareLabels), []int{optAllow, optAllowNote, optDeny}
 }
 
+// buildOptions returns the option labels an approval dialog offers for a tool call.
 func buildOptions(name, command string) []string {
 	labels, _ := optionsFor(name, command)
 	return labels

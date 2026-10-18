@@ -12,9 +12,10 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// advertisedCommands merges the fixed probe set with tools.shellCommands extras,
-// keeping unique bare names on PATH that permissions.deniedCommands leaves
-// unquestioned and no enabled tool already covers. It also returns the names
+// advertisedCommands lists the shell commands the bash description may show as
+// runnable examples: tools.ShellExamples plus settings.Tools.ShellCommands,
+// deduplicated and kept only when found on PATH, not covered by an enabled tool,
+// and not refused by permissions.deniedCommands. The second slice names entries
 // missing from PATH, for the caller to surface. The result is startup-fixed.
 func advertisedCommands(settings config.Settings, lookPath func(string) (string, error)) ([]string, []string) {
 	denied := settings.Permissions.DeniedCommands

@@ -70,11 +70,15 @@ func (r Result) Resized() bool { return r.Width != r.SrcWidth || r.Height != r.S
 
 // Prepare fits data to the inline limits: at most MaxPixels per axis and a
 // base64 encoding no longer than MaxBase64Bytes. An image already within both
-// passes through unchanged, and everything else is downscaled and re-encoded until
-// it fits, or ErrIrreducible when even the last rung would not. EXIF
-// orientation is applied whenever an image is re-encoded, so a camera shot
-// that needed fitting comes out upright. An animated png loses its animation
-// to the re-encode, keeping the first frame.
+// passes through unchanged, everything else is downscaled and re-encoded until
+// it fits, with decode-only formats such as bmp or tiff always converted. EXIF
+// orientation is applied whenever an image is re-encoded, so a camera shot that
+// needed fitting comes out upright. An animated png loses its animation to the
+// re-encode, keeping the first frame.
+//
+// Returns ErrUnsupported when no decoder accepts the bytes, ErrTooLarge when
+// the header claims more pixels than may ever be decoded however small the
+// file, and ErrIrreducible when nothing it can encode fits both limits.
 func Prepare(data []byte) (Result, error) {
 	mediaType, cfg, ok := sniff(data)
 	if !ok || cfg.Width <= 0 || cfg.Height <= 0 {
@@ -112,7 +116,7 @@ func Prepare(data []byte) (Result, error) {
 	}, nil
 }
 
-// ToPNG converts data to png bytes, ok false when no decoder accepts it.
+// ToPNG converts data to png bytes, ok false when decoding or encoding fails.
 // EXIF orientation is applied.
 func ToPNG(data []byte) ([]byte, bool) {
 	src, err := decode(data)
@@ -309,10 +313,11 @@ func animatedPNG(data []byte, mediaType string) bool {
 	return false
 }
 
-// encodeFit searches encodings of src for the first within the size ceiling,
-// starting from the source fitted proportionally under the pixel ceiling and
-// stepping down the shrink ladder toward 1x1. Each size tries png, then jpeg
-// at descending qualities. ok is false only when even the last rung fails.
+// encodeFit returns an encoding of src, whose dimensions are w and h, that fits
+// MaxPixels per axis and the base64 size ceiling, along with its media type and
+// final dimensions. The largest fitting size wins, png preferred over jpeg.
+// A jpeg result has transparency flattened onto white. ok is false when no
+// encoding can fit.
 func encodeFit(src image.Image, w, h int) (data []byte, mediaType string, fw, fh int, ok bool) {
 	clamp := min(1, float64(MaxPixels)/float64(w), float64(MaxPixels)/float64(h))
 	for _, f := range shrinkFactors {
