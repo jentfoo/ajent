@@ -1256,7 +1256,7 @@ The key table:
 | Alt+↑ | recall the newest queued message into the editor, emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
 | Ctrl+U | remove from the start of the current line to the caret |
-| Ctrl+Y | restore what the last Ctrl+C/Esc clear or kill removed; one level deep, consumed by the restore, dropped by any later edit. Prompt/search/question overlays keep their own kill-line clears and do not undo |
+| Ctrl+Y | restore what the last Ctrl+C/Esc clear or kill removed; one level deep, consumed by the restore, dropped by any later edit, disarms history browsing like any non-recall replacement. Prompt/search/question overlays keep their own kill-line clears and do not undo |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`). `←`/`→`, their word-wise forms and Home select the match too |
 | Shift+Tab, Shift+→ | out-of-band `ControlModeCycle`, never consumed by the editor or a dialog. The front end cycles the permission mode forward |
@@ -1346,9 +1346,9 @@ of its own). First ↑ recalls your most recent sent line, further ↑ steps old
 and ↓ returns to the live draft. The editor's in-memory history applies only
 when no recall source is installed (no session store). Browsing is fragile by
 design: every buffer replacement that is not itself a recall step (a sent
-line, an accepted search match, an Esc or Ctrl+C clear, a host-driven fill)
-disarms it through `resetPromptNavLocked`, so an arrow at a buffer edge can
-never restore held state over fresh content.
+line, an accepted search match, an Esc or Ctrl+C clear, a Ctrl+Y undo restore,
+a host-driven fill) disarms it through `resetPromptNavLocked`, so an arrow at a
+buffer edge can never restore held state over fresh content.
 Like completion it is an in-place live-block overlay rather than an interaction,
 so a slow scan never blocks input and its pure logic lives separate from the UI.
 

@@ -1729,6 +1729,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		if !u.editor.Undo() { // nothing to restore: no visual change
 			return nil, false, false
 		}
+		u.resetPromptNavLocked() // the restored buffer is fresh content, not a recall step
 	case keyRedraw:
 		// the fallthrough repaint redraws the live block. Committed rows are the
 		// terminal's and stay exactly as they are.

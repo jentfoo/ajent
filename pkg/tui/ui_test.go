@@ -1375,6 +1375,23 @@ func TestUIPromptHistory(t *testing.T) {
 		assert.Empty(t, u.editor.Value()) // the cleared draft must not come back
 	})
 
+	t.Run("undo_restore_disarms_browse", func(t *testing.T) {
+		u := newNavUI([]SearchItem{{Text: "alpha"}, {Text: "beta older"}}, nil)
+		armBrowse(u)
+
+		pressKey(u, key{typ: keyKillLine}) // kill the recalled entry, snapshotting it
+		assert.Empty(t, u.editor.Value())
+		pressKey(u, key{typ: keyUndo}) // restore it
+		assert.Equal(t, "alpha", u.editor.Value())
+		require.False(t, u.browsingPrompts())
+
+		searchPress(u, key{typ: keyDown}) // cursor-first: an edge arrow must hold the restore
+		assert.Equal(t, "alpha", u.editor.Value())
+		searchPress(u, key{typ: keyUp}) // caret to the restored buffer's start
+		searchPress(u, key{typ: keyUp}) // at the edge: no stale older entry either
+		assert.Equal(t, "alpha", u.editor.Value())
+	})
+
 	t.Run("whitespace_enter_disarms_browse", func(t *testing.T) {
 		u := newNavUI([]SearchItem{{Text: "alpha"}}, nil)
 		armBrowse(u)
@@ -1403,6 +1420,23 @@ func TestUIPromptHistory(t *testing.T) {
 		u.SetInput("host text") // a host replacement disarms the fallback too
 		searchPress(u, key{typ: keyDown})
 		assert.Equal(t, "host text", u.editor.Value())
+	})
+
+	t.Run("undo_restore_disarms_fallback", func(t *testing.T) {
+		u := newNavUI(nil, nil) // no recorded prompts: arrows fall back to editor history
+		u.SetInput("sent line")
+		searchPress(u, key{typ: keyEnter}) // records it in the editor's own history
+		require.Len(t, u.editor.history, 1)
+
+		u.SetInput("draft")
+		pressKey(u, key{typ: keyUp}) // caret to the buffer's start
+		pressKey(u, key{typ: keyUp}) // HistoryPrev recalls "sent line", stashing the draft
+
+		pressKey(u, key{typ: keyKillLine})
+		pressKey(u, key{typ: keyUndo}) // restore: must disarm the fallback browse too
+		assert.Equal(t, "sent line", u.editor.Value())
+		searchPress(u, key{typ: keyDown})
+		assert.Equal(t, "sent line", u.editor.Value()) // the stashed draft must not come back
 	})
 }
 
