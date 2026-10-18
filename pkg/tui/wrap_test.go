@@ -97,10 +97,28 @@ func TestWrapLineIndent(t *testing.T) {
 	})
 
 	t.Run("hang_capped_for_narrow_width", func(t *testing.T) {
+		// the 10-column indent cannot fit the window, so it collapses and only the
+		// capped hang remains on continuation rows
 		rows := wrapLine("          alpha beta", 8)
-		for _, r := range rows {
-			assert.LessOrEqual(t, displayWidth(r), 8)
+		assert.Equal(t, []string{"alpha", "    beta"}, rows)
+	})
+
+	t.Run("indent_wider_than_first_word", func(t *testing.T) {
+		// the break lands at the indent end, which must not render an empty row
+		rows := wrapLine("      alpha", 8)
+		assert.Equal(t, []string{"alpha"}, rows)
+	})
+
+	t.Run("no_empty_row_above_content", func(t *testing.T) {
+		for _, w := range []int{4, 5, 6, 8} {
+			for _, row := range wrapLine("          alpha beta", w) {
+				assert.NotEmpty(t, row, "width %d", w)
+			}
 		}
+	})
+
+	t.Run("blank_line_stays_one_row", func(t *testing.T) {
+		assert.Equal(t, []string{""}, wrapLine("        ", 4))
 	})
 }
 

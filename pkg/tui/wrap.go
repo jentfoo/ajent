@@ -102,11 +102,16 @@ func wrapLine(line string, width int) []string {
 		for stop > start && cs[stop-1].text == " " {
 			stop-- // the break space belongs to neither row
 		}
-		rows = append(rows, renderCells(cs[start:stop], prefix))
+		if stop > start { // all spaces before the break leave no row to render
+			rows = append(rows, renderCells(cs[start:stop], prefix))
+		}
 		start = brk
 		for start < len(cs) && cs[start].text == " " {
 			start++ // the break consumed the space, do not indent past it
 		}
+	}
+	if len(rows) == 0 {
+		return []string{""} // a line of only spaces stays one blank row
 	}
 	return rows
 }

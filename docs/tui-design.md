@@ -600,7 +600,9 @@ break it.
 `wrapLine` operates on `cell` values (grapheme cluster + active SGR state), so
 it never splits a cluster, never miscounts an escape sequence as width, and
 reopens the active style on each continuation row. This is why emoji with
-modifiers and ZWJ sequences survive wrapping intact. Table cells reuse the same
+modifiers and ZWJ sequences survive wrapping intact. An indent too wide to
+share a row with the first word collapses instead of emitting a blank first
+row, which would read as a stray empty line above the content. Table cells reuse the same
 `cell` machinery (`wrapCellLine`) so wrapped cell text keeps its styling. Column
 widths come from content and are shrunk (widest first) when they would overflow,
 never dropping data. Rows get a separator line between them.

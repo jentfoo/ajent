@@ -646,6 +646,16 @@ func TestWrapCellLine(t *testing.T) {
 		assert.Len(t, rows, 4)
 	})
 
+	t.Run("deep_indent_no_empty_row", func(t *testing.T) {
+		// an indent that fills the window collapses instead of rendering a blank row
+		rows := wrapCellLine("          alpha beta", 8)
+		assert.Equal(t, []string{"alpha", "beta"}, rows)
+	})
+
+	t.Run("blank_line_stays_one_row", func(t *testing.T) {
+		assert.Equal(t, []string{""}, wrapCellLine("        ", 4))
+	})
+
 	t.Run("zero_width_cluster_never_stalls", func(t *testing.T) {
 		rows := wrapCellLine("áb́ć", 1)
 		assert.Len(t, rows, 3) // each base carries its combining mark

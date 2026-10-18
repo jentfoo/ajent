@@ -471,11 +471,16 @@ func wrapCellLine(line string, w int) []string {
 		for stop > start && cs[stop-1].text == " " {
 			stop--
 		}
-		out = append(out, renderCells(cs[start:stop], ""))
+		if stop > start { // all spaces before the break leave no row to render
+			out = append(out, renderCells(cs[start:stop], ""))
+		}
 		start = stop
 		for start < len(cs) && cs[start].text == " " {
 			start++
 		}
+	}
+	if len(out) == 0 {
+		return []string{""} // a line of only spaces stays one blank row
 	}
 	return out
 }
