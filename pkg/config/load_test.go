@@ -341,6 +341,26 @@ func TestSave(t *testing.T) {
 		assert.Equal(t, "high", st.Reasoning.Level)
 	})
 
+	t.Run("hand_edited_trailing_bytes_refuse_save", func(t *testing.T) {
+		// trailing bytes only exist via hand edits after startup because Load rejects them
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		userFile := userPathFor(t)
+		writeConfig(t, userFile, `{"model":"keep"}`)
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		junked := "{\"model\":\"keep\"} oops\n"
+		require.NoError(t, os.WriteFile(userFile, []byte(junked), 0o600))
+
+		_, err = s.Save("user", "reasoning.level", "high")
+		require.Error(t, err)
+
+		b, err := os.ReadFile(userFile)
+		require.NoError(t, err)
+		assert.Equal(t, junked, string(b)) // the hand edit is left untouched
+	})
+
 	t.Run("trailing_comma_only_file_saves_silently", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)

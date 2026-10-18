@@ -147,6 +147,12 @@ func TestOverlayJSON(t *testing.T) {
 		require.Error(t, err)
 	})
 
+	t.Run("base_trailing_bytes_error", func(t *testing.T) {
+		// grafted content would be lost past the top-level value, so refuse
+		_, err := OverlayJSON([]byte(over+" junk"), []byte(over), ovFile{})
+		require.Error(t, err)
+	})
+
 	t.Run("malformed_over_is_an_error", func(t *testing.T) {
 		_, err := OverlayJSON(nil, []byte("{ nope"), ovFile{})
 		require.Error(t, err)

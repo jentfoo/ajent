@@ -3,7 +3,9 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 )
@@ -38,15 +40,27 @@ type object struct {
 	m    map[string]*val
 }
 
-// parseNode decodes one JSON value, treating empty input as an empty object so
-// SetKey can build layers from nothing. Numbers use UseNumber to preserve them.
+// parseNode decodes the one JSON value spanning all of data, treating empty
+// input as an empty object so SetKey can build layers from nothing. Numbers use
+// UseNumber to preserve them. Trailing bytes are an error: a save rebuilt from
+// the tree would silently drop anything past the top-level value.
 func parseNode(data []byte) (*val, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		data = []byte("{}")
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.UseNumber()
-	return readVal(dec)
+	root, err := readVal(dec)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = dec.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("unexpected data after the top-level value")
+		}
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	return root, nil
 }
 
 // readVal consumes exactly one JSON value from dec.

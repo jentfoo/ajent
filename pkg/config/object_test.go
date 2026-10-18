@@ -8,6 +8,37 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestParseNode(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		data    string // empty parses as an empty object
+		wantErr bool
+		want    string
+	}{
+		{"empty_input_is_empty_object", "", false, "{}"},
+		{"whitespace_only_is_empty_object", " \n\t", false, "{}"},
+		{"trailing_whitespace_ok", `{"a":1}` + "\n ", false, `{"a":1}`},
+		{"scalar_parses", `42`, false, `42`},
+		{"trailing_garbage_errors", `{"a":1} junk`, true, ""},
+		{"second_value_errors", `{} {}`, true, ""},
+		{"extra_closing_brace_errors", `{"a":1}}`, true, ""},
+		{"scalar_then_scalar_errors", `1 2`, true, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, err := parseNode([]byte(tc.data))
+			if tc.wantErr {
+				assert.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, string(root.marshal()))
+		})
+	}
+}
+
 func TestSetKey(t *testing.T) {
 	t.Parallel()
 
