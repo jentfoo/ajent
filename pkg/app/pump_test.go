@@ -72,11 +72,12 @@ func TestRunPump(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan struct{})
 		var drain drainWaiter
+		stager := command.NewStager(ctx, nil, nil)
 		go func() {
-			runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
+			runPump(ctx, pump, nil, console, stager, nil,
 				false, ui, starts, func() {},
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil),
-				nil, &agent.State{}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady),
+				nil, &agent.State{Tokens: tokens.New(llm.Model{})}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
 		}()
 
@@ -178,8 +179,9 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 			return nil
 		},
 	})
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
-	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}, Tokens: tokens.New(llm.Model{ID: "m", Provider: "p"})}
 	console := &uiConsole{ui: ui, commands: cmds, st: st, q: q}
 	applied := make(chan struct{})
 	console.deferred = append(console.deferred, func() { close(applied) })
@@ -225,7 +227,8 @@ func TestStartDrainParkedGate(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("planned")}}}
 		ag, _ := scriptedAgent(p)
 
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		starts := newStartState(false)
@@ -253,7 +256,8 @@ func TestStartDrainParkedGate(t *testing.T) {
 		}}
 		ag, _ := scriptedAgent(p)
 
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		starts := newStartState(false)
@@ -278,7 +282,8 @@ func TestRunPumpParkedHold(t *testing.T) {
 	}}
 	ag, st := scriptedAgent(p)
 	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 
 	var captured bool
 	hooks := planHooks{
@@ -392,7 +397,7 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 	entered := make(chan struct{})
 	set := singleToolSet{tool: holdBash{release: release, entered: entered}}
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}
-	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	ag := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Sinks:    []agent.Sink{agent.NopSink{}},
@@ -400,7 +405,8 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
 	starts := newStartState(false)
 	ctx, cancel := context.WithCancel(t.Context())

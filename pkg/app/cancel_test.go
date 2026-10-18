@@ -20,6 +20,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -78,7 +79,7 @@ func TestInterruptCancelsRunningBashEndToEnd(t *testing.T) {
 		{Events: devBashCallTurn("c1", "bash", args)},
 	}}
 	rec := &turnRecorder{}
-	st := &agent.State{Model: llm.Model{ID: "test", Provider: "scripted"}, Reasoning: llm.ReasoningConfig{}}
+	st := &agent.State{Model: llm.Model{ID: "test", Provider: "scripted"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test", Provider: "scripted"})}
 	ag := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Tools:    reg,
@@ -244,7 +245,14 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 	prompter := newCancelPrompter()
 	b := permit.NewBarrier(func(string) bool { return false }, permit.Options{
 		Mode: permit.ModeAuto, ModeSet: true,
-		Prompter: prompter, Classifier: permit.NewCachedClassifier(adapter.Classify),
+		Classifier: permit.NewCachedClassifier(adapter.Classify),
+		Notice:     func(string) {}, // wired unconditionally by both front ends
+		DryRun:     func(agent.ToolCall) error { return nil },
+		Dialogs: &permit.Dialogs{
+			Prompter: prompter,
+			Noter:    func(string) {}, // rides the interactive driver's Dialogs bundle
+			Preview:  func(agent.ToolCall) string { return "" },
+		},
 	})
 
 	// askAllow drives one asker call, answering the dialog it opens with Allow
@@ -325,7 +333,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			release := make(chan struct{})
 			entered := make(chan struct{})
 			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}
-			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 			ag := agent.New(st, agent.Options{
 				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 				Tools:    singleToolSet{tool: holdBash{release: release, entered: entered}},
@@ -340,7 +348,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			controls := make(chan tui.Control, 4)
 			go controlLoop(context.Background(), ui, controls,
 				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil), stager, nil,
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady), stager, nil,
 				func() { close(quit) }, nil)
 
 			errCh := make(chan error, 1)
@@ -406,7 +414,7 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			release := make(chan struct{})
 			entered := make(chan struct{})
 			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: []llm.Event{{Type: llm.EventDone}}}}}
-			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+			st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 			ag := agent.New(st, agent.Options{
 				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 				// the typing gate's boundary hold, pinned like a user mid-message
@@ -418,7 +426,8 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			})
 
 			// wired as the driver wires it: submit reserves, clear releases
-			q := newSteerQueue(ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, nil, nil)
+			waitReady, takeReady := stagePair(t)
+			q := newSteerQueue(ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
 			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
 
 			quit := make(chan struct{})
@@ -476,7 +485,7 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{})
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}
-	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	ag := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Tools:    singleToolSet{tool: holdBash{release: release, entered: entered}},

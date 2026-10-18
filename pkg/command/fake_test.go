@@ -98,7 +98,7 @@ func newFakeConsole(tb testing.TB) *fakeConsole {
 		Env:       func(string) string { return "" },
 	})
 	require.NoError(tb, err)
-	state := &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Hide: false}}
+	state := &agent.State{Model: reg.Active(), Reasoning: llm.ReasoningConfig{Level: llm.LevelMedium, Hide: false}, Tokens: tokens.New(reg.Active())}
 	state.Tokens = tokens.New(state.Model)
 	return &fakeConsole{
 		models:   reg,

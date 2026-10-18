@@ -12,6 +12,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
@@ -35,7 +36,7 @@ func TestSteerNormalizesThroughRefs(t *testing.T) {
 	}}
 
 	expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
-	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	a := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Sinks:    []agent.Sink{agent.NopSink{}},

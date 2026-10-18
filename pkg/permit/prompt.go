@@ -275,10 +275,8 @@ func subjectFor(call agent.ToolCall) string {
 // dialogSubject renders what an approval shows for call: the injected preview (a
 // write's content or an edit diff) when one is available, else the raw arguments.
 func (b *Barrier) dialogSubject(call agent.ToolCall) string {
-	if b.preview != nil {
-		if s := b.preview(call); s != "" {
-			return elideSubject(s)
-		}
+	if s := b.dialogs.Preview(call); s != "" {
+		return elideSubject(s)
 	}
 	return elideSubject(subjectFor(call))
 }

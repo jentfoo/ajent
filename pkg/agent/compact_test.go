@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 func TestOverflowRetry(t *testing.T) {
@@ -22,7 +23,7 @@ func TestOverflowRetry(t *testing.T) {
 			{Events: textOnly("recovered")}, // the compacted retry succeeds
 		}}
 		catch := &resultCatcher{}
-		a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 			Sinks:    []Sink{catch},
 			Env:      testEnv,
@@ -63,7 +64,7 @@ func TestOverflowRetry(t *testing.T) {
 			{Err: llm.ErrContextOverflow}, // still overflowing after one compaction
 		}}
 		var calls int
-		a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 			Env:      testEnv,
 			Compact: func(_ context.Context, r CompactReason) (bool, error) {
@@ -82,7 +83,7 @@ func TestOverflowRetry(t *testing.T) {
 	// with no compact hook wired the overflow fails the turn outright
 	t.Run("no_hook_fails_turn", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
-		a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+		a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 			Env:      testEnv,
 		})
@@ -96,7 +97,7 @@ func TestThresholdHookAtTurnBoundary(t *testing.T) {
 
 	var reasons []CompactReason
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("hi")}}}
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Env:      testEnv,
 		Compact: func(_ context.Context, r CompactReason) (bool, error) {
@@ -115,7 +116,7 @@ func TestTurnBoundaryFiresOnErroredTurn(t *testing.T) {
 	var reasons []CompactReason
 	var boundaries int
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Err: llm.ErrContextOverflow}}}
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Env:      testEnv,
 		Compact: func(_ context.Context, r CompactReason) (bool, error) {
@@ -141,7 +142,7 @@ func TestStepHookAtEveryStepBoundary(t *testing.T) {
 		{Events: toolCallEvents("c2", "bash")},
 		{Events: textOnly("done")},
 	}}
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Env:      testEnv,
 		Tools:    set,
@@ -167,7 +168,7 @@ func TestStepHookReducesContextMidTurn(t *testing.T) {
 		{Events: textOnly("done")},
 	}}
 	var swapped bool
-	a = New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a = New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Env:      testEnv,
 		Tools:    set,
@@ -202,7 +203,7 @@ func firstText(m llm.Message) string {
 func TestWithStateMutatesLiveState(t *testing.T) {
 	t.Parallel()
 
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return nil, nil },
 	})
 	ok := a.WithState(func(s *State) { s.Messages = []llm.Message{llm.Text(llm.RoleUser, "x")} })
@@ -219,7 +220,7 @@ func TestWithStateRefusedWhileRunning(t *testing.T) {
 		{Events: toolCallEvents("c1", "bash")},
 		{Events: textOnly("done")},
 	}}
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Env:      testEnv,
 		Tools:    set,

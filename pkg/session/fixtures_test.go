@@ -91,7 +91,7 @@ func TestFixtureSchema(t *testing.T) {
 
 	t.Run("message_blocks_keep_their_types", func(t *testing.T) {
 		branch := loadBranch(t, "tools.jsonl")
-		msgs, warns := ContextMessages(branch, CompactionData{}, nil)
+		msgs, warns := ContextMessages(branch, CompactionData{}, noResolve)
 		require.Empty(t, warns)
 
 		// the envelope has to carry each block back as its own concrete type
@@ -104,7 +104,7 @@ func TestFixtureContextMessages(t *testing.T) {
 
 	t.Run("tool_heavy_branch", func(t *testing.T) {
 		branch := loadBranch(t, "tools.jsonl")
-		msgs, warns := ContextMessages(branch, CompactionData{}, nil)
+		msgs, warns := ContextMessages(branch, CompactionData{}, noResolve)
 		require.Empty(t, warns)
 
 		lines := digest(msgs)
@@ -145,7 +145,7 @@ func TestFixtureContextMessages(t *testing.T) {
 				require.NoError(t, e.Decode(&cd))
 			}
 		}
-		msgs, warns := ContextMessages(branch, cd, nil)
+		msgs, warns := ContextMessages(branch, cd, noResolve)
 		require.Empty(t, warns)
 
 		// everything before the cut collapses into the summary's user message
@@ -168,7 +168,7 @@ func TestFixtureBranch(t *testing.T) {
 	seen := map[string][]string{}
 	for _, id := range ids {
 		branch := Branch(entries, id)
-		msgs, warns := ContextMessages(branch, CompactionData{}, nil)
+		msgs, warns := ContextMessages(branch, CompactionData{}, noResolve)
 		require.Empty(t, warns)
 		seen[digest(msgs)[len(msgs)-1]] = digest(msgs)
 	}

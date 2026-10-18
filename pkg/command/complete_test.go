@@ -22,7 +22,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		start, items := comp.Complete("/mo", 3)
 		assert.Equal(t, 0, start)
@@ -37,7 +37,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		_, items := comp.Complete("/REASONING me", 13)
 		assert.Contains(t, labelsOf(items), "medium")
@@ -49,7 +49,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		_, items := comp.Complete("/MO", 3)
 		assert.Contains(t, labelsOf(items), "/model")
@@ -90,7 +90,7 @@ func TestCompleter(t *testing.T) {
 	t.Run("no_trigger_mid_token", func(t *testing.T) {
 		c := newFakeConsole(t)
 		r := NewRegistry()
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		_, items := comp.Complete("hello", 5)
 		assert.Empty(t, items)
@@ -102,7 +102,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		start, items := comp.Complete("/model ", len("/model "))
 		assert.Equal(t, len("/model "), start) // replacement starts past the trailing space
@@ -117,7 +117,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		for _, line := range []string{"/reasoning  me", "/reasoning\tme"} {
 			n := len(tui.GraphemeCells(line))
@@ -165,7 +165,7 @@ func TestCompleter(t *testing.T) {
 		r := NewRegistry()
 		c.commands = r
 		RegisterBuiltins(r, c)
-		comp := NewCompleter(r, c, nil)
+		comp := NewCompleter(r, c, emptyIdx(t))
 
 		// /reasoning <prefix> => delegates to reasoning's Complete, offering levels
 		start, items := comp.Complete("/reasoning me", 13)
@@ -198,10 +198,18 @@ func TestCompleterStyle(t *testing.T) {
 		})
 	}
 
-	// a shell line still runs off the key loop without a path index
-	noPaths := NewCompleter(NewRegistry(), newFakeConsole(t), nil)
-	assert.Equal(t, tui.CompleteStyle{}, noPaths.Style("@mai", 4))
+	// an @ token stays Tab-driven even where the workspace offers nothing
+	noPaths := NewCompleter(NewRegistry(), newFakeConsole(t), emptyIdx(t))
+	assert.Equal(t, tui.CompleteStyle{Async: true}, noPaths.Style("@mai", 4))
 	assert.Equal(t, tui.CompleteStyle{Async: true}, noPaths.Style("!ls", 3))
+}
+
+// emptyIdx returns an index over an empty workspace, so command-focused tests
+// wire a real path source that offers nothing.
+func emptyIdx(t *testing.T) *refs.Index {
+	t.Helper()
+
+	return refs.NewIndex(t.TempDir())
 }
 
 func labelsOf(items []tui.Completion) []string {
@@ -266,14 +274,6 @@ func TestPathCompleter(t *testing.T) {
 
 		assert.Equal(t, 1, start)
 		assert.ElementsMatch(t, labelsOf(items), []string{"main.go", "read.go"})
-	})
-
-	// no index at all degrades to no completion
-	t.Run("nil_index_offers_nothing", func(t *testing.T) {
-		start, items := NewPathCompleter(nil).Complete("@main", 5)
-
-		assert.Equal(t, 5, start)
-		assert.Empty(t, items)
 	})
 }
 

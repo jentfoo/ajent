@@ -88,7 +88,7 @@ func TestFixtureCompact(t *testing.T) {
 			prompted = true
 			return sectionedGoal("tidy the parser"), nil
 		}
-		res, err := Compact(t.Context(), branch, model, run, Options{Cwd: "/w"})
+		res, err := Compact(t.Context(), branch, model, run, Options{Cwd: "/w", Resolve: fixtureResolver()})
 		require.NoError(t, err)
 		require.NotNil(t, res)
 		require.True(t, prompted)
@@ -103,7 +103,7 @@ func TestFixtureCompact(t *testing.T) {
 
 	t.Run("recompaction_keeps_the_prior_cut", func(t *testing.T) {
 		branch := loadFixtureBranch(t, "tools.jsonl")
-		opts := Options{Cwd: "/w", Retain: llm.RetainAll}
+		opts := Options{Cwd: "/w", Retain: llm.RetainAll, Resolve: fixtureResolver()}
 		run := summaryRun(sectionedGoal("tidy the parser"))
 
 		first, err := Compact(t.Context(), branch, model, run, opts)

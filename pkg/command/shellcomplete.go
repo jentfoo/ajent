@@ -48,9 +48,6 @@ func (c *Completer) shellComplete(ctx completeCtx) (int, []tui.Completion) {
 		}
 		return offer(tokStart, ctx.pos, textCompletions(shellNameMatches(token)))
 	}
-	if c.paths == nil {
-		return ctx.pos, nil
-	}
 	return offer(tokStart, ctx.pos, c.paths.ShellCandidates(token))
 }
 

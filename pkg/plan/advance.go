@@ -225,9 +225,6 @@ func (c *Controller) stalledReviewerLocked(ctx context.Context) (agent.Input, bo
 		optComplete = "Accept and finish"
 		optContinue = "Keep reviewing"
 	)
-	if c.h.Ask == nil {
-		return agent.Input{}, false // no way to ask, leave the user in the review
-	}
 	choice, err := c.h.Ask(ctx, "The review ended without a verdict. What now?",
 		[]string{optRevise, optComplete, optContinue})
 	if err != nil {

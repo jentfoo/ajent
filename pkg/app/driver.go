@@ -340,22 +340,25 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		if m, ok := scope.barrierMode(); ok {
 			po.Mode, po.ModeSet = m, true
 		}
-		// the prompter and noter adapt tui and agent onto permit's narrow interfaces,
-		// note injection steers the running turn without stopping it. Hold runs the
-		// typing gate's dialog hold, so an approval dialog never steals a draft's focus.
-		po.Prompter = promptAdapter{ui: ui, hold: gate.holdDialog, path: command.NewPathCompleter(idx)}
-		po.Noter = func(note string) {
-			// system context, not a user prompt, echoed where it lands
-			ag.Steer(agent.Input{Text: note, Echo: note, Injected: true})
-		}
-		// the full diff is already committed above the dialog by guardedTool.Execute,
-		// so the subject names it rather than repeating a truncated copy.
-		po.Preview = func(call agent.ToolCall) string {
-			ch, ok := toolsReg.Preview(call)
-			if !ok {
-				return ""
-			}
-			return tui.DiffSummary(ch.Path, ch.Before, ch.After)
+		// the ask-a-person paths install as one unit: dialogs open through the
+		// prompt adapter, note injection steers the running turn without stopping
+		// it, and Hold runs the typing gate's dialog hold so an approval dialog
+		// never steals a draft's focus.
+		po.Dialogs = &permit.Dialogs{
+			Prompter: promptAdapter{ui: ui, hold: gate.holdDialog, path: command.NewPathCompleter(idx)},
+			Noter: func(note string) {
+				// system context, not a user prompt, echoed where it lands
+				ag.Steer(agent.Input{Text: note, Echo: note, Injected: true})
+			},
+			// the full diff is already committed above the dialog by guardedTool.Execute,
+			// so the subject names it rather than repeating a truncated copy.
+			Preview: func(call agent.ToolCall) string {
+				ch, ok := toolsReg.Preview(call)
+				if !ok {
+					return ""
+				}
+				return tui.DiffSummary(ch.Path, ch.Before, ch.After)
+			},
 		}
 		bd := barrierOptions{
 			reg:         toolsReg,

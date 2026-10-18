@@ -38,7 +38,7 @@ func TestUIDividerCommitsBand(t *testing.T) {
 	t.Parallel()
 
 	var buf strings.Builder
-	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), render: &plainRenderer{out: &buf}, mode: ModePlain}
+	u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), render: &plainRenderer{out: &buf}, mode: ModePlain})
 	u.Divider()
 	assert.Equal(t, strings.Repeat(ruleChar, max(defaultWidth-1, 1))+"\n", buf.String())
 }

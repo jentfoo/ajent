@@ -37,9 +37,9 @@ func TestMeasureOriginStampsThinking(t *testing.T) {
 	}
 
 	stamped := tokensFor(branch, session.CompactionData{}, model, llm.RetainAll, 0, resolve)
-	nilr := tokensFor(branch, session.CompactionData{}, model, llm.RetainAll, 1, nil)
+	unstamped := tokensFor(branch, session.CompactionData{}, model, llm.RetainAll, 1, noResolve)
 
-	assert.Greater(t, stamped, nilr)
+	assert.Greater(t, stamped, unstamped)
 
 	// the resolver stamps each assistant message with its producing origin. A
 	// measurement that ran without it would see every one as foreign.

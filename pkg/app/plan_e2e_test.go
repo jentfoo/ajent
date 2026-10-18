@@ -207,7 +207,17 @@ func (h *planHarness) host() plan.Host {
 		Messages: func() []llm.Message { return st.Messages },
 		SetInput: func(s string) { h.editor = append(h.editor, s) },
 		Notify:   func(msg string, _ agent.Level) { h.notices = append(h.notices, msg) },
-		Git:      func(context.Context) (string, string) { return " M main.go", " main.go | 2 +-" },
+		Ask: func(ctx context.Context, q string, opts []string) (int, error) {
+			options := make([]tui.Option, len(opts))
+			for i, o := range opts {
+				options[i] = tui.Option{Label: o}
+			}
+			return ui.SelectContext(ctx, q, options)
+		},
+		Status: func(text, short string) {
+			ui.SetStatusSegment(segment(segPlan, text, short))
+		},
+		Git: func(context.Context) (string, string) { return " M main.go", " main.go | 2 +-" },
 	}
 }
 

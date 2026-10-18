@@ -122,7 +122,7 @@ func BenchmarkStreamingRows(b *testing.B) {
 	for _, size := range []int{1 << 10, 1 << 12, 1 << 14, 1 << 18} {
 		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			src := strings.Repeat(chunk, size/len(chunk)+1)
-			u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: src}
+			u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: src})
 			b.ResetTimer()
 			for b.Loop() {
 				u.streamOK = false // a delta landed; the memo no longer matches

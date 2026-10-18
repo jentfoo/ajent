@@ -59,7 +59,10 @@ func TestBridge(t *testing.T) {
 		t.Cleanup(func() { _ = c.Close() })
 		defs, err := c.Tools(t.Context())
 		require.NoError(t, err)
-		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // 1ns, instantly exceeded
+		b := Bridge("fake", defs[0], c, BridgeOptions{
+			Timeout: 1, // 1ns, instantly exceeded
+			Diag:    func(string) {},
+		})
 
 		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err) // transport failure is a result, not a Go error
@@ -93,7 +96,10 @@ func TestBridge(t *testing.T) {
 		defs, err := c.Tools(t.Context())
 		require.NoError(t, err)
 
-		b := Bridge("fake", defs[0], c, BridgeOptions{Timeout: 1}) // nil Diag must still yield the error result
+		b := Bridge("fake", defs[0], c, BridgeOptions{
+			Timeout: 1, // 1ns, instantly exceeded
+			Diag:    func(string) {},
+		})
 		res, err := b.Execute(t.Context(), agent.ToolCall{ID: "x"}, agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err) // transport failure is a result, not a Go error
 		assert.True(t, res.IsError)

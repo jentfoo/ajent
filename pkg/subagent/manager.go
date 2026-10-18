@@ -27,19 +27,19 @@ const (
 
 // Options configures a sub-agent Manager. The func-typed fields are supplied
 // at wiring time, so this package never imports pkg/tui or pkg/tools. Model,
-// Reasoning, Parent, Notice and Deliver are required; Tools, Activity and
+// Reasoning, Parent, Notice, Deliver and Tools are required; Activity and
 // Status are optional.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
 	Model               func() llm.Model           // configured child model, else the session's
 	Reasoning           func() llm.ReasoningConfig // inherited from the parent
 	Parent              func() *tokens.Accounting  // parent ledger, one child per job
-	Tools               ToolSource                 // nil disables a child's tool set entirely
+	Tools               ToolSource                 // parent registry view a child's read-only set filters
 	Env                 agent.Environment
 	ProjectInstructions []agent.ProjectInstruction
 
 	// Root seeds the manager's context root: every job derives from it and Close
-	// cancels it, so process shutdown reaches jobs directly. nil means background.
+	// cancels it, so process shutdown reaches jobs directly.
 	Root context.Context
 
 	// Activity publishes one keyed row, removed by empty text. rank is the
@@ -87,17 +87,13 @@ func New(opts Options) *Manager {
 	if opts.MaxConcurrent <= 0 {
 		opts.MaxConcurrent = defaultMaxConcurrent
 	}
-	root := opts.Root
-	if root == nil {
-		root = context.Background()
-	}
 	m := &Manager{
 		opts:      opts,
 		jobs:      map[string]*job{},
 		reserved:  map[string]int{},
 		closeWait: defaultCloseWait,
 	}
-	m.ctx, m.cancel = context.WithCancel(root)
+	m.ctx, m.cancel = context.WithCancel(opts.Root)
 	return m
 }
 

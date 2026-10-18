@@ -72,19 +72,19 @@ methods on `Registry`:
   runs the batch serially and approval dialogs open in submission order.
 ### Guards (`guard.go`, `asker.go`)
 
-A guard decides a call (allow, deny or ask) and an optional registered asker
-turns any `Ask` verdict into a final allow/deny. A user's own staged shell line
+A guard decides a call (allow, deny or ask) and an installed asker turns any
+`Ask` verdict into a final allow/deny. A user's own staged shell line
 is marked on the context so it stays exempt from every permission mode.
+The gate installs as one unit (`InstallGate`: guards plus their asker), so a
+guard never exists without something to resolve its asks.
 
 Guards run in registration order before a tool executes, and first non-allow wins.
 Core registers none by default. The agent runs unguarded unless configured with
 a guard. A denial becomes an error result carrying the reason, and nothing
 touches disk.
 
-`Ask` consults the registered asker (set via `SetAsker`) when one exists. The
-asker turns it into a final allow or deny, and returning `Ask` again is treated
-as a denial. With no asker registered an `Ask` still refuses. Nothing changes
-for callers that do not opt in.
+`Ask` consults the installed asker. The asker turns it into a final allow or
+deny, and returning `Ask` again is treated as a denial.
 
 ### Rendering a change before it runs
 

@@ -19,10 +19,12 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
-// wired fills the wiring-time callbacks production always supplies, mirroring
-// the semantics the nil branches used to provide. A test overrides only what
-// it exercises on the returned struct.
-func wired(base Options) Options {
+// wired fills the wiring-time inputs production always supplies: callbacks,
+// the parent tool source and a job root tied to tb's lifetime. A test overrides
+// only what it exercises on the returned struct.
+func wired(tb testing.TB, base Options) Options {
+	tb.Helper()
+
 	if base.Model == nil {
 		base.Model = func() llm.Model { return llm.Model{} }
 	}
@@ -38,6 +40,12 @@ func wired(base Options) Options {
 	if base.Deliver == nil {
 		base.Deliver = func(agent.Input) bool { return false }
 	}
+	if base.Tools == nil {
+		base.Tools = &fakeSource{}
+	}
+	if base.Root == nil {
+		base.Root = tb.Context()
+	}
 	return base
 }
 
@@ -48,7 +56,7 @@ func TestJob(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{
 			{Events: summaryTurn("found it at pkg/a.go:12", llm.Usage{Input: 100, Output: 20})},
 		})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Model:    func() llm.Model { return llm.Model{ID: "child", ContextWindow: 8000} },
 			Tools: &fakeSource{tools: []agent.Tool{
@@ -66,7 +74,7 @@ func TestJob(t *testing.T) {
 
 	t.Run("errors", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{{Err: errors.New("provider exploded")}})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("boom", "", "")
@@ -77,7 +85,7 @@ func TestJob(t *testing.T) {
 	})
 
 	t.Run("aborted_by_stop", func(t *testing.T) {
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
 
 		id := m.start("long", "", "")
@@ -95,7 +103,7 @@ func TestCompletionNotification(t *testing.T) {
 	t.Run("notifies_at_completion_steers_at_boundary", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 		}))
@@ -118,7 +126,7 @@ func TestCompletionNotification(t *testing.T) {
 	t.Run("suppressed_when_polling", func(t *testing.T) {
 		c := newCapture()
 		g := &gatedProvider{} // completion held until the poller is registered
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 		}))
@@ -156,7 +164,7 @@ func TestCompletionNotification(t *testing.T) {
 	t.Run("deliver_idle_leaves_pending_and_flush_reoffers", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s1", llm.Usage{})}})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Deliver: func(in agent.Input) bool { // parent idle, ids stay pending
 				c.mu.Lock()
@@ -187,7 +195,7 @@ func TestCompletionNotification(t *testing.T) {
 		var mu sync.Mutex // offer runs from both the spawn completion and this test
 		var delivered []agent.Input
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("one", llm.Usage{})}})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Deliver: func(in agent.Input) bool {
 				mu.Lock()
@@ -215,7 +223,7 @@ func TestCompletionNotification(t *testing.T) {
 
 	t.Run("idle_completion_never_starts_turn", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Deliver:  func(in agent.Input) bool { return false }, // parent idle
 		}))
@@ -236,7 +244,7 @@ func TestCompletionBatching(t *testing.T) {
 	t.Run("boundary_merges_batch", func(t *testing.T) {
 		c := newCapture()
 		g := &gatedProvider{}
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 		}))
@@ -267,7 +275,7 @@ func TestCompletionBatching(t *testing.T) {
 			{Events: summaryTurn("one", llm.Usage{})},
 			{Events: summaryTurn("two", llm.Usage{})},
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id1 := m.start("a", "", "")
@@ -294,7 +302,7 @@ func TestCompletionBatching(t *testing.T) {
 			{Events: summaryTurn("one", llm.Usage{})},
 			{Events: summaryTurn("two", llm.Usage{})},
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		ids := []string{m.start("a", "", ""), m.start("b", "", "")}
@@ -311,7 +319,7 @@ func TestCompletionBatching(t *testing.T) {
 	t.Run("interrupt_reoffers_dropped_batch", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Deliver: func(in agent.Input) bool {
 				c.mu.Lock()
@@ -344,7 +352,7 @@ func TestCompletionBatching(t *testing.T) {
 	t.Run("poll_clears_notice_batch", func(t *testing.T) {
 		c := newCapture()
 		g := &gatedProvider{}
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Notice:   func(s string) { c.mu.Lock(); c.notices = append(c.notices, s); c.mu.Unlock() },
 		}))
@@ -368,7 +376,7 @@ func TestCompletionBatching(t *testing.T) {
 	// boundary: take skips per-id marks, so unrelated completions still ride it
 	t.Run("stranded_mark_never_stalls_boundary", func(t *testing.T) {
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{})}})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		m.mu.Lock()
@@ -392,7 +400,7 @@ func TestPollTimeoutThenComplete(t *testing.T) {
 	t.Parallel()
 
 	d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:    func(llm.Model) (llm.Provider, error) { return d, nil },
 		PollTimeout: 30 * time.Millisecond,
 	}))
@@ -422,7 +430,7 @@ func TestReserve(t *testing.T) {
 	t.Parallel()
 
 	t.Run("claims_in_batch_order", func(t *testing.T) {
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{
@@ -435,7 +443,7 @@ func TestReserve(t *testing.T) {
 	})
 
 	t.Run("ignores_other_tools", func(t *testing.T) {
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{
@@ -446,7 +454,7 @@ func TestReserve(t *testing.T) {
 
 	// a host-driven start, or a call id the batch never named, still gets a number
 	t.Run("unreserved_start_takes_next", func(t *testing.T) {
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}})
@@ -458,7 +466,7 @@ func TestReserve(t *testing.T) {
 	// an interrupted turn leaves reservations nothing will claim, the next batch
 	// dropping them and their numbers simply skipped
 	t.Run("new_batch_supersedes", func(t *testing.T) {
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
 
 		m.Reserve([]agent.ToolCall{{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}})
@@ -471,7 +479,7 @@ func TestReserve(t *testing.T) {
 func TestPollBatchDetection(t *testing.T) {
 	t.Parallel()
 
-	m := New(wired(Options{}))
+	m := New(wired(t, Options{}))
 	t.Cleanup(m.Close)
 
 	m.enterPoll()
@@ -493,7 +501,7 @@ func TestPollPrefersResultOverTimeout(t *testing.T) {
 	t.Parallel()
 
 	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("done in time", llm.Usage{})}})
-	m := New(wired(Options{Provider: p, PollTimeout: time.Nanosecond})) // the timer is always ready
+	m := New(wired(t, Options{Provider: p, PollTimeout: time.Nanosecond})) // the timer is always ready
 	t.Cleanup(m.Close)
 
 	id := m.start("x", "", "")
@@ -514,7 +522,7 @@ func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
 	entered := make(chan struct{}) // terminal Activity clear reached: status done, channel not yet closed
 	var enteredOnce sync.Once
 	unblock := make(chan struct{})
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &delayedProvider{release: release, turn: summaryTurn("done in time", llm.Usage{})}, nil
 		},
@@ -545,7 +553,7 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 
 	c := newCapture()
 	release := make(chan struct{})
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &delayedProvider{release: release, turn: summaryTurn("final", llm.Usage{})}, nil
 		},
@@ -590,7 +598,7 @@ func TestEnqueueSerializesNotices(t *testing.T) {
 	held := false     // the first notice's publish is paused mid-flight
 	release := make(chan struct{})
 	var unblock sync.Once
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 		Notice: func(s string) {
 			if strings.Contains(s, "sub-1") && !strings.Contains(s, "sub-2") {
@@ -646,7 +654,7 @@ func TestOnCompleteIgnoresRunningJob(t *testing.T) {
 	t.Parallel()
 
 	c := newCapture()
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 		Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
 	}))
@@ -666,7 +674,7 @@ func TestConcurrencyBoundedBySemaphore(t *testing.T) {
 
 	const total, max = 8, 4
 	g := &gatedProvider{}
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		MaxConcurrent: max,
 	}))
@@ -736,7 +744,7 @@ func stubJob(m *Manager, num int) *job {
 func TestDispatchGrantsInJobOrder(t *testing.T) {
 	t.Parallel()
 
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 		MaxConcurrent: 2,
 	}))
@@ -779,7 +787,7 @@ func TestActivationFollowsJobOrder(t *testing.T) {
 
 	// one slot and three queued jobs, the drain must go sub-1, sub-2, sub-3
 	g := &gateProvider{}
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		MaxConcurrent: 1,
 	}))
@@ -811,7 +819,7 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 
 	b := &blockingProvider{}
 	c := newCapture()
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return b, nil },
 		Activity: c.recordRow,
 	}))
@@ -834,7 +842,7 @@ func TestActivityRow(t *testing.T) {
 	t.Run("start_publishes", func(t *testing.T) {
 		g := &gatedProvider{}
 		c := newCapture()
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Activity: c.recordRow,
 		}))
@@ -864,7 +872,7 @@ func TestActivityRow(t *testing.T) {
 			{Events: summaryTurn("final", llm.Usage{})},
 		})
 		c := newCapture()
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Tools: &fakeSource{tools: []agent.Tool{&fakeTool{name: "read", result: "ok"}},
 				readOnly: map[string]bool{"read": true}},
@@ -900,7 +908,7 @@ func TestActivityRow(t *testing.T) {
 	t.Run("queued_cancelled_clears", func(t *testing.T) {
 		g := &blockingProvider{}
 		c := newCapture()
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return g, nil },
 			Activity: c.recordRow,
 		}))
@@ -924,7 +932,7 @@ func TestStatusSegmentAndList(t *testing.T) {
 	g := &gatedProvider{}
 	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
 	var statuses []string
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		MaxConcurrent: 2,
 		Status: func(text, short string) {
@@ -963,7 +971,7 @@ func TestStatusAgeIgnoresFinishedJobs(t *testing.T) {
 	// age must never read as if it were still live in a fresh fan-out's note
 	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
 	var last string
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 		Status: func(text, _ string) {
 			if text == "" {
@@ -1007,7 +1015,7 @@ func TestStatusPublishesOnActivation(t *testing.T) {
 	g := &gatedProvider{}
 	var mu sync.Mutex // Status runs from concurrent job goroutines
 	var last string
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		MaxConcurrent: 4,
 		Status: func(text, _ string) {
@@ -1030,7 +1038,7 @@ func TestStatusPublishesOnActivation(t *testing.T) {
 func TestListOrdersByJobNumber(t *testing.T) {
 	t.Parallel()
 
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 		MaxConcurrent: 2,
 	}))
@@ -1055,7 +1063,7 @@ func TestClose(t *testing.T) {
 	provider := func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }
 
 	t.Run("cancels_jobs_immediately", func(t *testing.T) {
-		m := New(wired(Options{Provider: provider}))
+		m := New(wired(t, Options{Provider: provider}))
 		id := m.start("long", "", "")
 		j, ok := m.lookup(id)
 		require.True(t, ok)
@@ -1071,7 +1079,7 @@ func TestClose(t *testing.T) {
 	// a root seeded by the host cascades into jobs without waiting on Close
 	t.Run("root_cancel_reaches_jobs", func(t *testing.T) {
 		root, stop := context.WithCancel(context.Background())
-		m := New(wired(Options{Provider: provider, Root: root}))
+		m := New(wired(t, Options{Provider: provider, Root: root}))
 		t.Cleanup(m.Close)
 		id := m.start("long", "", "")
 		j, ok := m.lookup(id)
@@ -1087,7 +1095,7 @@ func TestClose(t *testing.T) {
 
 	// a start landing after shutdown aborts in place: no goroutine, no waitgroup Add
 	t.Run("start_after_close_aborts", func(t *testing.T) {
-		m := New(wired(Options{Provider: provider}))
+		m := New(wired(t, Options{Provider: provider}))
 		m.Close()
 
 		id := m.start("late", "", "")
@@ -1100,7 +1108,7 @@ func TestClose(t *testing.T) {
 	// so no job goroutine can appear once the host root is dead
 	t.Run("start_after_root_cancel_aborts", func(t *testing.T) {
 		root, stop := context.WithCancel(context.Background())
-		m := New(wired(Options{Provider: provider, Root: root}))
+		m := New(wired(t, Options{Provider: provider, Root: root}))
 		t.Cleanup(m.Close)
 		stop()
 
@@ -1117,7 +1125,7 @@ func TestClose(t *testing.T) {
 
 	// start's Add-under-lock against Close's Wait; -race reports unsynchronized use
 	t.Run("start_racing_close", func(t *testing.T) {
-		m := New(wired(Options{Provider: provider}))
+		m := New(wired(t, Options{Provider: provider}))
 		closed := make(chan struct{})
 		go func() {
 			defer close(closed)
@@ -1135,7 +1143,7 @@ func TestClose(t *testing.T) {
 		p := &stuckProvider{entered: make(chan struct{}), release: make(chan struct{})}
 		var mu sync.Mutex // publishes land from the straggler's goroutine
 		var rows, statuses []string
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 			Activity: func(key, text string, rank int) {
 				mu.Lock()
@@ -1181,7 +1189,7 @@ func TestClose(t *testing.T) {
 		var unblock sync.Once
 		var mu sync.Mutex // the Status callback runs on another goroutine
 		var published []string
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 			Status: func(text, _ string) {
 				if text != "" {
@@ -1224,7 +1232,7 @@ func TestClose(t *testing.T) {
 	// a done completion landing after the clears fires no keyed notice either
 	t.Run("completion_notice_suppressed", func(t *testing.T) {
 		c := newCapture()
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
 			Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
 		}))
@@ -1240,7 +1248,7 @@ func TestStopAllCancelsEverything(t *testing.T) {
 	t.Parallel()
 
 	b := &blockingProvider{}
-	m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
+	m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
 	t.Cleanup(m.Close)
 	var ids []string
 	for i := 0; i < 3; i++ {
@@ -1260,7 +1268,7 @@ func TestChildSpendRollsIntoParentLedger(t *testing.T) {
 
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
 	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{Input: 200, Output: 40})}})
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: p,
 		Parent:   func() *tokens.Accounting { return parent },
 	}))
@@ -1285,7 +1293,7 @@ func TestParentContextUnchangedByChild(t *testing.T) {
 
 	parent := tokens.New(llm.Model{ID: "parent", ContextWindow: 8000})
 	g := &gatedProvider{}
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
 		Parent:        func() *tokens.Accounting { return parent },
 		MaxConcurrent: 1,

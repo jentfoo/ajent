@@ -424,10 +424,10 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 		r.Register(&editTool{policy: e.policy, tracker: e.tracker}, true)
 		dc := &diffCatcher{}
 		var diffsAtGuard int
-		r.AddGuard(func(context.Context, agent.ToolCall) Decision {
+		r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision {
 			diffsAtGuard = len(dc.calls)
 			return Allow(agent.ToolCall{})
-		})
+		}}, gateAsk)
 		tool, ok := r.Get("edit")
 		require.True(t, ok)
 
@@ -448,7 +448,7 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 
 		r := New()
 		r.Register(&editTool{policy: e.policy, tracker: e.tracker}, true)
-		r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Deny("nope") })
+		r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision { return Deny("nope") }}, gateAsk)
 		tool, ok := r.Get("edit")
 		require.True(t, ok)
 
@@ -471,10 +471,9 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 
 		r := New()
 		r.Register(&editTool{policy: e.policy, tracker: e.tracker}, true)
-		r.AddGuard(func(context.Context, agent.ToolCall) Decision {
+		r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision {
 			return Decision{Action: ActionAsk, Reason: "approval"}
-		})
-		r.SetAsker(func(context.Context, agent.ToolCall, Decision) Decision {
+		}}, func(context.Context, agent.ToolCall, Decision) Decision {
 			return Decision{Action: ActionAsk}
 		})
 		tool, ok := r.Get("edit")

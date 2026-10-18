@@ -16,6 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// nopStarted absorbs spawn reports for tests that do not track them.
+func nopStarted(string) {}
+
 // stubTool is a scriptable stand-in for agent_start and agent_poll, recording
 // every call so a test can assert what the survey asked for.
 type stubTool struct {

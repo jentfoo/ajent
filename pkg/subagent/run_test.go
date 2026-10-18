@@ -25,7 +25,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: summaryTurn("the answer is 42", llm.Usage{})},
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -41,7 +41,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // no text, triggers a nudge
 			{Events: thinkingOnlyTurn()}, // still nothing usable after the one nudge
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -58,7 +58,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()},  // no text, triggers a nudge
 			{Events: thinkingTurn(think)}, // still no text, but sizable reasoning
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -86,7 +86,7 @@ func TestEmptySummary(t *testing.T) {
 			{Events: thinkingOnlyTurn()}, // the turn after the tool call is empty
 			{Events: thinkingOnlyTurn()}, // nudge response still short and empty
 		})
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider: p,
 			Tools: &fakeSource{tools: []agent.Tool{&fakeTool{name: "read", result: "ok"}},
 				readOnly: map[string]bool{"read": true}},
@@ -110,7 +110,7 @@ func TestTruncatedSummary(t *testing.T) {
 			{Events: cappedTextTurn("found pkg/a.go so far")}, // stop reason max_tokens
 			{Events: summaryTurn("the answer is 42", llm.Usage{})},
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -127,7 +127,7 @@ func TestTruncatedSummary(t *testing.T) {
 			{Events: cappedTextTurn("partial")},
 			{Events: cappedTextTurn("still partial")}, // the wrap-up turn hits the cap too
 		})
-		m := New(wired(Options{Provider: p}))
+		m := New(wired(t, Options{Provider: p}))
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -154,7 +154,7 @@ func TestTruncatedSummary(t *testing.T) {
 			{Events: toolTurn},
 			{Events: summaryTurn("done investigating", llm.Usage{})},
 		})
-		m := New(wired(Options{Provider: p, MaxSteps: 1})) // the child's own turn cap
+		m := New(wired(t, Options{Provider: p, MaxSteps: 1})) // the child's own turn cap
 		t.Cleanup(m.Close)
 
 		id := m.start("q", "", "")
@@ -202,7 +202,7 @@ func TestRunAbortedContextIsNotACompletion(t *testing.T) {
 	t.Parallel()
 
 	b := &blockingProvider{}
-	m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
+	m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
 	t.Cleanup(m.Close)
 
 	id := m.start("q", "", "")
@@ -218,7 +218,7 @@ func TestRunInheritsModel(t *testing.T) {
 	child := llm.Model{Provider: "test", ID: "child-model", ContextWindow: 8000}
 	_, sp := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s", llm.Usage{Input: 100, Output: 10})}})
 	p := func(llm.Model) (llm.Provider, error) { return sp, nil }
-	m := New(wired(Options{
+	m := New(wired(t, Options{
 		Provider: p,
 		Model:    func() llm.Model { return child },
 		Parent:   func() *tokens.Accounting { return tokens.New(llm.Model{ContextWindow: 200000}) },

@@ -13,6 +13,9 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
+// gateAsk always allows, standing in for the asker every installed gate carries.
+func gateAsk(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }
+
 func TestGuardVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -34,14 +37,6 @@ func TestGuardVerdict(t *testing.T) {
 			guard:   func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) },
 			wantRun: true,
 		},
-		{
-			name: "ask_without_asker_denies",
-			guard: func(context.Context, agent.ToolCall) Decision {
-				return Decision{Action: ActionAsk, Reason: "needs approval"}
-			},
-			wantErr: true,
-			reason:  "needs approval",
-		},
 	}
 
 	for _, tc := range cases {
@@ -49,7 +44,7 @@ func TestGuardVerdict(t *testing.T) {
 			r := New()
 			inner := &recordingTool{}
 			r.Register(inner, true)
-			r.AddGuard(tc.guard)
+			r.InstallGate([]Guard{tc.guard}, gateAsk)
 
 			tool, ok := r.Get("bash")
 			require.True(t, ok)
@@ -74,8 +69,10 @@ func TestGuardChainFirstNonAllowWins(t *testing.T) {
 	r := New()
 	inner := &recordingTool{}
 	r.Register(inner, true)
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) })
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Deny("second guard") })
+	r.InstallGate([]Guard{
+		func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) },
+		func(context.Context, agent.ToolCall) Decision { return Deny("second guard") },
+	}, gateAsk)
 
 	tool, ok := r.Get("bash")
 	require.True(t, ok)
@@ -94,7 +91,7 @@ func TestGuardDeniedCallLeavesFileOnDiskUntouched(t *testing.T) {
 
 	r := New()
 	r.Register(&fakeTool{name: "write"}, true)
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Deny("no writes") })
+	r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision { return Deny("no writes") }}, gateAsk)
 
 	tool, ok := r.Get("write")
 	require.True(t, ok)
@@ -120,12 +117,11 @@ func TestMustSerialize(t *testing.T) {
 	cases := []struct {
 		name   string
 		guards []Guard
-		asker  Asker // nil when not set
+		asker  Asker
 		want   bool
 	}{
 		{"no guards", nil, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
 		{"allow only with asker", []Guard{allow}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
-		{"ask without asker refuses not prompts", []Guard{ask}, nil, false},
 		{"ask with asker serializes", []Guard{ask}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, true},
 		{"deny resolves without prompting", []Guard{deny}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
 	}
@@ -133,12 +129,7 @@ func TestMustSerialize(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			r := New()
 			r.Register(&recordingTool{}, true)
-			for _, g := range c.guards {
-				r.AddGuard(g)
-			}
-			if c.asker != nil {
-				r.SetAsker(c.asker)
-			}
+			r.InstallGate(c.guards, c.asker)
 			assert.Equal(t, c.want, r.MustSerialize([]agent.ToolCall{callWith(json.RawMessage(`{}`))}))
 		})
 	}
@@ -149,14 +140,18 @@ func TestMustSerializeAnyPromptingCall(t *testing.T) {
 
 	r := New()
 	r.Register(&recordingTool{}, true)
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) })
-	r.SetAsker(func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) })
+	r.InstallGate([]Guard{
+		func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) },
+	}, gateAsk)
 
 	// a call whose guard asks must serialize the whole batch
 	prompting := []agent.ToolCall{callWith(json.RawMessage(`{}`)), callWith(json.RawMessage(`{}`))}
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision {
-		return Decision{Action: ActionAsk, Reason: "needs approval"}
-	})
+	r.InstallGate([]Guard{
+		func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) },
+		func(context.Context, agent.ToolCall) Decision {
+			return Decision{Action: ActionAsk, Reason: "needs approval"}
+		},
+	}, gateAsk)
 	assert.True(t, r.MustSerialize(prompting))
 }
 
@@ -173,9 +168,10 @@ func TestMustSerializeDenyThenAsk(t *testing.T) {
 	t.Run("denied_call_resolves_alone", func(t *testing.T) {
 		r := New()
 		r.Register(&recordingTool{}, true)
-		r.AddGuard(func(context.Context, agent.ToolCall) Decision { return Deny("refused") })
-		r.AddGuard(ask)
-		r.SetAsker(asker)
+		r.InstallGate([]Guard{
+			func(context.Context, agent.ToolCall) Decision { return Deny("refused") },
+			ask,
+		}, asker)
 		assert.False(t, r.MustSerialize([]agent.ToolCall{callWith(json.RawMessage(`{}`))}))
 	})
 
@@ -184,14 +180,15 @@ func TestMustSerializeDenyThenAsk(t *testing.T) {
 	t.Run("later_ask_serializes_batch", func(t *testing.T) {
 		r := New()
 		r.Register(&recordingTool{}, true)
-		r.AddGuard(func(_ context.Context, c agent.ToolCall) Decision { // deny only the first call
-			if string(c.Input) == `"first"` {
-				return Deny("refused")
-			}
-			return Allow(callWith(nil))
-		})
-		r.AddGuard(ask)
-		r.SetAsker(asker)
+		r.InstallGate([]Guard{
+			func(_ context.Context, c agent.ToolCall) Decision { // deny only the first call
+				if string(c.Input) == `"first"` {
+					return Deny("refused")
+				}
+				return Allow(callWith(nil))
+			},
+			ask,
+		}, asker)
 
 		calls := []agent.ToolCall{
 			callWith(json.RawMessage(`"first"`)),

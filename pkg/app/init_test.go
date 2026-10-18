@@ -34,7 +34,7 @@ func TestInitCommands(t *testing.T) {
 		h := newInitHarness(t)
 		cmds := command.NewRegistry()
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-		console := &uiConsole{reg: reg, st: &agent.State{}, tools: tools.New()}
+		console := &uiConsole{reg: reg, st: &agent.State{Tokens: tokens.New(llm.Model{})}, tools: tools.New()}
 
 		baseline := command.NewRegistry()
 		command.RegisterBuiltins(baseline, console)
@@ -185,7 +185,7 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("late_spawn_stopped_after_abort", func(t *testing.T) {
 		h := newInitHarness(t)
-		mgr := newHoldManager()
+		mgr := newHoldManager(t)
 		t.Cleanup(mgr.Close)
 
 		// the survey's one spawn registers with the manager, then holds its result
@@ -340,8 +340,12 @@ func (holdProvider) Stream(ctx context.Context, _ llm.Request) (llm.Stream, erro
 }
 
 // newHoldManager returns a sub-agent manager whose children run until stopped.
-func newHoldManager() *subagent.Manager {
+func newHoldManager(t *testing.T) *subagent.Manager {
+	t.Helper()
+
 	return subagent.New(subagent.Options{
+		Root:      t.Context(),
+		Tools:     emptyToolSource{},
 		Provider:  func(llm.Model) (llm.Provider, error) { return holdProvider{}, nil },
 		Model:     func() llm.Model { return llm.Model{} },
 		Reasoning: func() llm.ReasoningConfig { return llm.ReasoningConfig{} },

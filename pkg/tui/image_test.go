@@ -172,12 +172,12 @@ func TestImageLine(t *testing.T) {
 	t.Parallel()
 
 	newUI := func(protocol ImageProtocol) *UI {
-		return &UI{
+		return withTimer(&UI{
 			mode:   ModeInline,
 			images: protocol,
 			imgIDs: make(map[uint32]int),
 			render: newTestInlineAt(io.Discard, 120, 60),
-		}
+		})
 	}
 
 	t.Run("kitty fits the viewport", func(t *testing.T) {
@@ -256,7 +256,7 @@ func TestCellSizeReport(t *testing.T) {
 		assert.Equal(t, 10, k.col)
 		assert.Equal(t, 10, n)
 
-		u := &UI{}
+		u := withTimer(&UI{})
 		u.setCellSize(k.col, k.row)
 		assert.Equal(t, 2, u.imageRowsFor(33)) // ceil(33/20)
 		assert.Equal(t, 4, u.imageColsFor(33)) // ceil(33/10)
@@ -269,7 +269,7 @@ func TestCellSizeReport(t *testing.T) {
 	})
 
 	t.Run("fallback geometry", func(t *testing.T) {
-		u := &UI{}
+		u := withTimer(&UI{})
 		assert.Equal(t, 1, u.imageRowsFor(0))
 		assert.Equal(t, 1, u.imageColsFor(5)) // below one cell
 	})

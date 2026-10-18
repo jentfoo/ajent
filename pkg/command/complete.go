@@ -16,7 +16,7 @@ type Completer struct {
 }
 
 // NewCompleter returns a completer sourcing commands from r, argument
-// candidates from c, and paths from idx (nil disables path completion).
+// candidates from c, and paths from idx.
 func NewCompleter(r *Registry, c Console, idx *refs.Index) *Completer {
 	return &Completer{commands: r, console: c, paths: idx}
 }
@@ -44,7 +44,7 @@ func (c pathCompleter) Complete(text string, pos int) (int, []tui.Completion) {
 // a cursor off any @ token offers nothing.
 func atComplete(idx *refs.Index, cells []string, pos int) (int, []tui.Completion) {
 	start := tokenStart(cells, pos, 0)
-	if idx == nil || start >= len(cells) || cells[start] != "@" || start == pos {
+	if start >= len(cells) || cells[start] != "@" || start == pos {
 		return pos, nil
 	}
 	return offer(start+1, pos, idx.Candidates(strings.Join(cells[start+1:pos], ""), nil))
@@ -96,7 +96,7 @@ func (c *Completer) classify(text string, pos int) completeCtx {
 	switch {
 	case first == "/" && ctx.start == 0:
 		ctx.kind = completeCommand
-	case first == "@" && c.paths != nil && ctx.start < ctx.pos:
+	case first == "@" && ctx.start < ctx.pos:
 		ctx.kind = completePath
 	default:
 		// a /command with args before the cursor

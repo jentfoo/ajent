@@ -2,6 +2,7 @@ package compact
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,11 +15,15 @@ import (
 	"github.com/jentfoo/ajent/pkg/session"
 )
 
+// noResolve resolves nothing: these branches record no model key, so the
+// resolver is never consulted and messages stay unstamped.
+var noResolve = func(string) (llm.Model, error) { return llm.Model{}, errors.New("no registry") }
+
 // mustMsgs returns the messages ContextMessages would send for branch under cd.
 func mustMsgs(t *testing.T, branch []session.Entry, cd session.CompactionData) []llm.Message {
 	t.Helper()
 
-	msgs, warns := session.ContextMessages(branch, cd, nil)
+	msgs, warns := session.ContextMessages(branch, cd, noResolve)
 	require.Empty(t, warns)
 	return msgs
 }
@@ -61,14 +66,6 @@ func TestCompact(t *testing.T) {
 		})
 		require.Len(t, msgs, 5) // summary + two call/result pairs
 		assert.Contains(t, textOf(msgs[0]), "the work")
-	})
-
-	t.Run("no_summariser_returns_nil", func(t *testing.T) {
-		branch := toolBranch(t, 8, 400)
-
-		res, err := Compact(t.Context(), branch, model, nil, Options{})
-		require.NoError(t, err)
-		assert.Nil(t, res)
 	})
 
 	t.Run("declines_when_the_band_is_everything", func(t *testing.T) {
@@ -248,8 +245,8 @@ func TestCompactRecompaction(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, res)
 
-		effective := tokensFor(branch, prior, model, llm.RetainNone, 0, nil)
-		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, nil)
+		effective := tokensFor(branch, prior, model, llm.RetainNone, 0, noResolve)
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, noResolve)
 		assert.Equal(t, effective, res.Before)
 		assert.Less(t, res.Before, raw)
 	})
@@ -300,7 +297,7 @@ func TestCompactRecompaction(t *testing.T) {
 		assert.Contains(t, res.Warnings[0], "invalid prior compaction entry")
 
 		// the zero plan measures the raw branch, never the half-decoded cut
-		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, nil)
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, noResolve)
 		assert.Equal(t, raw, res.Before)
 	})
 

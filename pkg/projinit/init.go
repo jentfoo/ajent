@@ -82,9 +82,6 @@ func (r *Runner) Seed(msgs []llm.Message) {
 // read-only sub-agents, and returns the distillation prompt carrying every call
 // and result the survey produced. It spends no model tokens.
 func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
-	if r.opts.Registry == nil {
-		return agent.Input{}, ErrNoSubAgents
-	}
 	read, rok := r.opts.Registry.Lookup("read")
 	if !rok { // without it the survey cannot see the project at all
 		return agent.Input{}, ErrNoRead
@@ -192,9 +189,7 @@ func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []surveyTa
 		switch {
 		case id != "":
 			ids = append(ids, id)
-			if r.opts.Started != nil {
-				r.opts.Started(id)
-			}
+			r.opts.Started(id)
 		default: // a refused spawn (denied, bad child model) is not a missing tool
 			failed = append(failed, task.label+" ("+resultText(res)+")")
 		}

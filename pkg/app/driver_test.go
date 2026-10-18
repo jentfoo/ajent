@@ -111,9 +111,10 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	}}
 
 	fakeUI := &fakeQueueUI{}
-	q := newSteerQueue(fakeUI, func(int) {}, func() {}, nil, nil)
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fakeUI, func(int) {}, func() {}, waitReady, takeReady)
 
-	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	held := make(chan struct{}, 1)
 	gate := &typingGate{
 		idle:    time.Hour,
@@ -232,8 +233,10 @@ func TestControlLoop(t *testing.T) {
 		controls = make(chan tui.Control, 4)
 		quit = make(chan struct{})
 		cycled = make(chan bool, 4)
-		ag := agent.New(&agent.State{}, agent.Options{})
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag, newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil), command.NewStager(context.Background(), nil, nil), nil,
+		ag := agent.New(&agent.State{Tokens: tokens.New(llm.Model{})}, agent.Options{})
+		stager := command.NewStager(context.Background(), nil, nil)
+		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag,
+			newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady), stager, nil,
 			func() { close(quit) },
 			func(back bool) { cycled <- back })
 		return controls, quit, cycled
@@ -358,7 +361,7 @@ func TestResolveSubAgentModel(t *testing.T) {
 
 	// configured child model resolves through the registry
 	require.NoError(t, set.SetSession("subagent.model", "p/child"))
-	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}}
+	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}, Tokens: tokens.New(llm.Model{Provider: "p", ID: "session"})}
 	got := resolveSubAgentModel(set, reg, st)
 	assert.Equal(t, "child", got.ID) // the configured child model wins
 
@@ -416,9 +419,13 @@ func TestSubagentPollWait(t *testing.T) {
 func TestSubagentSinkTurnEnd(t *testing.T) {
 	t.Parallel()
 
-	newMgr := func() (*subagent.Manager, *atomic.Int32) {
+	newMgr := func(t *testing.T) (*subagent.Manager, *atomic.Int32) {
+		t.Helper()
+
 		var delivered atomic.Int32 // steers accepted by Deliver, Delivered never fires
 		mgr := subagent.New(subagent.Options{
+			Root:  t.Context(),
+			Tools: emptyToolSource{},
 			Provider: func(llm.Model) (llm.Provider, error) {
 				return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("summary")}}}, nil
 			},
@@ -460,7 +467,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	}
 
 	t.Run("abort_releases_marks", func(t *testing.T) {
-		mgr, delivered := newMgr()
+		mgr, delivered := newMgr(t)
 		id := startTask(t, mgr)
 		settle(t, mgr, id)
 
@@ -482,7 +489,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	})
 
 	t.Run("clean_keeps_marks", func(t *testing.T) {
-		mgr, delivered := newMgr()
+		mgr, delivered := newMgr(t)
 		id := startTask(t, mgr)
 		settle(t, mgr, id)
 
@@ -606,9 +613,8 @@ func buildFakeMCPServer(t *testing.T) string {
 
 func TestGuardRegisteredAgainstRegistry(t *testing.T) {
 	reg := tools.New()
-	b := permit.NewBarrier(func(string) bool { return false }, permit.Options{})
-	reg.AddGuard(b.Guard())
-	reg.SetAsker(b.Asker())
+	b := wiredBarrier(tools.New())
+	reg.InstallGate([]tools.Guard{b.Guard()}, b.Asker())
 
 	tool := &stubTool{name: "write"}
 	reg.RegisterState("builtin", tool, tools.StateEnabled)

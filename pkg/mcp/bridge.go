@@ -18,7 +18,7 @@ const maxCallTimeout = 10 * time.Minute
 type BridgeOptions struct {
 	ReadOnly bool          // from annotations or config globs
 	Timeout  time.Duration // per-call cap, zero uses defaultCallTimeout
-	Diag     func(string)  // call-failure sink into the server's /mcp logs, nil to drop
+	Diag     func(string)  // call-failure sink into the server's /mcp logs
 }
 
 // bridgeTool adapts a remote MCP tool to agent.Tool. Names are namespaced
@@ -93,9 +93,7 @@ func (b *bridgeTool) Execute(ctx context.Context, call agent.ToolCall, out agent
 		// Display carries what history renders, so an errored call still shows a line;
 		// client errors are bare, so the bridge names the server once
 		msg := "mcp " + c.ServerName() + ": " + err.Error()
-		if b.diag != nil { // diag-only: /mcp logs records it, no user-facing notice fires
-			b.diag("call failed: " + err.Error())
-		}
+		b.diag("call failed: " + err.Error())
 		return agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: msg}},
 			Display: msg,

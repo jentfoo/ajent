@@ -69,12 +69,8 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 		Tokens:    ledger,
 	}
 
-	var tools agent.ToolSet
-	src := m.opts.Tools
-	inRepo := src != nil && gitInWorkTree(ctx, m.opts.Env.Cwd)
-	if src != nil {
-		tools = newToolSet(childTools(src, inRepo))
-	}
+	inRepo := gitInWorkTree(ctx, m.opts.Env.Cwd)
+	tools := newToolSet(childTools(m.opts.Tools, inRepo))
 
 	a := agent.New(state, agent.Options{
 		Provider:            m.opts.Provider,

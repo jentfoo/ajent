@@ -10,6 +10,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 func TestForkResumeAcrossBranches(t *testing.T) {
@@ -24,8 +25,9 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	set := &singleSet{tool: &noopTool{}}
 	var mainLive []llm.Message
 	a := agent.New(&agent.State{
-		Model: llm.Model{ID: "test"},
-		Tools: []string{"bash"},
+		Model:  llm.Model{ID: "test"},
+		Tools:  []string{"bash"},
+		Tokens: tokens.New(llm.Model{ID: "test"}),
 	}, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("first reply")}}}, nil

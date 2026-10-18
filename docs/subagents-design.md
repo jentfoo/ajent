@@ -125,8 +125,8 @@ Each job builds a fresh agent:
   verbatim, because a user who dialled it down meant it. Tokens is a fresh child
   ledger (`Accounting.Child()`) whose usage rolls into the parent as **child spend**
   (see accounting below), and the parent's context bar never moves for it.
-- **Tools**: `&toolSet{tools: childTools(src, inRepo)}` when a `ToolSource` is present,
-  else no tools at all. The options carry project instructions plus
+- **Tools**: `&toolSet{tools: childTools(src, inRepo)}` over the wiring-time
+  source. The options carry project instructions plus
   `SystemSnippets: []string{childContract(inRepo)}`, and the session has no recorder
   and no resume.
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it

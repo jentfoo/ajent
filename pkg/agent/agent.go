@@ -34,7 +34,7 @@ type Options struct {
 	ProjectInstructions []ProjectInstruction                  // AGENTS.md content, loaded once at startup
 	SystemSnippets      []string                              // extra system blocks, appended after project instructions
 	SystemPrompt        string                                // replaces the default opening sentence and guidelines when non-empty
-	Transforms          []Transform                           // applied in assembly order, nil entries skipped
+	Transforms          []Transform                           // applied in assembly order
 	OnMessage           []func(MessageInfo)                   // called per appended message, in registration order
 	OnSettled           []func(context.Context)               // agent drained and idle, observers may queue work
 	// OnBoundary, when set, is called on the loop goroutine at each step boundary
@@ -99,12 +99,9 @@ type Agent struct {
 
 // New returns an agent bound to state. Sinks are resolved once into a single
 // fan-out so the loop always emits on one field, events go nowhere with none
-// supplied, and a state without a ledger gets an empty one.
+// supplied.
 func New(state *State, opts Options) *Agent {
 	a := &Agent{state: state, opts: opts, retrySleep: sleepCtx}
-	if state.Tokens == nil {
-		state.Tokens = tokens.New(state.Model)
-	}
 	switch len(opts.Sinks) {
 	case 0:
 		a.sink = NopSink{}

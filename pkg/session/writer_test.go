@@ -82,16 +82,6 @@ func TestWriterParentChainLinear(t *testing.T) {
 	}
 }
 
-func TestWriterDiscardWritesNoFile(t *testing.T) {
-	t.Parallel()
-
-	w := Discard()
-	e, err := w.Append(TypeNotice, NoticeData{Message: "x"})
-	require.NoError(t, err)
-	assert.NotEmpty(t, e.ID)
-	assert.Equal(t, e.ID, w.Head())
-}
-
 func TestWriterConcurrentAppendAtomic(t *testing.T) {
 	t.Parallel()
 
@@ -302,15 +292,6 @@ func TestWriterHeadCursor(t *testing.T) {
 		require.NoError(t, oerr)
 		t.Cleanup(func() { _ = wa2.Close() })
 		assert.Equal(t, a1.ID, wa2.Head())
-	})
-
-	// a discard writer never writes a cursor
-	t.Run("discard_writes_no_head_cursor", func(t *testing.T) {
-		w := Discard()
-		e, err := w.Append(TypeMessage, MessageData{Message: llmText("x")})
-		require.NoError(t, err)
-		w.SetHead(e.ID)
-		assert.False(t, fileExists(headPath(w.path)))
 	})
 }
 

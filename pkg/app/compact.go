@@ -81,11 +81,8 @@ func (c *compactor) endTurn() {
 	c.warned.Store(false)
 }
 
-// compaction returns the live compaction settings, or the built-in defaults.
+// compaction returns the live compaction settings.
 func (c *compactor) compaction() config.Compaction {
-	if c.cfg == nil {
-		return config.Compaction{Auto: true}
-	}
 	return c.cfg()
 }
 

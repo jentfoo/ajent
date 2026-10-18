@@ -33,7 +33,7 @@ func TestUINotify(t *testing.T) {
 			{"error", LevelError, th.Error},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				u := &UI{theme: th}
+				u := withTimer(&UI{theme: th})
 
 				got := u.noticeLine("something", tc.level)
 				assert.Equal(t, tc.style.Wrap(noticeMarker+" "+"something"), got)
@@ -320,7 +320,7 @@ func TestUIPlainInteraction(t *testing.T) {
 		t.Helper()
 
 		v := newVT(80, 12)
-		u := &UI{
+		u := withTimer(&UI{
 			theme:  NewTheme(ColorNone, DefaultPalette()),
 			render: newTestInline(v),
 			mode:   ModePlain,
@@ -328,7 +328,7 @@ func TestUIPlainInteraction(t *testing.T) {
 			inFd:   -1,
 			msgs:   make(chan string, 4),
 			done:   make(chan struct{}),
-		}
+		})
 		go u.readLines()
 		t.Cleanup(u.Close)
 		return u, v

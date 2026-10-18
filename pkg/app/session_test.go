@@ -81,7 +81,7 @@ func TestRewindStateRebuild(t *testing.T) {
 
 	// grow a chain: user "one" -> assistant reply
 	set := singleToolSet{tool: noopRewindTool{}}
-	a := agent.New(&agent.State{Model: llm.Model{ID: "p/m"}, Tools: []string{tools.ToolBash}}, agent.Options{
+	a := agent.New(&agent.State{Model: llm.Model{ID: "p/m"}, Tools: []string{tools.ToolBash}, Tokens: tokens.New(llm.Model{ID: "p/m"})}, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("reply one")}}}, nil
 		},
@@ -208,7 +208,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	r := &sessRec{w: w, rec: session.NewRecorder(w)}
 
 	// grow a chain on model a
-	a := agent.New(&agent.State{Model: llm.Model{ID: "a"}, Tools: []string{tools.ToolBash}}, agent.Options{
+	a := agent.New(&agent.State{Model: llm.Model{ID: "a"}, Tools: []string{tools.ToolBash}, Tokens: tokens.New(llm.Model{ID: "a"})}, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurnRewind("reply one")}}}, nil
 		},
@@ -510,7 +510,7 @@ func TestResumeSyncsActiveModel(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
 
 	assert.Equal(t, "p/b", st.Model.Key())
@@ -566,7 +566,7 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
 
 	// the session override 0.5 survives resume onto a model with no declared one,
@@ -628,7 +628,7 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	toolsReg, terr := builtinTools(set, reg, nil, nil)
 	require.NoError(t, terr)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
 
 	// the recorded frame lands in state, feeding the MCP restore set
@@ -697,7 +697,7 @@ func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	toolsReg, terr := builtinTools(set, reg, nil, nil)
 	require.NoError(t, terr)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
 
 	// the empty frame survives as empty, not nil, feeding every restore path
@@ -1271,7 +1271,7 @@ func TestRebuildWarnsUnreadable(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	require.NoError(t, os.Remove(p))
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
 
@@ -1338,7 +1338,7 @@ func TestNewSessionSeedsSnapshot(t *testing.T) {
 	assert.Equal(t, rec.hint, sessionHint(rec))
 
 	// the startup rebuild consumes the snapshot and restores its messages
-	st := &agent.State{}
+	st := &agent.State{Tokens: tokens.New(llm.Model{})}
 	entries, head, warns := rec.restoreState(set, reg, st, nil)
 	require.Empty(t, warns)
 	assert.Equal(t, snapshot{}, rec.snapshot)
@@ -1383,7 +1383,7 @@ func TestResumeSurfacesSnapshotWarnings(t *testing.T) {
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 
-	st := &agent.State{}
+	st := &agent.State{Tokens: tokens.New(llm.Model{})}
 	_, _, warns := rec.restoreState(set, reg, st, nil)
 	assert.NotEmpty(t, warns, "the open-time parse must carry Read's per-line warnings")
 }
@@ -1428,7 +1428,7 @@ func TestResumeSeesConcurrentAppend(t *testing.T) {
 	// the rebuild must notice the growth and re-read: the returned entries see
 	// the concurrent append, while the restored branch still follows this
 	// writer's head (the last-writer-wins cursor), leaving theirs one rewind away
-	st := &agent.State{}
+	st := &agent.State{Tokens: tokens.New(llm.Model{})}
 	entries, _, warns := rec.restoreState(set, reg, st, nil)
 	require.Empty(t, warns)
 	require.NotEmpty(t, entries)

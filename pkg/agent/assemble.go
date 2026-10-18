@@ -9,9 +9,6 @@ import (
 func assemble(s *State, ts []Transform) []llm.Message {
 	messages := s.Messages
 	for _, t := range ts {
-		if t == nil {
-			continue // nil entries are identity
-		}
 		messages = t(messages)
 	}
 	return messages

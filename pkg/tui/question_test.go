@@ -463,7 +463,7 @@ func TestUIPlainAsk(t *testing.T) {
 		t.Helper()
 
 		v := newVT(80, 12)
-		u := &UI{
+		u := withTimer(&UI{
 			theme:  NewTheme(ColorNone, DefaultPalette()),
 			render: newTestInline(v),
 			mode:   ModePlain,
@@ -471,7 +471,7 @@ func TestUIPlainAsk(t *testing.T) {
 			inFd:   -1,
 			msgs:   make(chan string, 4),
 			done:   make(chan struct{}),
-		}
+		})
 		go u.readLines()
 		t.Cleanup(u.Close)
 		return u, v

@@ -12,12 +12,12 @@ import (
 
 // Options configures one compaction pass over a branch.
 type Options struct {
-	Cwd          string           // canonical path base for superseded read/edit detection
-	Instructions string           // /compact <instructions>, appended to the summary prompt
-	Retain       llm.RetainPolicy // session retention policy, for measurement
-	Base         int              // fixed request overhead (system block + tool schemas), added to every measure
-	Resolve      func(string) (llm.Model, error)
-	MinSteps     int // recent steps kept verbatim however large, 0 uses defaultMinSteps
+	Cwd          string                          // canonical path base for superseded read/edit detection
+	Instructions string                          // /compact <instructions>, appended to the summary prompt
+	Retain       llm.RetainPolicy                // session retention policy, for measurement
+	Base         int                             // fixed request overhead (system block + tool schemas), added to every measure
+	Resolve      func(string) (llm.Model, error) // model-key lookup for origin stamps, always wired
+	MinSteps     int                             // recent steps kept verbatim however large, 0 uses defaultMinSteps
 	// VerbatimTokens caps the band past that floor. 0 uses a tenth of the compaction point.
 	VerbatimTokens int
 }
@@ -42,7 +42,7 @@ type Result struct {
 }
 
 // RunPrompt performs one summarisation model call and returns its assistant text.
-// It is wired by the driver to a real provider stream. Nil disables compaction.
+// It is wired by the driver to a real provider stream.
 type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 
 // Compact folds everything before the verbatim band into a checkpoint. Both ends
@@ -50,9 +50,6 @@ type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 // already left it, so the reported saving is the saving the next request gets. A
 // nil result means nothing worth doing changed.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
-	if run == nil {
-		return nil, nil // no summariser wired, there is no other way to reduce
-	}
 	minSteps, verbatimTokens := resolveVerbatim(model, opts)
 
 	// the baseline is the effective current context, not the raw branch: a prior

@@ -21,6 +21,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -252,7 +253,7 @@ func TestResumeAppliesImagesBlock(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	st := &agent.State{Model: reg.Active()}
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	toolsReg, err := tools.Builtins(tools.Options{SessionID: t.TempDir()})
 	require.NoError(t, err)
 	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)

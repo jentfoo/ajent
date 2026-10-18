@@ -17,6 +17,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // runTool executes a tool against the manager with canned args.
@@ -38,7 +39,7 @@ func (discardOutput) Diff(string, string, string)     {}
 func toolsManager(t *testing.T, d *delayedProvider, timeout time.Duration) (*Manager, []agent.Tool) {
 	t.Helper()
 
-	opts := wired(Options{
+	opts := wired(t, Options{
 		PollTimeout: timeout,
 	})
 	if d != nil {
@@ -114,7 +115,7 @@ func TestAgentPoll(t *testing.T) {
 	// payload only as its job finishes, so a batched result has to name its agent.
 	t.Run("batched_poll_display_names_agent", func(t *testing.T) {
 		g := &gatedProvider{} // held open so both polls overlap
-		m := New(wired(Options{
+		m := New(wired(t, Options{
 			Provider:    func(llm.Model) (llm.Provider, error) { return g, nil },
 			PollTimeout: time.Second,
 		}))
@@ -172,7 +173,7 @@ func TestAgentPoll(t *testing.T) {
 
 	t.Run("queued_poll_reports_wait", func(t *testing.T) {
 		g := &gatedProvider{}
-		m := New(wired(Options{MaxConcurrent: 1, Provider: func(llm.Model) (llm.Provider, error) { return g, nil }, PollTimeout: 30 * time.Millisecond}))
+		m := New(wired(t, Options{MaxConcurrent: 1, Provider: func(llm.Model) (llm.Provider, error) { return g, nil }, PollTimeout: 30 * time.Millisecond}))
 		t.Cleanup(m.Close)
 
 		first := m.start("occupies the only slot", "", "")
@@ -197,7 +198,7 @@ func TestAgentPoll(t *testing.T) {
 
 	t.Run("aborted", func(t *testing.T) {
 		b := &blockingProvider{}
-		m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
 		t.Cleanup(m.Close)
 		id := m.start("x", "", "")
 		require.NoError(t, m.Stop(id))
@@ -266,7 +267,7 @@ func TestInterruptedPollDeliversClaimedResult(t *testing.T) {
 	t.Parallel()
 
 	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("race summary", llm.Usage{})}})
-	m := New(wired(Options{Provider: p}))
+	m := New(wired(t, Options{Provider: p}))
 	t.Cleanup(m.Close)
 	tools := m.Tools()
 
@@ -398,7 +399,7 @@ func TestStartIDOrder(t *testing.T) {
 	t.Parallel()
 
 	g := &gatedProvider{}
-	m := New(wired(Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }}))
+	m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return g, nil }}))
 	t.Cleanup(m.Close)
 
 	// one assistant message asking for three sub-agents, in order a, b, c
@@ -419,8 +420,12 @@ func TestStartIDOrder(t *testing.T) {
 		{Events: turn},
 		{Events: summaryTurn("ok", llm.Usage{})},
 	}}
-	st := &agent.State{Model: llm.Model{ID: "parent", ContextWindow: 8000,
-		Caps: llm.Capabilities{ParallelTools: true}}}
+	st := &agent.State{
+		Model: llm.Model{ID: "parent", ContextWindow: 8000,
+			Caps: llm.Capabilities{ParallelTools: true}},
+		Tokens: tokens.New(llm.Model{ID: "parent", ContextWindow: 8000,
+			Caps: llm.Capabilities{ParallelTools: true}}),
+	}
 	resolved := m.Tools()
 	a := agent.New(st, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return parent, nil },

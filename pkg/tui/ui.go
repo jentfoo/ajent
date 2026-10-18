@@ -332,14 +332,9 @@ func (u *UI) safeGo(fn func()) {
 }
 
 // afterSafe arms an afterDelay timer whose callback is wrapped by guard, so a
-// panicking timer cannot leave the terminal raw. UI built without New still arms
-// a real timer.
+// panicking timer cannot leave the terminal raw.
 func (u *UI) afterSafe(delay time.Duration, fn func()) *time.Timer {
-	after := u.afterDelay
-	if after == nil {
-		after = time.AfterFunc
-	}
-	return after(delay, u.guard(fn))
+	return u.afterDelay(delay, u.guard(fn))
 }
 
 // SetTheme recolors the live block and everything committed after it. History

@@ -91,6 +91,7 @@ func testCompactor(t *testing.T, model llm.Model, sp llm.Provider) (*compactor, 
 		sink:        agent.NopSink{},
 		notify:      func(string, agent.Level) {},
 		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		cfg:         func() config.Compaction { return config.Compaction{Auto: true} },
 	}
 	return c, st, w
 }

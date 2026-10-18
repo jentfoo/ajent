@@ -98,15 +98,11 @@ var remote = func() bool {
 	return slices.ContainsFunc(remoteEnvVars, func(k string) bool { return os.Getenv(k) != "" })
 }
 
-// stdout receives the OSC 52 fallback when no TTY sink was supplied. A var so
-// tests capture the sequence.
-var stdout io.Writer = os.Stdout
-
 // CopyOptions adjusts one Copy call, the zero value taking the defaults.
 type CopyOptions struct {
-	// TTY receives the OSC 52 escape instead of stdout. It must serialize its
-	// writes with everything else painting the same terminal (the TUI supplies
-	// its own), or the escape can interleave mid-frame.
+	// TTY receives the OSC 52 escape. It must serialize its writes with
+	// everything else painting the same terminal (the TUI supplies its own),
+	// or the escape can interleave mid-frame.
 	TTY io.Writer
 }
 
@@ -128,9 +124,6 @@ func Copy(ctx context.Context, text string, opts CopyOptions) error {
 		return err
 	}
 	osc := opts.TTY
-	if osc == nil {
-		osc = stdout
-	}
 	var tried, displayless []string
 	for _, w := range writers() {
 		if !available(w.name) {

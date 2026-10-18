@@ -144,11 +144,8 @@ func lastNewline(rf *os.File, size int64) (int64, error) {
 	return 0, nil
 }
 
-// Discard returns a writer with no file so callers stay branch-free.
-func Discard() *Writer { return &Writer{} }
-
 // Append stamps ParentID from the current head and writes one line. The new id
-// becomes the head only after a successful write, or immediately when discarding.
+// becomes the head only after a successful write.
 func (w *Writer) Append(typ Type, data any) (Entry, error) {
 	payload, err := json.Marshal(data)
 	if err != nil {
@@ -176,10 +173,8 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 		return Entry{}, err
 	}
 	line = append(line, '\n')
-	if w.f != nil {
-		if _, werr := w.f.Write(line); werr != nil {
-			return Entry{}, werr
-		}
+	if _, werr := w.f.Write(line); werr != nil {
+		return Entry{}, werr
 	}
 	w.head = e.ID
 	w.n++
@@ -231,13 +226,13 @@ func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.closed || w.f == nil {
+	if w.closed {
 		return nil
 	}
 	return errors.Join(w.f.Sync(), w.persistHeadLocked())
 }
 
-// Close releases the underlying file. Idempotent and safe on Discard writers.
+// Close releases the underlying file. Idempotent.
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -246,8 +241,5 @@ func (w *Writer) Close() error {
 		return nil
 	}
 	w.closed = true
-	if w.f == nil {
-		return nil
-	}
 	return w.f.Close()
 }

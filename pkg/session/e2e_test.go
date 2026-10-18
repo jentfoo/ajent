@@ -12,6 +12,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // blockingTool blocks Execute until the context is cancelled, simulating a slow
@@ -76,6 +77,7 @@ func TestCrashResumeRebuildsState(t *testing.T) {
 		Model:     llm.Model{ID: "test"},
 		Reasoning: llm.ReasoningConfig{},
 		Tools:     []string{"bash"},
+		Tokens:    tokens.New(llm.Model{ID: "test"}),
 	}, agent.Options{
 		Provider: func(llm.Model) (llm.Provider, error) {
 			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: toolTurn("c1", "bash")}}}, nil

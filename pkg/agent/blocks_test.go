@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // testImage is a tiny payload, block transport, not encoding, is under test.
@@ -18,8 +19,11 @@ func TestInputBlocksRideToRequest(t *testing.T) {
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("seen")}}}
 	// image-capable: the agent hands the provider a prepared request, so a
 	// caps-less model would see the image already downgraded before llm
-	st := &State{Model: llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
-		Reasoning: llm.ReasoningConfig{}}
+	st := &State{
+		Model:     llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
+		Reasoning: llm.ReasoningConfig{},
+		Tokens:    tokens.New(llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}}),
+	}
 	a := newTestAgent(st, p, nil)
 
 	require.NoError(t, a.Prompt(t.Context(), Input{
@@ -52,8 +56,11 @@ func TestInputBlocksOnlyTurn(t *testing.T) {
 
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("seen")}}}
 	// image-capable so the prepared request still carries the block, see above
-	a := newTestAgent(&State{Model: llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
-		Reasoning: llm.ReasoningConfig{}}, p, nil)
+	a := newTestAgent(&State{
+		Model:     llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}},
+		Reasoning: llm.ReasoningConfig{},
+		Tokens:    tokens.New(llm.Model{ID: "test", Caps: llm.Capabilities{Images: true}}),
+	}, p, nil)
 
 	// a blocks-only input is still a turn: the payload lands without text
 	require.NoError(t, a.Prompt(t.Context(), Input{Blocks: llm.BlockList{testImage}}))

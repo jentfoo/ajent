@@ -85,9 +85,9 @@ type Host struct {
 	Messages func() []llm.Message
 
 	SetInput func(string)
-	Ask      func(ctx context.Context, q string, opts []string) (int, error)
+	Ask      func(ctx context.Context, q string, opts []string) (int, error) // stalled-reviewer prompt
 	Notify   func(msg string, level agent.Level)
-	Status   func(text, short string) // "" clears the segment
+	Status   func(text, short string) // phase segment publish, "" clears it
 	Git      func(ctx context.Context) (status, diffStat string)
 }
 
@@ -301,9 +301,6 @@ func (c *Controller) stopLocked(msg string) {
 func (c *Controller) setPhaseLocked(p Phase) {
 	c.phase = p
 	c.persistLocked()
-	if c.h.Status == nil {
-		return
-	}
 	if !p.active() {
 		c.h.Status("", "")
 		return

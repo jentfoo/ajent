@@ -47,8 +47,7 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 			r := New()
 			inner := &recordingTool{}
 			r.Register(inner, true)
-			r.AddGuard(askGuard)
-			r.SetAsker(tc.asker)
+			r.InstallGate([]Guard{askGuard}, tc.asker)
 
 			tool, ok := r.Get("bash")
 			require.True(t, ok)
@@ -74,10 +73,9 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 	var gotDec Decision
 	r := New()
 	r.Register(&recordingTool{}, true)
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision {
+	r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision {
 		return Decision{Action: ActionAsk, Reason: "approval"}
-	})
-	r.SetAsker(func(_ context.Context, call agent.ToolCall, d Decision) Decision {
+	}}, func(_ context.Context, call agent.ToolCall, d Decision) Decision {
 		gotCall = call
 		gotDec = d
 		return Allow(callWith(nil))
@@ -95,17 +93,17 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 	assert.Equal(t, "approval", gotDec.Reason)
 }
 
-func TestSetAskerNilRestoresDenial(t *testing.T) {
+func TestInstallGateReplacesPrevious(t *testing.T) {
 	t.Parallel()
 
 	r := New()
 	inner := &recordingTool{}
 	r.Register(inner, true)
-	r.AddGuard(func(context.Context, agent.ToolCall) Decision {
+	ask := func(context.Context, agent.ToolCall) Decision {
 		return Decision{Action: ActionAsk, Reason: "needs approval"}
-	})
-	r.SetAsker(func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) })
-	r.SetAsker(nil)
+	}
+	r.InstallGate([]Guard{ask}, func(context.Context, agent.ToolCall, Decision) Decision { return Deny("first asker") })
+	r.InstallGate([]Guard{ask}, func(_ context.Context, _ agent.ToolCall, _ Decision) Decision { return Allow(callWith(nil)) })
 
 	tool, ok := r.Get("bash")
 	require.True(t, ok)
@@ -113,6 +111,6 @@ func TestSetAskerNilRestoresDenial(t *testing.T) {
 	res, err := tool.Execute(t.Context(), callWith(json.RawMessage(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
 	require.NoError(t, err)
 
-	assert.True(t, res.IsError) // asker gone, so the Ask denies again
-	assert.False(t, inner.done)
+	assert.False(t, res.IsError) // the replacement asker decided, not the first
+	assert.True(t, inner.done)
 }

@@ -18,26 +18,24 @@ import (
 // terminal. Serial: swaps package vars.
 func fakeBackend(t *testing.T, list []writer, installed func(string) bool,
 	run func(_ context.Context, w writer, text string) error, isRemote bool,
-	env func(string) string, isTTY bool) *bytes.Buffer {
+	env func(string) string, isTTY bool) {
 	t.Helper()
 
 	realWriters, realAvailable, realRun := writers, available, runWriter
-	realRemote, realStdout, realEnv := remote, stdout, envValue
+	realRemote, realEnv := remote, envValue
 	realTTY := stdoutIsTTY
 	t.Cleanup(func() {
 		writers, available, runWriter = realWriters, realAvailable, realRun
-		remote, stdout, envValue = realRemote, realStdout, realEnv
+		remote, envValue = realRemote, realEnv
 		stdoutIsTTY = realTTY
 	})
 	if env == nil {
 		env = func(string) string { return "" }
 	}
-	var out bytes.Buffer
 	writers = func() []writer { return list }
 	available, runWriter = installed, run
-	remote, stdout, envValue = func() bool { return isRemote }, &out, env
+	remote, envValue = func() bool { return isRemote }, env
 	stdoutIsTTY = func() bool { return isTTY }
-	return &out
 }
 
 func TestCopy(t *testing.T) {
@@ -45,7 +43,7 @@ func TestCopy(t *testing.T) {
 
 	t.Run("native_writer_wins", func(t *testing.T) {
 		var got []string
-		out := fakeBackend(t,
+		fakeBackend(t,
 			[]writer{{"one", nil, nil}, {"two", nil, nil}},
 			func(string) bool { return true },
 			func(_ context.Context, w writer, text string) error {
@@ -57,14 +55,17 @@ func TestCopy(t *testing.T) {
 			},
 			false, nil, false)
 
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
+		var tty bytes.Buffer
+
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
 		assert.Equal(t, []string{"one:hello", "two:hello"}, got)
-		assert.Empty(t, out.String()) // local native win: no OSC 52
+		assert.Empty(t, tty.String()) // local native win: no OSC 52
 	})
 
 	t.Run("remote_native_win_also_emits_osc52", func(t *testing.T) {
 		var ran []string
-		out := fakeBackend(t,
+		var tty bytes.Buffer
+		fakeBackend(t,
 			[]writer{{"xclip", nil, []string{"DISPLAY"}}},
 			func(string) bool { return true },
 			func(_ context.Context, w writer, _ string) error { ran = append(ran, w.name); return nil },
@@ -77,22 +78,24 @@ func TestCopy(t *testing.T) {
 			},
 			true)
 
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
 		assert.Equal(t, []string{"xclip"}, ran)
 		// the forwarded display may not be the user's clipboard: emit both
-		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", out.String())
+		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
 	})
 
 	t.Run("oversized_osc_after_native_win_still_succeeds", func(t *testing.T) {
-		out := fakeBackend(t,
+		fakeBackend(t,
 			[]writer{{"pbcopy", nil, nil}},
 			func(string) bool { return true },
 			ok,
 			true, nil, true)
 
+		var tty bytes.Buffer
+
 		// the native write landed, so a refused OSC 52 must not fail the copy
-		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded), CopyOptions{}))
-		assert.Empty(t, out.String())
+		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded), CopyOptions{TTY: &tty}))
+		assert.Empty(t, tty.String())
 	})
 
 	t.Run("missing_writers_skipped", func(t *testing.T) {
@@ -144,16 +147,18 @@ func TestCopy(t *testing.T) {
 	})
 
 	t.Run("local_without_writer_errors_with_guidance", func(t *testing.T) {
-		out := fakeBackend(t,
+		fakeBackend(t,
 			[]writer{{"xclip", nil, nil}},
 			func(string) bool { return false },
 			ok,
 			false, nil, false)
 
-		err := Copy(t.Context(), "hello", CopyOptions{})
+		var tty bytes.Buffer
+
+		err := Copy(t.Context(), "hello", CopyOptions{TTY: &tty})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "install xclip")
-		assert.Empty(t, out.String())
+		assert.Empty(t, tty.String())
 	})
 
 	t.Run("failing_writers_report_tried", func(t *testing.T) {
@@ -169,39 +174,44 @@ func TestCopy(t *testing.T) {
 	})
 
 	t.Run("remote_falls_back_to_osc52", func(t *testing.T) {
-		out := fakeBackend(t,
+		var tty bytes.Buffer
+		fakeBackend(t,
 			[]writer{{"xclip", nil, nil}},
 			func(string) bool { return false },
 			ok,
 			true, nil, true)
 
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
-		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", out.String())
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
+		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
 	})
 
 	t.Run("remote_native_win_non_tty_skips_osc52", func(t *testing.T) {
-		out := fakeBackend(t,
+		fakeBackend(t,
 			[]writer{{"xclip", nil, nil}},
 			func(string) bool { return true },
 			ok,
 			true, nil, false)
 
-		// native write still lands, but the OSC would only corrupt stdout
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
-		assert.Empty(t, out.String())
+		var tty bytes.Buffer
+
+		// native write still lands, but a non-terminal stdout can never show it
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
+		assert.Empty(t, tty.String())
 	})
 
 	t.Run("remote_non_tty_fallback_errors", func(t *testing.T) {
-		out := fakeBackend(t,
+		fakeBackend(t,
 			[]writer{{"xclip", nil, nil}},
 			func(string) bool { return false },
 			ok,
 			true, nil, false)
 
-		err := Copy(t.Context(), "hello", CopyOptions{})
+		var tty bytes.Buffer
+
+		err := Copy(t.Context(), "hello", CopyOptions{TTY: &tty})
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "stdout is not a terminal")
-		assert.Empty(t, out.String())
+		assert.Empty(t, tty.String())
 	})
 
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
@@ -220,9 +230,6 @@ func TestCopy(t *testing.T) {
 func TestWriteOSC52(t *testing.T) {
 	t.Run("payload_is_base64", func(t *testing.T) {
 		var out bytes.Buffer
-		real := stdout
-		stdout = &out
-		t.Cleanup(func() { stdout = real })
 
 		require.NoError(t, writeOSC52("hi", &out))
 		assert.True(t, strings.HasPrefix(out.String(), "\x1b]52;c;"))
@@ -232,9 +239,6 @@ func TestWriteOSC52(t *testing.T) {
 
 	t.Run("oversized_payload_refuses", func(t *testing.T) {
 		var out bytes.Buffer
-		real := stdout
-		stdout = &out
-		t.Cleanup(func() { stdout = real })
 
 		err := writeOSC52(strings.Repeat("x", maxEncoded), &out)
 		require.Error(t, err)

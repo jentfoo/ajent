@@ -20,9 +20,10 @@ func TestRecoverTool(t *testing.T) {
 	t.Parallel()
 
 	call := ToolCall{ID: "c1", Name: "explode", Input: json.RawMessage(`{}`)}
+	nopDone := func(ToolResult) {}
 
 	t.Run("no_panic_passthrough", func(t *testing.T) {
-		res, err, faulted := RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
+		res, err, faulted := RecoverTool(t.Context(), nopDone, &recordingSink{}, call, func() (ToolResult, error) {
 			return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "fine"}}}, nil
 		})
 		assert.False(t, faulted)
@@ -33,7 +34,7 @@ func TestRecoverTool(t *testing.T) {
 
 	t.Run("no_panic_error_passthrough", func(t *testing.T) {
 		sent := errors.New("tool said no")
-		res, err, faulted := RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
+		res, err, faulted := RecoverTool(t.Context(), nopDone, &recordingSink{}, call, func() (ToolResult, error) {
 			return ToolResult{}, sent
 		})
 		assert.False(t, faulted)
@@ -43,9 +44,9 @@ func TestRecoverTool(t *testing.T) {
 
 	t.Run("panic_becomes_error_result", func(t *testing.T) {
 		sink := &recordingSink{}
-		res, err, faulted := RecoverTool(t.Context(), nil, sink, call, func() (ToolResult, error) {
-			panic("kaboom")
-		})
+		var doneWith ToolResult
+		res, err, faulted := RecoverTool(t.Context(), func(r ToolResult) { doneWith = r }, sink, call,
+			func() (ToolResult, error) { panic("kaboom") })
 		assert.True(t, faulted)
 		assert.True(t, res.IsError)
 		assert.Contains(t, textOf(res.Content), "tool panicked: kaboom")
@@ -57,10 +58,11 @@ func TestRecoverTool(t *testing.T) {
 		require.Len(t, notices, 1)
 		assert.Contains(t, notices[0], "kaboom")
 		assert.Contains(t, notices[0], "TestRecoverTool")
+		assert.Equal(t, res, doneWith) // the fault result lands through done too
 	})
 
 	t.Run("panic_error_value", func(t *testing.T) {
-		res, _, faulted := RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
+		res, _, faulted := RecoverTool(t.Context(), nopDone, &recordingSink{}, call, func() (ToolResult, error) {
 			panic(errors.New("err panic"))
 		})
 		assert.True(t, faulted)
@@ -68,7 +70,7 @@ func TestRecoverTool(t *testing.T) {
 	})
 
 	t.Run("detail_clipped", func(t *testing.T) {
-		res, _, faulted := RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
+		res, _, faulted := RecoverTool(t.Context(), nopDone, &recordingSink{}, call, func() (ToolResult, error) {
 			panic(strings.Repeat("x", maxFaultDetail+50))
 		})
 		assert.True(t, faulted)
@@ -77,19 +79,11 @@ func TestRecoverTool(t *testing.T) {
 		assert.True(t, strings.HasSuffix(text, "…"))
 	})
 
-	t.Run("nil_sink_skips_notice", func(t *testing.T) {
-		res, _, faulted := RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
-			panic("alone")
-		})
-		assert.True(t, faulted)
-		assert.True(t, res.IsError)
-	})
-
 	t.Run("cancelled_context_skips_notice", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		sink := &recordingSink{}
-		res, _, faulted := RecoverTool(ctx, nil, sink, call, func() (ToolResult, error) {
+		res, _, faulted := RecoverTool(ctx, nopDone, sink, call, func() (ToolResult, error) {
 			panic("late")
 		})
 		assert.True(t, faulted)
@@ -114,7 +108,7 @@ func TestRecoverTool(t *testing.T) {
 				ended = true
 				mu.Unlock()
 			}()
-			_, _, _ = RecoverTool(t.Context(), nil, nil, call, func() (ToolResult, error) {
+			_, _, _ = RecoverTool(t.Context(), func(ToolResult) {}, &recordingSink{}, call, func() (ToolResult, error) {
 				runtime.Goexit()
 				return ToolResult{}, nil // unreachable, keeps vet happy
 			})
@@ -134,9 +128,8 @@ func TestFaultLocation(t *testing.T) {
 	t.Parallel()
 
 	t.Run("names_faulting_frame", func(t *testing.T) {
-		_, _, faulted := RecoverTool(t.Context(), nil, nil, ToolCall{}, func() (ToolResult, error) {
-			panic("locate me")
-		})
+		_, _, faulted := RecoverTool(t.Context(), func(ToolResult) {}, &recordingSink{}, ToolCall{},
+			func() (ToolResult, error) { panic("locate me") })
 		assert.True(t, faulted)
 		loc := faultLocation()
 		assert.NotEmpty(t, loc)

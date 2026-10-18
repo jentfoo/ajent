@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +18,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 	})
 
 	t.Run("with_tools", func(t *testing.T) {
-		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
 		sysOnly := a.BaseEstimate(false)
 
@@ -29,7 +30,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 	})
 
 	t.Run("zero_while_running", func(t *testing.T) {
-		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
 		a.mu.Lock()
 		a.running = true
@@ -38,7 +39,7 @@ func TestAgentBaseEstimate(t *testing.T) {
 	})
 
 	t.Run("includes_project_instructions", func(t *testing.T) {
-		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
 		bare := a.BaseEstimate(false)
 

@@ -36,17 +36,14 @@ const elideKeep = 232
 type Barrier struct {
 	mu         sync.Mutex
 	mode       Mode
-	prompter   Prompter
-	noter      Noter
-	classifier Classifier
-	notice     func(string)               // transient UI notices (auto-allow), nil = none
-	dryRun     func(agent.ToolCall) error // registry-backed, nil means cannot predict
+	dialogs    *Dialogs                   // ask-a-person paths, nil meaning unattended
+	classifier Classifier                 // auto-mode verdicts for every gated call
+	notice     func(string)               // transient UI notices (auto-allow)
+	dryRun     func(agent.ToolCall) error // registry-backed edit dry run
 	ro         func(string) bool
 	safe       func(agent.ToolCall) bool // config-declared safe commands, nil = none
 	deny       func(agent.ToolCall) bool // config-declared denied commands, nil = none
 	scope      writeScope                // auto+write's writable roots, zero allows nothing
-
-	preview func(agent.ToolCall) string // enhanced dialog subject, nil = raw arguments
 
 	grants []string        // construction grants, re-applied after every mode change
 	allows map[string]bool // session allows by allowSessionKey
@@ -62,6 +59,17 @@ type pendingAsk struct {
 	cancelAuto func() // stops a racing classification, nil when none runs
 }
 
+// Dialogs carries everything an interactive barrier needs to ask a person.
+// Dialogs open only through Prompter, and every outcome flows back through
+// Noter (steering notes) and Preview (the dialog's subject line). The three
+// install as one unit so a prompter never exists without its note path or
+// render; nil means an unattended run where no dialog can ever open.
+type Dialogs struct {
+	Prompter Prompter
+	Noter    Noter                       // allow/deny note injection for dialog outcomes
+	Preview  func(agent.ToolCall) string // enhanced dialog subject (a write's diff summary)
+}
+
 // Options carries the decision inputs a front end installs at construction.
 // Mode names the starting gate, ModeSet false leaving the default allow-read.
 // Grants pre-populate the session-allow memory and survive the mode changes
@@ -70,32 +78,34 @@ type Options struct {
 	Mode           Mode // starting gate, ignored unless ModeSet
 	ModeSet        bool // whether Mode overrides the default
 	Grants         []string
-	Prompter       Prompter     // approval dialogs, nil meaning unattended
-	Noter          Noter        // allow/deny note injection, nil drops notes
-	Classifier     Classifier   // auto-mode verdicts, nil meaning none
-	Notice         func(string) // transient status notices, nil silences them
-	DryRun         func(agent.ToolCall) error
-	Preview        func(agent.ToolCall) string
-	SafeCommands   []string // exact tool names or bash lines skipping the prompt
-	DeniedCommands []string // exact tool names or bash lines refused in every mode
-	WriteRoots     []string // auto+write's writable roots, empty allowing none
+	Dialogs        *Dialogs                   // approval UI, nil meaning unattended
+	Classifier     Classifier                 // required: auto-mode verdicts for every gated call
+	Notice         func(string)               // required: transient status notices
+	DryRun         func(agent.ToolCall) error // required: registry-backed edit dry run
+	SafeCommands   []string                   // exact tool names or bash lines skipping the prompt
+	DeniedCommands []string                   // exact tool names or bash lines refused in every mode
+	WriteRoots     []string                   // auto+write's writable roots, empty allowing none
 }
 
 // NewBarrier builds a barrier with read-only metadata lookup ro, applying o's
-// inputs with grants last so the starting mode can never clear them.
+// inputs with grants last so the starting mode can never clear them. Classifier,
+// Notice and DryRun are required: both front ends install them from the same
+// registry that supplies ro, and a barrier without one fails mid-turn instead
+// of at wiring.
 func NewBarrier(ro func(string) bool, o Options) *Barrier {
+	if o.Classifier == nil || o.Notice == nil || o.DryRun == nil {
+		panic("permit: Classifier, Notice and DryRun are required at construction")
+	}
 	b := &Barrier{
 		mode:       ModeAllowRead,
 		allows:     make(map[string]bool),
 		warm:       make(map[string]context.CancelFunc),
 		ro:         ro,
 		grants:     o.Grants,
-		prompter:   o.Prompter,
-		noter:      o.Noter,
+		dialogs:    o.Dialogs,
 		classifier: o.Classifier,
 		notice:     o.Notice,
 		dryRun:     o.DryRun,
-		preview:    o.Preview,
 	}
 	if len(o.WriteRoots) > 0 {
 		b.scope = newWriteScope(o.WriteRoots[0], o.WriteRoots[1:]...)
@@ -230,9 +240,6 @@ func (b *Barrier) Guard() tools.Guard {
 // (the turn's), so an abort stops them, and answering the dialog a request
 // fronts cancels it. Never blocks.
 func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
-	if b.classifier == nil {
-		return
-	}
 	g := b.gateNow()
 	for _, call := range calls {
 		if !b.classifyCall(g.mode, call.Name) {
@@ -342,8 +349,7 @@ func (b *Barrier) Asker() tools.Asker {
 			return allowDecision()
 		}
 
-		prompter, _ := b.prompterSnapshot()
-		if prompter == nil { // nobody to ask; the auto modes still get a verdict
+		if b.dialogs == nil { // nobody to ask; the auto modes still get a verdict
 			return b.unattendedAsk(ctx, call)
 		}
 
@@ -374,7 +380,7 @@ func (b *Barrier) Asker() tools.Asker {
 		// the hold defers the dialog while the user types; an allow verdict ends it
 		// at once, so an AI-approved tool runs mid-keystroke
 		var allowed bool
-		verdict, allowed = holdForDialog(ctx, prompter, verdict)
+		verdict, allowed = holdForDialog(ctx, b.dialogs.Prompter, verdict)
 		if (verdict != nil || allowed) && b.Mode() != m {
 			// a mode change since the snapshot: the racing (or winning) verdict no
 			// longer speaks for the gate, so only a person or the new mode may allow
@@ -391,7 +397,7 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(unattendedDenyReason)
 		}
 
-		dlg, err := prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(call.Name, bashCommand(call.Input)))
+		dlg, err := b.dialogs.Prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(call.Name, bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			// no dialog can open (plain render, a UI that went away): settle the ask
 			// exactly as a run without a prompter would, so permission behavior follows
@@ -511,10 +517,8 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 			b.resolveNotice("once", auto)
 			return allowDecision()
 		case optAllowNote:
-			if prompter, _ := b.prompterSnapshot(); prompter != nil {
-				if note, ok := prompter.Reason(ctx, "note for allowing"); ok && strings.TrimSpace(note) != "" {
-					b.noteAllowed(call, note)
-				}
+			if note, ok := b.dialogs.Prompter.Reason(ctx, "note for allowing"); ok && strings.TrimSpace(note) != "" {
+				b.noteAllowed(call, note)
 			}
 			b.resolveNotice("once", auto)
 			return allowDecision()
@@ -532,10 +536,8 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 	}
 	// default and any out-of-range answer refuse, prompting for a reason when one is available.
 	var reason string
-	if prompter, _ := b.prompterSnapshot(); prompter != nil {
-		if r, ok := prompter.Reason(ctx, "reason for denying"); ok {
-			reason = strings.TrimSpace(r)
-		}
+	if r, ok := b.dialogs.Prompter.Reason(ctx, "reason for denying"); ok {
+		reason = strings.TrimSpace(r)
 	}
 	b.noteDenied(call, reason) // a typed denial reason reaches the model as a user message
 	if reason == "" {
@@ -625,28 +627,25 @@ func (b *Barrier) sessionAllowed(call agent.ToolCall) (string, bool) {
 
 // noteAllowed injects a steering note naming what was allowed and why.
 func (b *Barrier) noteAllowed(call agent.ToolCall, note string) {
-	if b.noter == nil || strings.TrimSpace(note) == "" {
+	if strings.TrimSpace(note) == "" {
 		return
 	}
-	b.noter("Allowed with note: " + strings.TrimSpace(note))
+	b.dialogs.Noter("Allowed with note: " + strings.TrimSpace(note))
 }
 
 // noteDenied injects a denial reason as a user message so the model sees why a
 // call was refused, mirroring allow-with-note, an empty reason injecting nothing.
 func (b *Barrier) noteDenied(call agent.ToolCall, reason string) {
-	if b.noter == nil || strings.TrimSpace(reason) == "" {
+	if strings.TrimSpace(reason) == "" {
 		return
 	}
-	b.noter("Denied with note: " + strings.TrimSpace(reason))
+	b.dialogs.Noter("Denied with note: " + strings.TrimSpace(reason))
 }
 
 // classifyCall reports whether mode sends this call to the model classifier:
 // the auto modes judge bash and MCP/extension calls (with their metadata). A
-// core writer never goes to the model, and a nil classifier starts none.
+// core writer never goes to the model.
 func (b *Barrier) classifyCall(m Mode, name string) bool {
-	if b.classifier == nil {
-		return false
-	}
 	switch m {
 	case ModeAuto, ModeAutoWrite:
 		if name == tools.ToolBash {
@@ -706,9 +705,6 @@ func argsDigest(s string) string {
 // generic prompt echo with a descriptive outcome line.
 func (b *Barrier) resolveNotice(scope string, auto bool) {
 	n := b.noticeSnapshot()
-	if n == nil {
-		return
-	}
 	switch {
 	case auto:
 		n("Tool auto allowed")
@@ -717,14 +713,6 @@ func (b *Barrier) resolveNotice(scope string, auto bool) {
 	default:
 		n("Tool call allowed this time")
 	}
-}
-
-// prompterSnapshot returns the installed prompter under read lock.
-func (b *Barrier) prompterSnapshot() (Prompter, bool) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.prompter, b.prompter != nil
 }
 
 // noticeSnapshot returns the installed notice callback under read lock.
@@ -809,7 +797,7 @@ func (g gate) staticVerdict(ctx context.Context, call agent.ToolCall) tools.Deci
 // doomedEdit reports whether the edit tool's dry run predicts the call will fail,
 // so its natural error reaches the model instead of a prompt that cannot matter.
 func (g gate) doomedEdit(call agent.ToolCall) bool {
-	return call.Name == "edit" && g.dryRun != nil && g.dryRun(call) != nil
+	return call.Name == "edit" && g.dryRun(call) != nil
 }
 
 // argvCovers reports whether toks start with any configured entry's resolved

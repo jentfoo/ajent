@@ -214,9 +214,8 @@ func (s *steerQueue) take(ctx context.Context) ([]agent.Input, bool) {
 	}
 	s.mu.Unlock()
 
-	if s.waitReady != nil {
-		s.waitReady(ctx) // no q.mu: a long command must not block Esc or submits
-	}
+	// no q.mu: a long staged command must not block Esc or submits
+	s.waitReady(ctx)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -234,9 +233,6 @@ func (s *steerQueue) take(ctx context.Context) ([]agent.Input, bool) {
 // leaves the stager at the moment its batch delivers, so an aborted or recalled
 // prompt cannot lose it. Caller holds q.mu; items must be non-empty.
 func (s *steerQueue) attachFlushedLocked() {
-	if s.takeReady == nil {
-		return
-	}
 	before := s.takeReady()
 	if len(before) == 0 {
 		return

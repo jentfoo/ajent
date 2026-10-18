@@ -99,8 +99,6 @@ an append that fails to hit disk never advances the cursor.
   persisted cursor or the tail (see the branch cursor below). **OpenEntries**
   additionally returns what it parsed, so a resume can rebuild state without
   reading the file a second time.
-- **Discard** returns a writer with no backing file, so callers stay
-  branch-free.
 - **Sync** flushes at a turn boundary *and* persists the current head, data
   before cursor, and it is never called by `Append`. A cursor that could not be
   written surfaces as an error rather than silently continuing.

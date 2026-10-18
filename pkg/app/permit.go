@@ -110,10 +110,10 @@ func (d barrierOptions) options(o permit.Options) permit.Options {
 	return o
 }
 
-// install gates reg behind the barrier's guard and asker.
+// install gates reg behind the barrier's gate: its guard chain plus the asker
+// that resolves Ask verdicts, installed as one unit.
 func (d barrierOptions) install(b *permit.Barrier) {
-	d.reg.AddGuard(b.Guard())
-	d.reg.SetAsker(b.Asker())
+	d.reg.InstallGate([]tools.Guard{b.Guard()}, b.Asker())
 }
 
 // reserve is the small slice of the sub-agent manager the batch hook needs.

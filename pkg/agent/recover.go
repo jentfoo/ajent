@@ -14,10 +14,10 @@ const maxFaultDetail = 200
 
 // RecoverTool runs fn (one tool Execute) with panic conversion. On panic the
 // returned result is the fault result, done is called once with it, and sink
-// gets a LevelError notice naming the fault site (nil sink or a cancelled ctx
-// drops the notice). faulted is true only after a recovered panic, when res is
-// the fault result and err is nil. Goexit is never recovered; panic(nil)
-// surfaces as a non-nil PanicNilError since Go 1.21.
+// gets a LevelError notice naming the fault site (a cancelled ctx drops the
+// notice). faulted is true only after a recovered panic, when res is the fault
+// result and err is nil. Goexit is never recovered; panic(nil) surfaces as a
+// non-nil PanicNilError since Go 1.21.
 func RecoverTool(ctx context.Context, done func(ToolResult), sink Sink, call ToolCall,
 	fn func() (ToolResult, error)) (res ToolResult, err error, faulted bool) {
 	defer func() {
@@ -27,12 +27,10 @@ func RecoverTool(ctx context.Context, done func(ToolResult), sink Sink, call Too
 		}
 		detail := faultDetail(p)
 		res = ErrorToolResult("tool panicked: " + strutil.Clip(detail, maxFaultDetail))
-		if sink != nil && ctx.Err() == nil {
+		if ctx.Err() == nil {
 			sink.Notice(fmt.Sprintf("tool panicked: %s (%s)", detail, faultLocation()), LevelError)
 		}
-		if done != nil {
-			done(res)
-		}
+		done(res)
 		err = nil
 		faulted = true
 	}()

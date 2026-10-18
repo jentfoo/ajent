@@ -37,9 +37,9 @@ type Stats struct {
 
 // ContextMessages returns the messages branch contributes to the next request,
 // applying cd's cut point and structural reductions. Warnings name entries it
-// could not use. When resolve is non-nil each assistant message is stamped with
-// the model that produced it (walking session and model_change entries) so cross-
-// model degradation can act on resume, a nil resolve leaving messages unstamped.
+// could not use. resolve is required: each assistant message is stamped with the
+// model that produced it (walking session and model_change entries) so cross-
+// model degradation can act on resume.
 func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (llm.Model, error)) ([]llm.Message, []string) {
 	var warns []string
 
@@ -74,24 +74,22 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 		// must run even for entries the cut discards: a compacted history's session and
 		// early model_change entries live before FirstKeptEntryID, yet still seed which
 		// model produced the kept tail.
-		if resolve != nil {
-			switch e.Type {
-			case TypeSession, TypeModelChange:
-				var key string
-				if e.Type == TypeSession {
-					var sd SessionData
-					_ = e.Decode(&sd)
-					key = sd.Model
-				} else {
-					var m ModelData
-					if err := e.Decode(&m); err == nil {
-						key = m.Model
-					}
+		switch e.Type {
+		case TypeSession, TypeModelChange:
+			var key string
+			if e.Type == TypeSession {
+				var sd SessionData
+				_ = e.Decode(&sd)
+				key = sd.Model
+			} else {
+				var m ModelData
+				if err := e.Decode(&m); err == nil {
+					key = m.Model
 				}
-				if key != "" {
-					if resolved, rerr := resolve(key); rerr == nil && resolved.ID != "" {
-						current = resolved
-					}
+			}
+			if key != "" {
+				if resolved, rerr := resolve(key); rerr == nil && resolved.ID != "" {
+					current = resolved
 				}
 			}
 		}
@@ -118,11 +116,11 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 			continue
 		}
 		if reduced.Role == llm.RoleAssistant {
-			// the stop reason rides even without a resolver: Prepare drops errored
-			// turns, so a measurement that could not see StopError would count context
-			// the real request never sends.
+			// the stop reason rides even when the model key never resolves: Prepare
+			// drops errored turns, so a measurement that could not see StopError would
+			// count context the real request never sends.
 			reduced.Stop = md.Stop
-			if resolve != nil && current.ID != "" {
+			if current.ID != "" {
 				reduced.Origin = &llm.Origin{
 					Provider: current.Provider, Dialect: current.Caps.Dialect, Model: current.ID,
 				}

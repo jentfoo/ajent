@@ -15,7 +15,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -251,7 +250,8 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, q: q}
 
 	starts := newStartState(false)
@@ -294,7 +294,8 @@ func TestUIConsoleSettledMessages(t *testing.T) {
 	snap := &turnSnapshot{st: st}
 	snap.seed(settled)
 
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, nil, nil)
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 	c := &uiConsole{st: st, q: q, snap: snap}
 
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
@@ -414,7 +415,7 @@ func TestUIConsolePermissionModeAppliesButNotRecorded(t *testing.T) {
 
 	reg := tools.New()
 	reg.Register(&stubTool{name: "read"}, true)
-	barrier := permit.NewBarrier(reg.ReadOnly, permit.Options{})
+	barrier := wiredBarrier(reg)
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 
@@ -482,7 +483,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 	t.Run("permission_mode_returns_to_configured", func(t *testing.T) {
 		reg := tools.New()
 		reg.Register(&stubTool{name: "read"}, true)
-		barrier := permit.NewBarrier(reg.ReadOnly, permit.Options{})
+		barrier := wiredBarrier(reg)
 		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 		require.NoError(t, err)
 

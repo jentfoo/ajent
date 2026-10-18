@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -324,9 +325,9 @@ func TestWriterSpillsAtBound(t *testing.T) {
 		assert.Equal(t, len("abcdefghijk"), byts)
 	})
 
-	t.Run("nil_overflow_still_reports_truncation", func(t *testing.T) {
+	t.Run("dropped_overflow_still_reports_truncation", func(t *testing.T) {
 		var kept bytes.Buffer
-		w := Writer(&kept, Limit{Lines: 1}, nil).(*boundedWriter)
+		w := Writer(&kept, Limit{Lines: 1}, io.Discard).(*boundedWriter)
 
 		_, _ = w.Write([]byte("one\ntwo\n"))
 

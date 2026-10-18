@@ -25,7 +25,7 @@ func TestSurvey(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "pkg/a/a.go", "cmd/b/b.go", "main.go")
 		start, poll := startStub(), pollStub()
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, start, poll)})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, start, poll)})
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -48,7 +48,7 @@ func TestSurvey(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a/a.go")
 		start, poll := startStub(), pollStub()
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, start, poll)})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, start, poll)})
 
 		_, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -64,7 +64,7 @@ func TestSurvey(t *testing.T) {
 	t.Run("summaries_reach_context", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "pkg/a/a.go")
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), pollStub())})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -74,7 +74,7 @@ func TestSurvey(t *testing.T) {
 	t.Run("existing_file_corrects", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "AGENTS.md", "pkg/a/a.go")
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), pollStub())})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestSurvey(t *testing.T) {
 		start := startStub()
 		// stubs only, so the read failure is not masked by a real tool
 		r := New(Options{
-			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {},
+			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted,
 			Registry: stubRegistry(readStub(agentsFile), start, pollStub()),
 		})
 
@@ -106,7 +106,7 @@ func TestSurvey(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "AGENTS.md", "pkg/a.go")
 		r := New(Options{
-			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {},
+			Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted,
 			Registry: stubRegistry(readStub("README.md"), startStub(), pollStub()),
 		})
 
@@ -138,7 +138,7 @@ func TestSurvey(t *testing.T) {
 				Details: map[string]string{"id": id, "status": "done"},
 			}
 		}}
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), poll)})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), poll)})
 
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestSurvey(t *testing.T) {
 		poll := &stubTool{name: "agent_poll", exec: func(agent.ToolCall) agent.ToolResult {
 			return agent.ToolResult{Content: llm.BlockList{llm.TextBlock{Text: "who knows"}}}
 		}}
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), poll)})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), poll)})
 
 		in, err := r.Survey(t.Context()) // a missing status must not spin the poll loop
 		require.NoError(t, err)
@@ -169,7 +169,7 @@ func TestSurvey(t *testing.T) {
 				IsError: true,
 			}
 		}}
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, start, pollStub())})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, start, pollStub())})
 
 		_, err := r.Survey(t.Context())
 		// a refused spawn is not a missing tool, the notice must not say otherwise
@@ -198,7 +198,8 @@ func TestSurvey(t *testing.T) {
 		}}
 		var warns []string
 		r := New(Options{
-			Cwd: dir, Sink: agent.NopSink{}, Registry: newRegistry(t, dir, start, pollStub()),
+			Cwd: dir, Sink: agent.NopSink{}, Started: nopStarted,
+			Registry: newRegistry(t, dir, start, pollStub()),
 			Notify: func(msg string, level agent.Level) {
 				if level == agent.LevelWarn {
 					warns = append(warns, msg)
@@ -218,7 +219,8 @@ func TestSurvey(t *testing.T) {
 		writeTree(t, dir, "pkg/a.go")
 		var warns int
 		r := New(Options{
-			Cwd: dir, Sink: agent.NopSink{}, Registry: newRegistry(t, dir, startStub(), pollStub()),
+			Cwd: dir, Sink: agent.NopSink{}, Started: nopStarted,
+			Registry: newRegistry(t, dir, startStub(), pollStub()),
 			Notify: func(_ string, level agent.Level) {
 				if level == agent.LevelWarn {
 					warns++
@@ -234,7 +236,7 @@ func TestSurvey(t *testing.T) {
 	t.Run("call_ids_unique_across_runs", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "pkg/a.go")
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), pollStub())})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
 
 		first, err := r.Survey(t.Context())
 		require.NoError(t, err)
@@ -270,7 +272,7 @@ func TestSurvey(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md")
 		// an empty registry has no read, drafting blind could overwrite a file the model never saw
-		_, err := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: tools.New()}).Survey(t.Context())
+		_, err := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: tools.New()}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoRead)
 	})
 
@@ -280,7 +282,7 @@ func TestSurvey(t *testing.T) {
 		start := startStub()
 		reg := newRegistry(t, dir, start, pollStub())
 		reg.SetEnabled([]string{"read"}) // both stubs registered but off
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: reg})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: reg})
 
 		_, err := r.Survey(t.Context())
 		// disabled is not missing: the notice must name the toggle, not unavailability
@@ -295,7 +297,7 @@ func TestSurvey(t *testing.T) {
 		start := startStub()
 		reg := newRegistry(t, dir, start, pollStub())
 		reg.SetEnabled([]string{"read", "agent_start"}) // only agent_poll is off
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: reg})
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: reg})
 
 		_, err := r.Survey(t.Context())
 		require.ErrorIs(t, err, ErrSubAgentsDisabled)
@@ -305,12 +307,8 @@ func TestSurvey(t *testing.T) {
 	t.Run("without_subagents", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md")
-		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir)})
-
-		_, err := r.Survey(t.Context())
-		require.ErrorIs(t, err, ErrNoSubAgents)
-
-		_, err = New(Options{Cwd: dir}).Survey(t.Context())
+		// an empty registry has no read and no sub-agent tools
+		_, err := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir)}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoSubAgents)
 	})
 }
@@ -421,7 +419,7 @@ func TestSurveyAfterSeedIsUnique(t *testing.T) {
 	// already in context, so re-running /init on a resumed session never collides
 	dir := t.TempDir()
 	writeTree(t, dir, "README.md", "pkg/a.go")
-	r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Registry: newRegistry(t, dir, startStub(), pollStub())})
+	r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
 	r.Seed([]llm.Message{{Content: llm.BlockList{
 		llm.ToolCallBlock{ID: callID(3, "read", "1")},
 	}}})

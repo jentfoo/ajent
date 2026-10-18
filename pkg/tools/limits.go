@@ -292,7 +292,7 @@ func Writer(w io.Writer, l Limit, overflow io.Writer) io.Writer {
 type boundedWriter struct {
 	w     io.Writer // kept prefix destination
 	lim   Limit
-	over  io.Writer // spill destination once a bound is hit
+	over  io.Writer // spill destination once a bound is hit, always supplied
 	buf   bytes.Buffer
 	count int // bytes forwarded to w
 	nl    int // newlines forwarded to w
@@ -373,14 +373,13 @@ func (b *boundedWriter) Total() (lines, bytes int) {
 func (b *boundedWriter) Truncated() bool { return b.full }
 
 // beginSpill marks the writer full once and writes the kept head into over so
-// the spill file holds the complete stream, not just the overflow. Truncation
-// is reported even without an overflow writer, whose content is then dropped.
+// the spill file holds the complete stream, not just the overflow.
 func (b *boundedWriter) beginSpill() {
 	if b.full {
 		return
 	}
 	b.full = true
-	if b.over != nil && b.replay.Len() > 0 {
+	if b.replay.Len() > 0 {
 		_, _ = b.over.Write(b.replay.Bytes())
 	}
 }
@@ -402,17 +401,15 @@ func fitsLines(b *boundedWriter) bool {
 
 // clearBuf spills any buffered content once full, then always resets it.
 func (b *boundedWriter) clearBuf() {
-	if b.over != nil && b.full {
+	if b.full {
 		_, _ = b.over.Write(b.buf.Bytes())
 	}
 	b.buf.Reset()
 }
 
-// spillBytes writes p to overflow when one is attached.
+// spillBytes writes p to overflow.
 func (b *boundedWriter) spillBytes(p []byte) {
-	if b.over != nil {
-		_, _ = b.over.Write(p)
-	}
+	_, _ = b.over.Write(p)
 }
 
 // overBudget reports whether s exceeds any bound of l.

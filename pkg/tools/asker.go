@@ -6,14 +6,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
-// Asker resolves a guard's ActionAsk into a final allow or deny. The permission
-// layer registers one, and with none registered an ask denies.
+// Asker resolves a guard's ActionAsk into a final allow or deny. InstallGate
+// installs it together with the guard chain, so an ask always has somewhere to
+// go.
 type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
-
-// SetAsker registers the asker consulted when a guard returns ActionAsk. With
-// no asker registered an ask still refuses the call.
-func (r *Registry) SetAsker(a Asker) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.asker = a
-}

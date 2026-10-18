@@ -31,12 +31,19 @@ func newTestUI(tb testing.TB, v *vt, in io.Reader) *UI {
 	return newTestUIWith(tb, v, in, NewTheme(ColorNone, DefaultPalette()))
 }
 
+// withTimer completes a bare UI literal with the timer func New wires, so
+// afterSafe arms real timers like production.
+func withTimer(u *UI) *UI {
+	u.afterDelay = time.AfterFunc
+	return u
+}
+
 // newTestUIWith is newTestUI with an explicit theme, so shade and colour
 // paths are reachable from tests.
 func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 	tb.Helper()
 
-	u := &UI{
+	u := withTimer(&UI{
 		theme:    theme,
 		render:   newTestInline(v),
 		mode:     ModeInline,
@@ -49,7 +56,7 @@ func newTestUIWith(tb testing.TB, v *vt, in io.Reader, theme Theme) *UI {
 		done:     make(chan struct{}),
 		// afterDelay is the probe-timeout seam. Tests override it per case.
 		afterDelay: time.AfterFunc,
-	}
+	})
 	if inl, ok := u.render.(*inlineRenderer); ok {
 		inl.sigGen, inl.drawGen = u.sigGen.Load, u.drawGen.Load // as New wires them
 		u.settledW, u.settledH = u.render.size()
@@ -71,7 +78,7 @@ func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 	tb.Helper()
 
 	var out strings.Builder
-	u := &UI{
+	u := withTimer(&UI{
 		theme:      NewTheme(ColorNone, DefaultPalette()),
 		render:     newTestInlineAt(&out, 80, 24),
 		mode:       ModeInline,
@@ -82,7 +89,7 @@ func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 		controls:   make(chan Control, 4),
 		done:       make(chan struct{}),
 		afterDelay: time.AfterFunc,
-	}
+	})
 	u.reader = newInputReader(in)
 	go u.reader.run()
 	return u, &out
@@ -480,7 +487,7 @@ func TestUISpinnerPhaseColor(t *testing.T) {
 	t.Parallel()
 
 	var out strings.Builder
-	u := &UI{
+	u := withTimer(&UI{
 		theme:      NewTheme(Color256, DefaultPalette()),
 		render:     newTestInlineAt(&out, 80, 24),
 		mode:       ModeInline,
@@ -491,7 +498,7 @@ func TestUISpinnerPhaseColor(t *testing.T) {
 		controls:   make(chan Control, 4),
 		done:       make(chan struct{}),
 		afterDelay: time.AfterFunc,
-	}
+	})
 	u.reader = newInputReader(u.in)
 	go u.reader.run()
 	th := u.theme
@@ -896,7 +903,7 @@ func (w *gateWriter) String() string {
 func TestTerminalWriter(t *testing.T) {
 	t.Run("writes_serialize_with_frames", func(t *testing.T) {
 		g := newGateWriter()
-		u := &UI{
+		u := withTimer(&UI{
 			theme:    NewTheme(ColorNone, DefaultPalette()),
 			render:   newTestInlineAt(g, 80, 24),
 			mode:     ModeInline,
@@ -905,7 +912,7 @@ func TestTerminalWriter(t *testing.T) {
 			msgs:     make(chan string),
 			controls: make(chan Control, 4),
 			done:     make(chan struct{}),
-		}
+		})
 		t.Cleanup(u.Close)
 
 		w := u.TerminalWriter()
@@ -1036,7 +1043,7 @@ func TestUIReadLines(t *testing.T) {
 	huge := strings.Repeat("x", 200_000)
 
 	pr, pw := io.Pipe()
-	u := &UI{mode: ModePlain, in: pr, msgs: make(chan string), done: make(chan struct{})}
+	u := withTimer(&UI{mode: ModePlain, in: pr, msgs: make(chan string), done: make(chan struct{})})
 	go u.readLines()
 	t.Cleanup(func() { _ = pr.Close() })
 
@@ -2101,14 +2108,14 @@ func TestStreamingRowsLaysOutStructuredLines(t *testing.T) {
 	t.Parallel()
 
 	t.Run("table", func(t *testing.T) {
-		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"}
+		u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "| A | B |\n|---|---|\n| 1 | 2 |"})
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
 		assert.Contains(t, strings.Join(rows, "\n"), "│ A │ B │")
 	})
 
 	t.Run("rule", func(t *testing.T) {
-		u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
+		u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"})
 		rows := u.streamingRows(40)
 		require.NotEmpty(t, rows)
 		assert.Equal(t, strings.Repeat(ruleChar, 40), rows[0])
@@ -2146,7 +2153,7 @@ func TestTailRunes(t *testing.T) {
 func TestStreamingRowsMemoizesComposition(t *testing.T) {
 	t.Parallel()
 
-	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"}
+	u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: "---"})
 	rows := u.streamingRows(40)
 	require.Equal(t, strings.Repeat(ruleChar, 40), rows[0])
 	require.True(t, u.streamOK)
@@ -2171,7 +2178,7 @@ func TestStreamingRowsCapsTailRunes(t *testing.T) {
 	t.Parallel()
 
 	buf := strings.Repeat("x", 8*streamPreviewRunes) + " tail marker"
-	u := &UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: buf}
+	u := withTimer(&UI{theme: NewTheme(ColorNone, DefaultPalette()), streaming: true, textBuf: buf})
 	rows := u.streamingRows(40)
 	require.NotEmpty(t, rows)
 	assert.Contains(t, rows[len(rows)-1], "tail marker")
@@ -2575,7 +2582,7 @@ func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
 	tb.Helper()
 	pr, pw := io.Pipe()
 	term := &respVT{v: v, pw: pw}
-	u := &UI{
+	u := withTimer(&UI{
 		theme:      NewTheme(ColorNone, DefaultPalette()),
 		render:     newTestInlineAt(term, v.w, v.h),
 		mode:       ModeInline,
@@ -2586,7 +2593,7 @@ func newResponsiveUI(tb testing.TB, v *vt) (*UI, *respVT) {
 		controls:   make(chan Control, 4),
 		done:       make(chan struct{}),
 		afterDelay: time.AfterFunc,
-	}
+	})
 	inl := u.render.(*inlineRenderer)
 	inl.sigGen, inl.drawGen = u.sigGen.Load, u.drawGen.Load
 	inl.t.sizeFn = func() (int, int, error) { return v.w, v.h, nil }

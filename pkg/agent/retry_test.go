@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -119,6 +120,7 @@ func TestStreamRetryClosesOpenThinking(t *testing.T) {
 		a := newTestAgent(&State{
 			Model:     llm.Model{ID: "test"},
 			Reasoning: llm.ReasoningConfig{Hide: true},
+			Tokens:    tokens.New(llm.Model{ID: "test"}),
 		}, p, sink)
 		noWaitAgent(a)
 

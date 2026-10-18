@@ -545,7 +545,7 @@ func TestUISelectAltMode(t *testing.T) {
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 
-	u := &UI{
+	u := withTimer(&UI{
 		theme:  NewTheme(ColorNone, DefaultPalette()),
 		render: newTestAlt(v),
 		mode:   ModeAlt,
@@ -554,7 +554,7 @@ func TestUISelectAltMode(t *testing.T) {
 		inFd:   -1,
 		msgs:   make(chan string),
 		done:   make(chan struct{}),
-	}
+	})
 	u.reader = newInputReader(pr)
 	go u.reader.run()
 	go u.readKeys()

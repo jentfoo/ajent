@@ -148,8 +148,8 @@ it). Steer/FollowUp entries that cannot start a turn are no exception.
 ### Assembly is pure
 
 `assemble(state, transforms)` returns the message list for one request as a pure
-function of `State`: each transform in the ordered chain (nil entries skipped)
-rewrites the list and hands it to the next. It never mutates `State`. The chain
+function of `State`: each transform in the ordered chain rewrites the list and
+hands it to the next. It never mutates `State`. The chain
 is an extension seam nothing registers today. Compaction records a `Reduce` plan
 replayed on rebuild, and the plan workflow switches branches rather than
 projecting, so what the model sees is always what the transcript holds.

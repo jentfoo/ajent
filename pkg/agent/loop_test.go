@@ -32,7 +32,7 @@ func newTestAgent(state *State, p llm.Provider, sink Sink) *Agent {
 		Env:      testEnv,
 	}
 	if state == nil {
-		state = &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{Hide: false}}
+		state = &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{Hide: false}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	}
 	return New(state, opts)
 }
@@ -655,6 +655,7 @@ func TestReasoningHiddenWhenHideTrue(t *testing.T) {
 	a := newTestAgent(&State{
 		Model:     llm.Model{ID: "test"},
 		Reasoning: llm.ReasoningConfig{Hide: true},
+		Tokens:    tokens.New(llm.Model{ID: "test"}),
 	}, p, sink)
 
 	err := a.Prompt(t.Context(), Input{Text: "x"})
@@ -926,7 +927,7 @@ func TestLoopStepCompactInterruptAppendsNothing(t *testing.T) {
 	release := make(chan struct{})
 	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("late")}}}
 	catch := &resultCatcher{}
-	a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+	a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 		Sinks:    []Sink{catch},
 		Env:      testEnv,
@@ -1047,7 +1048,7 @@ func TestInterruptDuringCompaction(t *testing.T) {
 			catch := &resultCatcher{}
 
 			entered := make(chan struct{}, 1)
-			a := New(&State{Model: llm.Model{ID: "test"}}, Options{
+			a := New(&State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}, Options{
 				Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
 				Sinks:    []Sink{catch},
 				Env:      testEnv,
@@ -1098,6 +1099,7 @@ func TestBuildRequest(t *testing.T) {
 	st := &State{
 		Model:     m,
 		Reasoning: llm.ReasoningConfig{Level: llm.LevelMax}, // xhigh/max opt-in -> clamps
+		Tokens:    tokens.New(m),
 	}
 	a := newTestAgent(st, nil, NopSink{})
 
@@ -1111,6 +1113,7 @@ func TestBuildRequest(t *testing.T) {
 		st2 := &State{
 			Model:     m,
 			Reasoning: llm.ReasoningConfig{Level: llm.LevelHigh},
+			Tokens:    tokens.New(m),
 		}
 		a2 := newTestAgent(st2, nil, NopSink{})
 		req := a2.buildRequest()

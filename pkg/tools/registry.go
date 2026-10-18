@@ -22,7 +22,7 @@ type Registry struct {
 	schema    []llm.ToolSchema // cached, invalidated by any state change
 	byName    map[string]int   // tool name -> tools index, first registration wins
 	guards    []Guard          // ordered, first non-allow wins inside Execute
-	asker     Asker            // consulted on ActionAsk, nil denies
+	asker     Asker            // consulted on ActionAsk, installed with the guard chain
 	tracker   *Tracker         // the read tracker shared by read/write/edit, nil when none
 	sessionID string           // names the spill directory for the generic output bound
 }
@@ -157,13 +157,20 @@ func (r *Registry) findLocked(name string) (registeredTool, bool) {
 	return r.tools[i], true
 }
 
-// AddGuard appends g to the guard chain. Guards run in registration order and
-// first non-allow wins.
-func (r *Registry) AddGuard(g Guard) {
+// InstallGate replaces the gate around every Execute: guards run in order and
+// first non-allow wins, while asker resolves their Ask verdicts into a final
+// allow or deny. Installed atomically so a call never runs against guards
+// without their asker — an Ask nothing can resolve breaks the request like a
+// dangling tool call. Guards may be empty (no gating at all).
+func (r *Registry) InstallGate(guards []Guard, asker Asker) {
+	if len(guards) > 0 && asker == nil {
+		panic("tools: gate with guards requires an asker to resolve Ask verdicts")
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.guards = append(r.guards, g)
+	r.guards = slices.Clone(guards)
+	r.asker = asker
 }
 
 // DryRunner is implemented by tools that can predict whether a call would fail,
@@ -249,13 +256,12 @@ func (r *Registry) guardSnapshot() ([]Guard, Asker) {
 // under the current guard chain, so dispatch runs them one at a time to keep
 // prompts in submission order. It mirrors Execute's first-non-allow-wins walk
 // (probed on a bare context: these are model calls, so the user-initiated
-// exemption never applies): a Deny resolves without prompting and an unguarded
-// Ask refuses, so only an Ask with an asker registered forces serial execution.
-// A denial ends its own call's scan but not the batch's, since later calls can
-// still prompt.
+// exemption never applies): a Deny resolves without prompting and only an Ask
+// forces serial execution. A denial ends its own call's scan but not the
+// batch's, since later calls can still prompt.
 func (r *Registry) MustSerialize(calls []agent.ToolCall) bool {
-	guards, asker := r.guardSnapshot()
-	if len(guards) == 0 || asker == nil {
+	guards, _ := r.guardSnapshot()
+	if len(guards) == 0 {
 		return false // no gate: nothing can prompt
 	}
 	for _, call := range calls {
@@ -614,9 +620,9 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 		if d.Action == ActionAllow {
 			continue
 		}
-		// Ask consults the asker when registered. An unresolved or re-ask result
-		// refuses like a plain denial.
-		if d.Action != ActionAsk || asker == nil {
+		// Ask consults the asker. An unresolved or re-ask result refuses like a
+		// plain denial.
+		if d.Action != ActionAsk {
 			return denied(d.Reason)
 		}
 		resolved := asker(ctx, c, d)

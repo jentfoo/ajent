@@ -58,8 +58,11 @@ func TestUsageCommand(t *testing.T) {
 		RegisterBuiltins(r, c)
 
 		// give the fake state a ledger with one reported turn so /usage has data
-		st := &agent.State{Model: llm.Model{ID: "alpha", Provider: "test"},
-			Reasoning: llm.ReasoningConfig{}}
+		st := &agent.State{
+			Model:     llm.Model{ID: "alpha", Provider: "test"},
+			Reasoning: llm.ReasoningConfig{},
+			Tokens:    tokens.New(llm.Model{ID: "alpha", Provider: "test"}),
+		}
 		tok := tokens.New(st.Model)
 		const key = "test/alpha"
 		tok.Response(key, llm.Usage{Input: 1000, Output: 200}, 900, true)
