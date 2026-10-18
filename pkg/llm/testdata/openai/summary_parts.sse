@@ -1,0 +1,30 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_sp","model":"gpt-5","status":"in_progress"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_parts"}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"checking "}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"checking"}}
+
+event: response.reasoning_summary_part.added
+data: {"type":"response.reasoning_summary_part.added","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":""}}
+
+event: response.reasoning_summary_text.delta
+data: {"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":1,"delta":"the diff"}
+
+event: response.reasoning_summary_part.done
+data: {"type":"response.reasoning_summary_part.done","output_index":0,"summary_index":1,"part":{"type":"summary_text","text":"the diff"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_parts","encrypted_content":"ENC-PARTS","summary":[{"type":"summary_text","text":"checking"},{"type":"summary_text","text":"the diff"}]}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_sp","model":"gpt-5","status":"completed","usage":{"input_tokens":10,"output_tokens":4}}}
+

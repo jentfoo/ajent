@@ -454,6 +454,10 @@ type respOpenItem struct {
 	name   string
 	text   strings.Builder
 	raw    json.RawMessage // completed item, for verbatim replay
+
+	// pendingSep defers the inter-part separator to the next delta: part.done also
+	// fires after the final part, so emitting there would trail every block.
+	pendingSep bool
 }
 
 func newResponsesStream(ctx context.Context, resp *http.Response, provider string) *responsesStream {
@@ -549,24 +553,26 @@ func (s *responsesStream) onDelta(ev respEvent, typ EventType) []Event {
 	if it == nil || ev.Delta == "" {
 		return nil
 	}
-	it.text.WriteString(ev.Delta)
+	text := ev.Delta
+	if typ == EventThinkingDelta && it.pendingSep {
+		it.pendingSep = false // consume the deferred separator
+		text = "\n\n" + text
+	}
+	it.text.WriteString(text)
 
-	out := Event{Type: typ, Index: ev.OutputIndex, Text: ev.Delta}
+	out := Event{Type: typ, Index: ev.OutputIndex, Text: text}
 	if typ == EventToolCallDelta {
 		out.ToolCallID = it.callID
 	}
 	return []Event{out}
 }
 
-// onSummaryDone appends the separator inserted between reasoning summary parts.
+// onSummaryDone notes one reasoning summary part finished.
 func (s *responsesStream) onSummaryDone(ev respEvent) []Event {
-	it := s.items[ev.OutputIndex]
-	if it == nil {
-		return nil
+	if it := s.items[ev.OutputIndex]; it != nil {
+		it.pendingSep = true
 	}
-	const sep = "\n\n"
-	it.text.WriteString(sep)
-	return []Event{{Type: EventThinkingDelta, Index: ev.OutputIndex, Text: sep}}
+	return nil
 }
 
 func (s *responsesStream) onItemDone(ev respEvent) []Event {

@@ -189,6 +189,30 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, "step one \n\nstep two", think.Text)
 	})
 
+	t.Run("summary_parts_no_trailing_sep", func(t *testing.T) {
+		srv, _ := sseServer(t, "openai/summary_parts.sse")
+		p := newResponsesTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: responsesModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		events := collect(t, s)
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		msg := acc.Message()
+		require.Len(t, msg.Content, 1)
+
+		// the final part.done emits nothing, leaving no trailing separator
+		assert.Equal(t, "checking \n\nthe diff", thinkingOf(events))
+		think, ok := msg.Content[0].(ThinkingBlock)
+		require.True(t, ok)
+		assert.Equal(t, "checking \n\nthe diff", think.Text)
+		assert.Equal(t, "rs_parts", think.ItemID)
+	})
+
 	t.Run("encrypted_payload_backfilled_from_completed", func(t *testing.T) {
 		srv, _ := sseServer(t, "openai/encrypted_backfill.sse")
 		p := newResponsesTestProvider(t, srv.URL)
