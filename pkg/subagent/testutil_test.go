@@ -68,6 +68,22 @@ func (b *blockingProvider) Stream(ctx context.Context, _ llm.Request) (llm.Strea
 	return nil, ctx.Err()
 }
 
+// stuckProvider holds every Stream open past ctx cancellation until released,
+// standing in for a straggler job that outlives Close's bounded wait. entered
+// closes once the first Stream call is pinned.
+type stuckProvider struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (*stuckProvider) Name() string { return "scripted" }
+
+func (p *stuckProvider) Stream(context.Context, llm.Request) (llm.Stream, error) {
+	close(p.entered)
+	<-p.release
+	return &llm.SliceStream{Events: summaryTurn("late", llm.Usage{})}, nil
+}
+
 // gatedProvider holds each stream open until releaseAll, counting how many runs at once.
 type gatedProvider struct {
 	mu      sync.Mutex

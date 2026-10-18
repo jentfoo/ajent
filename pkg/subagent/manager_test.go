@@ -1128,6 +1128,112 @@ func TestClose(t *testing.T) {
 		}
 		<-closed
 	})
+
+	// a job stuck past the bounded wait finishes after the clears: its tail and its
+	// child's sink must not repaint the status segment or an activity row
+	t.Run("straggler_republishes_nothing", func(t *testing.T) {
+		p := &stuckProvider{entered: make(chan struct{}), release: make(chan struct{})}
+		var mu sync.Mutex // publishes land from the straggler's goroutine
+		var rows, statuses []string
+		m := New(wired(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+			Activity: func(key, text string, rank int) {
+				mu.Lock()
+				rows = append(rows, key+"|"+text)
+				mu.Unlock()
+			},
+			Status: func(text, _ string) {
+				mu.Lock()
+				statuses = append(statuses, text)
+				mu.Unlock()
+			},
+		}))
+		m.closeWait = 0 // the pinned job holds the waitgroup, so the bound trips at once
+
+		id := m.start("stuck", "", "")
+		<-p.entered // the job is pinned in its stream, cancel cannot free it
+		m.Close()   // clears the row and the status segment with the job still stuck
+
+		mu.Lock()
+		rows = nil
+		statuses = nil
+		mu.Unlock()
+
+		close(p.release) // the straggler finishes, after the UI was cleared
+		m.wg.Wait()      // its tail and cleanup have run, the assertion window is closed
+
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+		assert.Equal(t, StatusAborted, j.statusOf()) // its own bookkeeping still completed
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Empty(t, statuses)
+		assert.Empty(t, rows)
+	})
+
+	// a publish already in flight when Close runs must land before the clears, so
+	// the clears are the final UI writes
+	t.Run("clear_is_final_publish", func(t *testing.T) {
+		held := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		var unblock sync.Once
+		var mu sync.Mutex // the Status callback runs on another goroutine
+		var published []string
+		m := New(wired(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			Status: func(text, _ string) {
+				if text != "" {
+					once.Do(func() { close(held) })
+					<-release // hold the segment publish open while Close tries to clear
+				}
+				mu.Lock()
+				published = append(published, text)
+				mu.Unlock()
+			},
+		}))
+		t.Cleanup(m.Close)
+		t.Cleanup(func() { unblock.Do(func() { close(release) }) }) // unwind on an earlier failure
+
+		live := stubJob(m, 1) // one queued job, so the segment publish is non-empty
+		m.mu.Lock()
+		m.jobs[live.id] = live
+		m.mu.Unlock()
+		live.setQueued(time.Now())
+
+		go m.publishStatus() // computes the segment, blocks mid-callback holding pubMu
+		<-held
+
+		closed := make(chan struct{})
+		go func() {
+			defer close(closed)
+			m.Close() // blocks on pubMu until the held publish lands
+		}()
+
+		unblock.Do(func() { close(release) }) // the held publish lands, then Close's clear
+		<-closed
+
+		mu.Lock()
+		defer mu.Unlock()
+		require.Len(t, published, 2)
+		assert.NotEmpty(t, published[0])
+		assert.Empty(t, published[1])
+	})
+
+	// a done completion landing after the clears fires no keyed notice either
+	t.Run("completion_notice_suppressed", func(t *testing.T) {
+		c := newCapture()
+		m := New(wired(Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
+		}))
+		id := m.start("x", "", "")
+		m.Close() // the blocked job aborts and its tail drains inside the wait
+
+		m.enqueue(id) // a completion racing past the clears
+		assert.Zero(t, c.noticeCount())
+	})
 }
 
 func TestStopAllCancelsEverything(t *testing.T) {

@@ -78,7 +78,10 @@ Concurrency model:
 still-registered job dies with the manager regardless of where `StopAll`'s
 snapshot lands, then calls `StopAll` and waits on the waitgroup with a short
 bound before clearing activity rows and the status segment, so a job stuck on a
-slow provider cannot block exit forever. An interrupted turn is cheaper:
+slow provider cannot block exit forever. A straggler past that bound still
+finishes its own bookkeeping. Every activity row, status segment and notice
+publish after the clears is barred, child sink rows included, so Close has the
+final word on the UI. An interrupted turn is cheaper:
 `agent_poll` selects over `j.done`, its timeout timer and the caller's context,
 so cancelling the tool call releases the poll immediately while the job itself
 keeps running.

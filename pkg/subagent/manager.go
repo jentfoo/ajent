@@ -21,7 +21,7 @@ import (
 const (
 	defaultMaxConcurrent = 8
 	defaultPollTimeout   = 10 * time.Minute
-	closeWait            = 2 * time.Second // bound on Close waiting for jobs to stop
+	defaultCloseWait     = 2 * time.Second // bound on Close waiting for jobs to stop
 	maxLabelLen          = 72              // single-line label truncation, in runes
 )
 
@@ -66,6 +66,9 @@ type Manager struct {
 
 	pubMu sync.Mutex // serializes each keyed publish (status segment, notice) with its snapshot
 
+	closeWait time.Duration // bound on Close waiting for jobs, shortened in tests
+	closed    bool          // set under pubMu by Close: no UI publication may follow its clears
+
 	mu          sync.Mutex
 	jobs        map[string]*job
 	waiters     []*job         // registered but ungranted jobs, dispatched in job-number order
@@ -88,7 +91,12 @@ func New(opts Options) *Manager {
 	if root == nil {
 		root = context.Background()
 	}
-	m := &Manager{opts: opts, jobs: map[string]*job{}, reserved: map[string]int{}}
+	m := &Manager{
+		opts:      opts,
+		jobs:      map[string]*job{},
+		reserved:  map[string]int{},
+		closeWait: defaultCloseWait,
+	}
 	m.ctx, m.cancel = context.WithCancel(root)
 	return m
 }
@@ -158,9 +166,7 @@ func (m *Manager) start(task, instructions, callID string) string {
 
 	// show the job immediately: rows render above the prompt even while queued,
 	// before the child's turn emits anything (childSink publishes only on output).
-	if fn := m.opts.Activity; fn != nil {
-		fn(j.id, rowLine(id, j.label), j.num)
-	}
+	m.publishActivity(j.id, rowLine(id, j.label), j.num)
 	go m.spawn(j)
 	m.publishStatus()
 	return id
@@ -198,9 +204,7 @@ func (m *Manager) spawn(j *job) {
 	}
 	// the row belongs to the job, not to a turn: this is the only place a running
 	// job's row is cleared, so a nudge turn never makes a live job disappear.
-	if fn := m.opts.Activity; fn != nil {
-		fn(j.id, "", j.num)
-	}
+	m.publishActivity(j.id, "", j.num)
 	m.publishStatus()
 	close(j.done) // release waiting pollers before onComplete so their claim is visible
 	m.onComplete(j)
@@ -406,7 +410,7 @@ func (m *Manager) Close() {
 	m.StopAll()
 	done := make(chan struct{})
 	go func() { m.wg.Wait(); close(done) }()
-	timer := time.NewTimer(closeWait)
+	timer := time.NewTimer(m.closeWait)
 	defer timer.Stop()
 	select {
 	case <-done:
@@ -421,6 +425,12 @@ func (m *Manager) Close() {
 	m.inFlight = nil
 	m.noticeBatch = nil
 	m.mu.Unlock()
+
+	// the flag and the clears share pubMu: a publish already in flight lands
+	// first, every later one sees closed, so these clears are the final UI writes
+	m.pubMu.Lock()
+	defer m.pubMu.Unlock()
+	m.closed = true
 	if fn := m.opts.Activity; fn != nil {
 		for _, r := range rows {
 			fn(r.id, "", r.num)
@@ -464,6 +474,9 @@ func (m *Manager) enqueue(id string) {
 	// publish in append order, or a stale smaller batch lands after the full one
 	m.pubMu.Lock()
 	defer m.pubMu.Unlock()
+	if m.closed { // a completion racing past Close: the UI is already cleared
+		return
+	}
 
 	m.mu.Lock()
 	if !slices.Contains(m.pending, id) {
@@ -623,6 +636,21 @@ func completionNotice(ids []string) string {
 	}
 }
 
+// publishActivity pushes one activity row (empty text clears it), dropped once
+// Close has cleared the UI so a straggler cannot repaint a row.
+func (m *Manager) publishActivity(key, text string, rank int) {
+	fn := m.opts.Activity
+	if fn == nil {
+		return
+	}
+	m.pubMu.Lock()
+	defer m.pubMu.Unlock()
+	if m.closed {
+		return
+	}
+	fn(key, text, rank)
+}
+
 // publishStatus recomputes and pushes the status segment, empty clears it.
 func (m *Manager) publishStatus() {
 	fn := m.opts.Status
@@ -631,7 +659,9 @@ func (m *Manager) publishStatus() {
 	}
 	m.pubMu.Lock()
 	defer m.pubMu.Unlock()
-
+	if m.closed { // a straggler finishing past Close's wait must not re-add the segment
+		return
+	}
 	m.mu.Lock()
 	var running, queued, done int
 	var oldest time.Duration // oldest live job's full age: queue wait plus active runtime

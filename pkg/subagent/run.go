@@ -60,11 +60,8 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 	// Child() pins the parent's model; rebase so window/reserve follow the child's own
 	ledger.SetWindow(model)
 
-	sink := newChildSink(j.id, j.num, func(key, text string, rank int) {
-		if fn := m.opts.Activity; fn != nil {
-			fn(key, text, rank)
-		}
-	})
+	// rows flow through publishActivity so nothing a child emits lands after Close's clears
+	sink := newChildSink(j.id, j.num, m.publishActivity)
 
 	state := &agent.State{
 		Model:     model,
