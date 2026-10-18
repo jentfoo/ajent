@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
@@ -124,20 +125,28 @@ func filePrompts(path string) []Prompt {
 	return prompts
 }
 
+// dropSecretPrompts removes prompts carrying the pasted-secret prefix, so a
+// transcript-derived surface cannot resurface what editor history never stored.
+func dropSecretPrompts(prefix string, ps []Prompt) []Prompt {
+	return bulk.SliceFilter(func(p Prompt) bool { return !hasSecretPrefix(prefix, p.Text) }, ps)
+}
+
 // PromptIndex caches a workspace's prompt list on a short TTL so Ctrl+R never
 // rescans every transcript per keystroke.
 type PromptIndex struct {
-	store     *Store
-	workspace string
+	store        *Store
+	workspace    string
+	secretPrefix string
 
 	mu      sync.Mutex
 	prompts []Prompt
 	expires time.Time
 }
 
-// NewPromptIndex returns an index over store's prompts for workspace.
-func NewPromptIndex(store *Store, workspace string) *PromptIndex {
-	return &PromptIndex{store: store, workspace: workspace}
+// NewPromptIndex returns an index over store's prompts for workspace, excluding
+// secret-prefixed ones.
+func NewPromptIndex(store *Store, workspace, secretPrefix string) *PromptIndex {
+	return &PromptIndex{store: store, workspace: workspace, secretPrefix: secretPrefix}
 }
 
 // Prompts returns the cached prompt list, rescanning when it has expired. It is
@@ -147,7 +156,7 @@ func (p *PromptIndex) Prompts() []Prompt {
 	defer p.mu.Unlock()
 	if !promptNow().Before(p.expires) || p.prompts == nil {
 		ps, _ := p.store.Prompts(p.workspace)
-		p.prompts = ps
+		p.prompts = dropSecretPrompts(p.secretPrefix, ps)
 		p.expires = promptNow().Add(promptTTL)
 	}
 	return p.prompts
@@ -156,7 +165,8 @@ func (p *PromptIndex) Prompts() []Prompt {
 // TranscriptIndex serves one transcript's recorded prompts, re-read only when
 // the file changes.
 type TranscriptIndex struct {
-	path string
+	path         string
+	secretPrefix string
 
 	mu      sync.Mutex
 	scanned bool
@@ -165,14 +175,16 @@ type TranscriptIndex struct {
 	prompts []Prompt
 }
 
-// NewTranscriptIndex returns an index over the transcript at path.
-func NewTranscriptIndex(path string) *TranscriptIndex {
-	return &TranscriptIndex{path: path}
+// NewTranscriptIndex returns an index over the transcript at path, excluding
+// secret-prefixed prompts.
+func NewTranscriptIndex(path, secretPrefix string) *TranscriptIndex {
+	return &TranscriptIndex{path: path, secretPrefix: secretPrefix}
 }
 
 // Prompts returns the transcript's recorded user prompts, newest first across
-// every branch of its tree. Unchanged size and mtime reuse the last read; a
-// failed stat or read keeps the last good list.
+// every branch of its tree. Secret-prefixed ones stay recorded but are never
+// offered for recall. Unchanged size and mtime reuse the last read; a failed
+// stat or read keeps the last good list.
 func (p *TranscriptIndex) Prompts() []Prompt {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -182,7 +194,7 @@ func (p *TranscriptIndex) Prompts() []Prompt {
 		return p.prompts
 	}
 	if !p.scanned || fi.Size() != p.size || !fi.ModTime().Equal(p.mod) {
-		p.prompts = filePrompts(p.path)
+		p.prompts = dropSecretPrompts(p.secretPrefix, filePrompts(p.path))
 		p.scanned, p.size, p.mod = true, fi.Size(), fi.ModTime()
 	}
 	return p.prompts

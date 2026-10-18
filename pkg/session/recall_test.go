@@ -20,7 +20,7 @@ func newRecallIndex(t *testing.T) (*Store, string, *EditorHistory, *RecallIndex)
 	ws := t.TempDir() // transcripts must live under the same workspace as recall
 	h, err := NewEditorHistory(s, ws, "")
 	require.NoError(t, err)
-	return s, ws, h, NewRecallIndex(s, ws, h)
+	return s, ws, h, NewRecallIndex(s, ws, "", h)
 }
 
 // recordPrompt appends one user text message to a fresh transcript in store for ws.
@@ -64,7 +64,7 @@ func TestRecallIndexLines(t *testing.T) {
 		ws := t.TempDir()
 		h, err := NewEditorHistory(s, ws, "secret:")
 		require.NoError(t, err)
-		idx := NewRecallIndex(s, ws, h)
+		idx := NewRecallIndex(s, ws, "secret:", h)
 
 		// the transcript records a secret-prefixed prompt that editor history drops,
 		// so backfill must exclude it where typed recall cannot see it
@@ -74,13 +74,23 @@ func TestRecallIndexLines(t *testing.T) {
 
 		assert.Equal(t, []string{"plain prompt"}, recallTexts(idx.Lines()))
 	})
+	t.Run("secret_excluded_without_history", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		idx := NewRecallIndex(s, ws, "secret:", nil)
 
+		// a failed editor-history open leaves no typed lines but must not drop the
+		// backfill filter either
+		recordPrompt(t, s, ws, "secret:hunter2")
+		recordPrompt(t, s, ws, "plain prompt")
+		assert.Equal(t, []string{"plain prompt"}, recallTexts(idx.Lines()))
+	})
 	t.Run("empty_sources_is_empty", func(t *testing.T) {
 		s := StoreAt(filepath.Join(os.TempDir(), "no-such-store-"+t.Name()))
 		ws := t.TempDir()
 		h, err := NewEditorHistory(s, ws, "")
 		require.NoError(t, err)
-		idx := NewRecallIndex(s, ws, h)
+		idx := NewRecallIndex(s, ws, "", h)
 		assert.Empty(t, idx.Lines())
 	})
 }

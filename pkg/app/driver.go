@@ -565,10 +565,10 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	if store := promptStore(rec); store != nil {
 		hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
 		defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
-		idx := session.NewRecallIndex(store, config.Cwd(), hist)
+		idx := session.NewRecallIndex(store, config.Cwd(), secretPrefix, hist)
 		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
 		if rec != nil && rec.w != nil {
-			sess := session.NewTranscriptIndex(rec.w.Path())
+			sess := session.NewTranscriptIndex(rec.w.Path(), secretPrefix)
 			ui.SetPromptHistory(func() []string { return session.PromptTexts(sess.Prompts()) })
 		}
 	}

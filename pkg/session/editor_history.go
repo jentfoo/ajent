@@ -19,7 +19,7 @@ const maxHistoryLines = 1000
 const historyFileName = "editor-history.lines"
 
 // hasSecretPrefix reports whether msg carries the pasted-secret prefix. One knob
-// governs every recall surface: editor history and transcript-derived backfill.
+// governs every recall surface: editor history and both prompt indexes.
 func hasSecretPrefix(prefix, msg string) bool {
 	return prefix != "" && strings.HasPrefix(msg, prefix)
 }

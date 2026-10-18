@@ -177,7 +177,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "one")})
 		require.NoError(t, aerr)
 
-		pIdx := NewPromptIndex(s, ws)
+		pIdx := NewPromptIndex(s, ws, "")
 		assert.Equal(t, []string{"one"}, PromptTexts(pIdx.Prompts()))
 
 		// inside the TTL an appended file does not trigger a rescan
@@ -205,7 +205,7 @@ func TestPromptIndexPrompts(t *testing.T) {
 		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "one")})
 		require.NoError(t, aerr)
 
-		pIdx := NewPromptIndex(s, ws) // default now hook, first scan sets a real-time expiry
+		pIdx := NewPromptIndex(s, ws, "") // default now hook, first scan sets a real-time expiry
 		assert.Equal(t, []string{"one"}, PromptTexts(pIdx.Prompts()))
 
 		// an older file is added after the cache warmed, then a now bump refreshes
@@ -216,6 +216,17 @@ func TestPromptIndexPrompts(t *testing.T) {
 
 		t.Cleanup(setPromptNow(time.UnixMilli(9_900_000_000_003).UTC())) // ~year 2300, past the first scan's real-time expiry
 		assert.Equal(t, []string{"two", "one"}, PromptTexts(pIdx.Prompts()))
+	})
+	t.Run("secret_prefix_excluded", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		recordPrompt(t, s, ws, "secret:hunter2")
+		recordPrompt(t, s, ws, "plain prompt")
+
+		// the transcript keeps recording secret prompts (the model sees them), but
+		// recall must not offer them back
+		idx := NewPromptIndex(s, ws, "secret:")
+		assert.Equal(t, []string{"plain prompt"}, PromptTexts(idx.Prompts()))
 	})
 }
 
@@ -235,7 +246,7 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 		require.NoError(t, aerr)
 		require.NoError(t, w.Close())
 
-		idx := NewTranscriptIndex(w.Path())
+		idx := NewTranscriptIndex(w.Path(), "")
 		assert.Equal(t, []string{"forked prompt", "third", "second", "first"}, idx.PromptTexts())
 	})
 
@@ -246,7 +257,7 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "one")})
 		require.NoError(t, aerr)
 
-		idx := NewTranscriptIndex(w.Path())
+		idx := NewTranscriptIndex(w.Path(), "")
 		assert.Equal(t, []string{"one"}, idx.PromptTexts())
 
 		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "two")})
@@ -256,7 +267,7 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 
 	t.Run("missing_file_keeps_last", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "t.jsonl")
-		idx := NewTranscriptIndex(path)
+		idx := NewTranscriptIndex(path, "")
 		assert.Empty(t, idx.PromptTexts()) // never scanned, nothing to keep
 
 		w, err := Create(path, SessionData{Version: sessionVersion})
@@ -268,6 +279,27 @@ func TestTranscriptIndexPrompts(t *testing.T) {
 
 		require.NoError(t, os.Remove(path))
 		assert.Equal(t, []string{"kept"}, idx.PromptTexts()) // a failed stat keeps the last list
+	})
+
+	t.Run("secret_prefix_excluded", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		w, err := s.Create(t.TempDir(), SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "secret:hunter2")})
+		require.NoError(t, aerr)
+		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "plain prompt")})
+		require.NoError(t, aerr)
+
+		// the open session's own tree is what plain ↑/↓ serves, so its index must
+		// drop secret prompts like every other recall surface
+		idx := NewTranscriptIndex(w.Path(), "secret:")
+		assert.Equal(t, []string{"plain prompt"}, idx.PromptTexts())
+
+		// a live append rescans and keeps filtering
+		_, aerr = w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "secret:more")})
+		require.NoError(t, aerr)
+		assert.Equal(t, []string{"plain prompt"}, idx.PromptTexts())
+		t.Cleanup(func() { _ = w.Close() })
 	})
 }
 
