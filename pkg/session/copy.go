@@ -120,6 +120,14 @@ func messageHasCall(m llm.Message, callID string) bool {
 	})
 }
 
+// messageHasToolResult reports whether m carries the tool result named callID.
+func messageHasToolResult(m llm.Message, callID string) bool {
+	return slices.ContainsFunc(m.Content, func(b llm.Block) bool {
+		res, ok := b.(llm.ToolResultBlock)
+		return ok && res.CallID == callID
+	})
+}
+
 // callsAnswered reports whether every call in the assistant message has a
 // result among the collected messages.
 func callsAnswered(call llm.Message, rest []llm.Message) bool {
@@ -129,7 +137,7 @@ func callsAnswered(call llm.Message, rest []llm.Message) bool {
 			continue
 		}
 		answered := slices.ContainsFunc(rest, func(m llm.Message) bool {
-			return messageHasCall(m, tc.ID)
+			return messageHasToolResult(m, tc.ID)
 		})
 		if !answered {
 			return false

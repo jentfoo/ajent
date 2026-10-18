@@ -126,3 +126,134 @@ func TestCopyTextsMultiResultChain(t *testing.T) {
 		`{"callId":"cb","content":[{"text":"B"}]}`
 	assert.Equal(t, want, got[0])
 }
+
+func TestCopyTextsSplitResultChain(t *testing.T) {
+	t.Parallel()
+
+	// two parallel calls answered by separate result messages, one per dispatch step
+	callA := llm.ToolCallBlock{ID: "ca", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}
+	callB := llm.ToolCallBlock{ID: "cb", Name: "grep", Input: json.RawMessage(`{}`)}
+	entries := []Entry{
+		sessionOnly("root"),
+		pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
+		pickMsg("a2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}),
+		pickMsg("r3", "a2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.ToolResultBlock{CallID: "ca", Content: llm.BlockList{llm.TextBlock{Text: "A"}}},
+		}}),
+		pickMsg("r4", "r3", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.ToolResultBlock{CallID: "cb", Content: llm.BlockList{llm.TextBlock{Text: "B"}}},
+		}}),
+	}
+
+	got := CopyTexts(entries, []string{"a2"})
+	require.Len(t, got, 1)
+	want := `{"name":"read","input":{"path":"a"}}` + "\n" +
+		`{"callId":"ca","content":[{"text":"A"}]}` + "\n" +
+		`{"name":"grep","input":{}}` + "\n" +
+		`{"callId":"cb","content":[{"text":"B"}]}`
+	assert.Equal(t, want, got[0])
+}
+
+func TestTurnMessages(t *testing.T) {
+	t.Parallel()
+
+	// the result answers t2's only call: the later prompt stays out of the window
+	t.Run("stops_when_answered", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
+			pickToolCall("t2", "u1"),
+			pickToolResultMsg("r3", "t2"),
+			pickMsg("u4", "r3", llm.Text(llm.RoleUser, "later prompt")),
+		}
+
+		msgs := turnMessagesOf(t, entries, "t2")
+		require.Len(t, msgs, 2)
+		assert.Equal(t, llm.RoleAssistant, msgs[0].Role)
+		assert.Equal(t, llm.RoleUser, msgs[1].Role)
+	})
+
+	// a call that stays unanswered keeps the walk going until the next assistant turn
+	t.Run("walks_until_next_assistant", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
+			pickMsg("t2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+				llm.ToolCallBlock{ID: "c9", Name: "grep"},
+			}}),
+			pickMsg("r3", "t2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.ToolResultBlock{CallID: "other"},
+			}}),
+			pickMsg("u4", "r3", llm.Text(llm.RoleUser, "mid prompt")),
+			pickAssistText("a5", "u4", "next turn"),
+		}
+
+		msgs := turnMessagesOf(t, entries, "t2")
+		require.Len(t, msgs, 3) // the call, the mismatched result, then the prompt before a5
+	})
+
+	// no calls: the window is just the assistant message itself
+	t.Run("text_only_turn", func(t *testing.T) {
+		entries := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "hi")),
+			pickAssistText("a2", "u1", "hello"),
+		}
+
+		msgs := turnMessagesOf(t, entries, "a2")
+		require.Len(t, msgs, 1)
+	})
+}
+
+func TestCallsAnswered(t *testing.T) {
+	t.Parallel()
+
+	callA := llm.ToolCallBlock{ID: "ca", Name: "read"}
+	callB := llm.ToolCallBlock{ID: "cb", Name: "grep"}
+	resultFor := func(id string) llm.Message {
+		return llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.ToolResultBlock{CallID: id},
+		}}
+	}
+
+	t.Run("no_calls_is_answered", func(t *testing.T) {
+		assert.True(t, callsAnswered(llm.Text(llm.RoleAssistant, "hi"), nil))
+	})
+
+	t.Run("result_child_answers_call", func(t *testing.T) {
+		call := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA}}
+		assert.True(t, callsAnswered(call, []llm.Message{resultFor("ca")}))
+	})
+
+	t.Run("wrong_call_id_unanswered", func(t *testing.T) {
+		call := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA}}
+		assert.False(t, callsAnswered(call, []llm.Message{resultFor("cb")}))
+	})
+
+	t.Run("partial_results_unanswered", func(t *testing.T) {
+		call := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}
+		assert.False(t, callsAnswered(call, []llm.Message{resultFor("ca")}))
+	})
+
+	t.Run("spans_multiple_children", func(t *testing.T) {
+		call := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}
+		assert.True(t, callsAnswered(call, []llm.Message{resultFor("ca"), resultFor("cb")}))
+	})
+
+	t.Run("text_children_never_answer", func(t *testing.T) {
+		call := llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA}}
+		assert.False(t, callsAnswered(call, []llm.Message{llm.Text(llm.RoleUser, "a plain prompt")}))
+	})
+}
+
+// turnMessagesOf decodes entry id and renders its turn window.
+func turnMessagesOf(t *testing.T, entries []Entry, id string) []llm.Message {
+	t.Helper()
+
+	ti := newTreeIndex(entries)
+	e, ok := ti.entry(id)
+	require.True(t, ok)
+	var md MessageData
+	require.NoError(t, e.Decode(&md))
+	return turnMessages(ti, e, md.Message)
+}
