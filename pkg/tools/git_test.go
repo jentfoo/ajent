@@ -441,11 +441,7 @@ func TestGitDiffOut(t *testing.T) {
 	})
 
 	t.Run("truncation_spills_and_counts_skipped", func(t *testing.T) {
-		testLimitsGate.Lock()
-		t.Cleanup(testLimitsGate.Unlock)
-		orig := GitResultLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
-		ApplyLimits(Limits{Git: Limit{Lines: 2}})
+		applyTestLimits(t, Limits{Git: Limit{Lines: 2}})
 
 		d := newGitDiffOut("", ToolGitDiff)
 		defer func() { _ = d.close() }()

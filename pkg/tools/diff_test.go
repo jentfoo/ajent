@@ -270,26 +270,6 @@ func TestGitDiff(t *testing.T) {
 		assert.NotContains(t, out, "+line")
 	})
 
-	t.Run("wide_diff_streams_and_truncates", func(t *testing.T) {
-		g := newGitRepo(t)
-		for _, name := range []string{"x1.txt", "x2.txt"} {
-			g.write(t, name, "content of "+name+"\n")
-		}
-		g.stage(t)
-
-		testLimitsGate.Lock()
-		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
-		orig := GitResultLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
-		ApplyLimits(Limits{Git: Limit{Lines: 3}})
-
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
-		assert.False(t, isErr)
-		assert.Contains(t, out, "truncated:")
-		assert.Contains(t, out, "1 more changed path not shown") // rendering stopped at the bound
-		assert.NotContains(t, out, "+content of x2.txt")
-	})
-
 	t.Run("submodule_add_and_delete_named", func(t *testing.T) {
 		g := newSubmoduleRepo(t)
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
@@ -366,4 +346,22 @@ func TestGitDiff(t *testing.T) {
 		assert.NotContains(t, out, "submodule")
 		assert.Contains(t, out, "untracked file not shown")
 	})
+}
+
+// TestGitDiffWideBoundTruncates narrows the shared git limit, so it runs in the
+// sequential phase rather than parallel with every limit reader.
+func TestGitDiffWideBoundTruncates(t *testing.T) {
+	applyTestLimits(t, Limits{Git: Limit{Lines: 3}})
+
+	g := newGitRepo(t)
+	for _, name := range []string{"x1.txt", "x2.txt"} {
+		g.write(t, name, "content of "+name+"\n")
+	}
+	g.stage(t)
+
+	out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+	assert.False(t, isErr)
+	assert.Contains(t, out, "truncated:")
+	assert.Contains(t, out, "1 more changed path not shown") // rendering stopped at the bound
+	assert.NotContains(t, out, "+content of x2.txt")
 }

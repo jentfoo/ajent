@@ -3,16 +3,26 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"sync"
+	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// testLimitsGate serializes tests that reconfigure the package output limits:
-// one test's restore cleanup can otherwise land between another's ApplyLimits
-// and its assertions, silently undoing the override.
-var testLimitsGate sync.Mutex
+// applyTestLimits narrows the package limits for the test's duration, restoring
+// the prior limits on cleanup. The limits are global, so a test calling this
+// must not run parallel: only the sequential phase may observe them narrowed.
+func applyTestLimits(t *testing.T, l Limits) {
+	t.Helper()
+
+	orig := Limits{
+		Bash: BashLimit(), Read: ReadFileLimit(), Find: FindResultLimit(),
+		Grep: GrepResultLimit(), Ls: LsResultLimit(), Git: GitResultLimit(),
+		Other: OtherLimit(), RefInject: RefInjectLimit(), RefTotal: RefTotalLimit(),
+	}
+	t.Cleanup(func() { ApplyLimits(orig) })
+	ApplyLimits(l)
+}
 
 // callWith builds a tool call carrying raw args.
 func callWith(raw json.RawMessage) agent.ToolCall {

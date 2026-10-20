@@ -3,17 +3,22 @@
 package tools
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
+	"net"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/go-git/go-billy/v5/osfs"
 	git "github.com/go-git/go-git/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
 )
 
 // mkfifo creates the named pipe at path: the special file whose open blocks
@@ -112,7 +117,47 @@ func TestMeasureSkipsFifo(t *testing.T) {
 		m, err := Measure(p)
 		require.NoError(t, err)
 		assert.False(t, m.Dir)
-		assert.Zero(t, m.Bytes)
+		assert.Equal(t, KindSpecial, m.Kind) // annotated, never planned as a read
+	})
+}
+
+// TestRefuseSpecialSocket drives the guard with a real socket node, the one
+// special kind a fifo fixture cannot stand in for.
+func TestRefuseSpecialSocket(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "sock")
+	var lc net.ListenConfig
+	l, err := lc.Listen(t.Context(), "unix", p)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = l.Close() })
+
+	fifoFence(t, func() {
+		err := refuseSpecial(p)
+		require.Error(t, err)
+		assert.Equal(t, fifoErr, errors.Unwrap(err).Error())
+
+		m, err := Measure(p)
+		require.NoError(t, err)
+		assert.Equal(t, KindSpecial, m.Kind)
+	})
+}
+
+// TestRefuseSpecialSymlink pins the intended symlink semantics: stat follows
+// the link, so a link to a regular file reads while a link to a fifo refuses.
+func TestRefuseSpecialSymlink(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	mkfifo(t, filepath.Join(dir, "pipe"))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "reg.txt"), []byte("x"), 0o644))
+	require.NoError(t, os.Symlink("pipe", filepath.Join(dir, "link-fifo")))
+	require.NoError(t, os.Symlink("reg.txt", filepath.Join(dir, "link-reg")))
+
+	fifoFence(t, func() {
+		require.Error(t, refuseSpecial(filepath.Join(dir, "link-fifo")))
+		assert.NoError(t, refuseSpecial(filepath.Join(dir, "link-reg")))
 	})
 }
 
@@ -140,6 +185,59 @@ func TestWriteDisplacedFifo(t *testing.T) {
 	fifoFence(t, func() {
 		d := readDisplaced(p)
 		assert.Equal(t, dispUnreadable, d.state)
+	})
+}
+
+// TestWriteRefusesFifo pins the execute-side refusal: write must not unlink a
+// node it refuses to read, and the fifo survives the failed call.
+func TestWriteRefusesFifo(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	p := filepath.Join(e.cwd, "pipe.txt")
+	mkfifo(t, p)
+
+	fifoFence(t, func() {
+		res := e.writeExec(t.Context(), `{"path":"pipe.txt","content":"new\n"}`)
+		assert.True(t, res.IsError)
+		assert.Contains(t, textOf(res), fifoErr)
+
+		fi, err := os.Lstat(p)
+		require.NoError(t, err)
+		assert.NotZero(t, fi.Mode()&os.ModeNamedPipe) // the node survives the refusal
+	})
+}
+
+func TestWritePreviewRefusesFifo(t *testing.T) {
+	t.Parallel()
+
+	e := newToolEnv(t.TempDir())
+	mkfifo(t, filepath.Join(e.cwd, "pipe.txt"))
+	c := agent.ToolCall{ID: "c", Name: "write",
+		Input: json.RawMessage(`{"path":"pipe.txt","content":"new\n"}`)}
+
+	fifoFence(t, func() {
+		_, err := (&writeTool{policy: e.policy}).Preview(c)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), fifoErr)
+	})
+}
+
+// TestWriteRefusesDevice drives the refusal with a real device node, which a
+// fifo fixture cannot stand in for. Root would unlink it, so pin the refusal.
+func TestWriteRefusesDevice(t *testing.T) {
+	t.Parallel()
+
+	fi, err := os.Stat("/dev/null")
+	if err != nil || fi.Mode()&os.ModeDevice == 0 {
+		t.Skip("no device node at /dev/null")
+	}
+
+	e := newToolEnv(t.TempDir())
+	fifoFence(t, func() {
+		res := e.writeExec(t.Context(), `{"path":"/dev/null","content":"x"}`)
+		assert.True(t, res.IsError)
+		assert.Contains(t, textOf(res), fifoErr)
 	})
 }
 
@@ -210,5 +308,98 @@ func TestFindDotGitSkipsFifo(t *testing.T) {
 		dotRoot, wtRoot := findDotGit(filepath.Join(dir, "nested"))
 		assert.Empty(t, dotRoot)
 		assert.Empty(t, wtRoot)
+	})
+}
+
+// TestGuardedFS pins the wrapper go-git's own opens go through: a regular file
+// reads, a fifo and a symlink to one refuse, a symlink to a regular file reads.
+func TestGuardedFS(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("x"), 0o644))
+	mkfifo(t, filepath.Join(dir, "pipe"))
+	require.NoError(t, os.Symlink("pipe", filepath.Join(dir, "link-fifo")))
+	require.NoError(t, os.Symlink("a.txt", filepath.Join(dir, "link-reg")))
+	fs := guardedFS{osfs.New(dir)}
+
+	f, err := fs.Open("a.txt")
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+	lf, err := fs.Open("link-reg")
+	require.NoError(t, err)
+	require.NoError(t, lf.Close())
+
+	fifoFence(t, func() {
+		for _, name := range []string{"pipe", "link-fifo"} {
+			_, err := fs.Open(name)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), fifoErr)
+		}
+	})
+}
+
+// TestGitStatusRefusesFifoHead pins the storage-side guard: go-git opens HEAD
+// itself, so a fifo planted there must error rather than hang repo reading.
+// go-git re-maps the refusal to its own not-a-repository wording.
+func TestGitStatusRefusesFifoHead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	_, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "HEAD")))
+	mkfifo(t, filepath.Join(dir, ".git", "HEAD"))
+
+	fifoFence(t, func() {
+		out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: dir}}, `{}`)
+		assert.True(t, isErr)
+		assert.Contains(t, out, "not a git repository")
+	})
+}
+
+// TestGitStatusRefusesFifoGitmodules pins the worktree-side guard: status opens
+// .gitmodules itself through the worktree filesystem go-git was handed.
+func TestGitStatusRefusesFifoGitmodules(t *testing.T) {
+	t.Parallel()
+
+	g := newGitRepo(t)
+	mkfifo(t, filepath.Join(g.dir, ".gitmodules"))
+
+	fifoFence(t, func() {
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.True(t, isErr)
+		assert.Contains(t, out, fifoErr)
+	})
+}
+
+// TestGitShowRefusesFifoObject pins the object-store guard: a loose object read
+// must refuse a fifo planted in its place. Content carries the test name so the
+// commit hash is unique and the process-wide object cache cannot serve it.
+func TestGitShowRefusesFifoObject(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"),
+		[]byte("content "+t.Name()+"\n"), 0o644))
+	_, err = w.Add("a.txt")
+	require.NoError(t, err)
+	head, err := w.Commit("add a", &git.CommitOptions{Author: gitAuthor(time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC))})
+	require.NoError(t, err)
+
+	s := head.String()
+	obj := filepath.Join(dir, ".git", "objects", s[:2], s[2:])
+	require.NoError(t, os.Remove(obj))
+	mkfifo(t, obj)
+
+	// go-git re-maps the refused object read to its unborn-HEAD wording
+	fifoFence(t, func() {
+		out, isErr := runGitTool(t, &gitShowTool{policy: PathPolicy{Cwd: dir}}, `{}`)
+		assert.True(t, isErr)
+		assert.Contains(t, out, "no commits")
 	})
 }

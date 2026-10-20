@@ -261,15 +261,10 @@ func TestGrepFallbackHonoursShapeParams(t *testing.T) {
 }
 
 func TestGrepDefaultCapNamed(t *testing.T) {
-	t.Parallel()
+	// narrows the shared grep limit: sequential, not parallel with limit readers
+	applyTestLimits(t, Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
 
 	// reaching the default cap without an explicit limit is named, never silent
-	testLimitsGate.Lock()
-	t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
-	orig := GrepResultLimit()
-	t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
-	ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
-
 	for name, tool := range map[string]*grepTool{
 		"rg-or-go": {policy: PathPolicy{Cwd: "."}, forceGo: false},
 		"go-only":  {policy: PathPolicy{Cwd: "."}, forceGo: true},
@@ -317,8 +312,6 @@ func TestGrepFallback(t *testing.T) {
 	// the match budget cuts across a scan window exactly as the sequential walk
 	// would: files after the cut never contribute, at any window position
 	t.Run("budget_cuts_across_windows", func(t *testing.T) {
-		testLimitsGate.Lock() // the bound in finalize reads the package limits
-		defer testLimitsGate.Unlock()
 		dir, policy := newSearchEnv(t)
 		const files = 24 // spans several windows at any worker-derived window size
 		for i := 1; i <= files; i++ {
@@ -339,8 +332,6 @@ func TestGrepFallback(t *testing.T) {
 	// count mode spends the budget by match count, so a file inside the last
 	// budgeted window can be partially counted, and a spent budget is named
 	t.Run("count_mode_budget_across_windows", func(t *testing.T) {
-		testLimitsGate.Lock()
-		defer testLimitsGate.Unlock()
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "f01.txt", "hit\nhit\n")
 		mkfile(dir, "f02.txt", "hit\nhit\n")
@@ -363,8 +354,6 @@ func TestGrepFallback(t *testing.T) {
 
 	// a count search under the budget stays silent, like content mode
 	t.Run("count_mode_under_budget_not_noted", func(t *testing.T) {
-		testLimitsGate.Lock()
-		defer testLimitsGate.Unlock()
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "f01.txt", "hit\nhit\n")
 
@@ -428,8 +417,6 @@ func TestGrepFallback(t *testing.T) {
 	// an explicit limit spent under context names the cap, mirroring the rg block
 	// path where a cut withholds whole matches even under the model's own max
 	t.Run("context_limit_names_cap", func(t *testing.T) {
-		testLimitsGate.Lock()
-		defer testLimitsGate.Unlock()
 		dir, policy := newSearchEnv(t)
 		for i := 1; i <= 6; i++ {
 			mkfile(dir, fmt.Sprintf("f%02d.txt", i), "pre-a\npre-b\nmatchline\npost-a\npost-b\n")
@@ -441,6 +428,44 @@ func TestGrepFallback(t *testing.T) {
 		out := textOf(res)
 		assert.Equal(t, 5, strings.Count(out, "matchline")) // the sixth block never emitted
 		assert.Contains(t, out, "result cap of 5 matches reached")
+	})
+}
+
+// TestGrepFallbackCapNotes narrows the shared grep limit, so it runs in the
+// sequential phase rather than parallel with every limit reader.
+func TestGrepFallbackCapNotes(t *testing.T) {
+	applyTestLimits(t, Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
+
+	// a search filling the default budget exactly completed on its own: nothing
+	// followed the fill, so a cap note would send the model chasing matches that
+	// do not exist (an explicit limit stays silent by its own rule either way)
+	t.Run("exact_fill_silent", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit one\nmiss\nhit two\n")
+		mkfile(dir, "b.txt", "hit three\n")
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 2, strings.Count(out, "a.txt:")) // all three matches streamed
+		assert.Contains(t, out, "b.txt:1:")
+		assert.NotContains(t, out, "result cap")
+	})
+
+	// a single file holding more matches than the default budget still names the
+	// cap: no per-file bound may end rg at exactly max, which would dress real
+	// withholding up as a natural end once an exact fill stays silent
+	t.Run("single_file_over_budget_names_cap", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "a.txt", "hit\nhit\nhit\nhit") // no final newline: the last line still reports
+
+		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
+			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		out := textOf(res)
+		assert.Equal(t, 3, strings.Count(out, "a.txt:")) // three of the four matches shown
+		assert.Contains(t, out, "result cap of 3 matches reached")
 	})
 }
 
@@ -483,9 +508,6 @@ func TestGrepRgPaths(t *testing.T) {
 	if !rgOnPath() {
 		t.Skip("ripgrep not on PATH")
 	}
-	// runRg and finalize read the package limits other tests mutate
-	testLimitsGate.Lock()
-	t.Cleanup(testLimitsGate.Unlock)
 
 	// a small count search stays silent: nothing was withheld, yet the rg path
 	// used to append a cap footer unconditionally
@@ -515,46 +537,6 @@ func TestGrepRgPaths(t *testing.T) {
 		out := textOf(res)
 		assert.Equal(t, 2, strings.Count(out, ".txt:")) // a further file would be withheld whole
 		assert.Contains(t, out, "result cap of 2 matches reached")
-	})
-
-	// a search filling the default budget exactly completed on its own: nothing
-	// followed the fill, so a cap note would send the model chasing matches that
-	// do not exist (an explicit limit stays silent by its own rule either way)
-	t.Run("exact_fill_silent", func(t *testing.T) {
-		dir, policy := newSearchEnv(t)
-		mkfile(dir, "a.txt", "hit one\nmiss\nhit two\n")
-		mkfile(dir, "b.txt", "hit three\n")
-
-		orig := GrepResultLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
-		ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
-
-		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
-		require.NoError(t, err)
-		out := textOf(res)
-		assert.Equal(t, 2, strings.Count(out, "a.txt:")) // all three matches streamed
-		assert.Contains(t, out, "b.txt:1:")
-		assert.NotContains(t, out, "result cap")
-	})
-
-	// a single file holding more matches than the default budget still names the
-	// cap: no per-file bound may end rg at exactly max, which would dress real
-	// withholding up as a natural end once an exact fill stays silent
-	t.Run("single_file_over_budget_names_cap", func(t *testing.T) {
-		dir, policy := newSearchEnv(t)
-		mkfile(dir, "a.txt", "hit\nhit\nhit\nhit") // no final newline: the last line still reports
-
-		orig := GrepResultLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Grep: orig}) })
-		ApplyLimits(Limits{Grep: Limit{Lines: 3, Bytes: 16 << 10}})
-
-		res, err := (&grepTool{policy: policy}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"hit"}`)), agent.NewOutput(agent.NopSink{}, "c"))
-		require.NoError(t, err)
-		out := textOf(res)
-		assert.Equal(t, 3, strings.Count(out, "a.txt:")) // three of the four matches shown
-		assert.Contains(t, out, "result cap of 3 matches reached")
 	})
 
 	// count output filling its budget exactly is silent too: rg ended right after,
@@ -784,8 +766,6 @@ func TestGrepSymlinkEscapeSkipped(t *testing.T) {
 
 	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
 		t.Run(name, func(t *testing.T) {
-			testLimitsGate.Lock()
-			t.Cleanup(testLimitsGate.Unlock)
 			if !forceGo && !rgOnPath() {
 				t.Skip("ripgrep not on PATH")
 			}
@@ -815,8 +795,6 @@ func TestGrepSymlinkArgFollowed(t *testing.T) {
 
 	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
 		t.Run(name, func(t *testing.T) {
-			testLimitsGate.Lock()
-			t.Cleanup(testLimitsGate.Unlock)
 			if !forceGo && !rgOnPath() {
 				t.Skip("ripgrep not on PATH")
 			}
@@ -863,8 +841,6 @@ func TestGrepEnginesShareOutputContract(t *testing.T) {
 	if !rgOnPath() {
 		t.Skip("ripgrep not on PATH")
 	}
-	testLimitsGate.Lock()
-	t.Cleanup(testLimitsGate.Unlock)
 
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "pad\n  match lead\npad\n") // leading whitespace kept raw
@@ -895,8 +871,6 @@ func TestGrepSingleFileSearch(t *testing.T) {
 
 	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
 		t.Run(name, func(t *testing.T) {
-			testLimitsGate.Lock()
-			t.Cleanup(testLimitsGate.Unlock)
 			if !forceGo && !rgOnPath() {
 				t.Skip("ripgrep not on PATH")
 			}
@@ -937,8 +911,6 @@ func TestGrepNaturalCompletionNotCapped(t *testing.T) {
 
 	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
 		t.Run(name, func(t *testing.T) {
-			testLimitsGate.Lock() // the match budget defaults to GrepResultLimit
-			t.Cleanup(testLimitsGate.Unlock)
 			if !forceGo && !rgOnPath() {
 				t.Skip("ripgrep not on PATH")
 			}
@@ -960,8 +932,6 @@ func TestGrepPathShapeRootRelative(t *testing.T) {
 
 	for name, forceGo := range map[string]bool{"rg-or-go": false, "go-only": true} {
 		t.Run(name, func(t *testing.T) {
-			testLimitsGate.Lock()
-			t.Cleanup(testLimitsGate.Unlock)
 			if !forceGo && !rgOnPath() {
 				t.Skip("ripgrep not on PATH")
 			}

@@ -50,8 +50,9 @@ const specialMode = os.ModeNamedPipe | os.ModeDevice | os.ModeSocket
 
 // LoadProjectInstructions reads <dir>/AGENTS.md from each of dirs, in order,
 // returning a provenance-marked instruction per existing file (global first,
-// then project). Empty dirs and absent files are skipped, nil means none were found.
-// A read error other than a file being absent is returned for callers to surface.
+// then project). Empty dirs and absent files are skipped, nil means none were
+// found. A file that cannot be read names its path in the returned error while
+// the instructions already loaded stay in the result.
 func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 	var proj []ProjectInstruction
 	for _, dir := range dirs {
@@ -61,14 +62,14 @@ func LoadProjectInstructions(dirs ...string) ([]ProjectInstruction, error) {
 		path := filepath.Join(dir, agentsFileName)
 		// an unopened fifo at AGENTS.md would block the launch or reload forever
 		if fi, serr := os.Stat(path); serr == nil && fi.Mode()&specialMode != 0 {
-			return nil, fmt.Errorf("%s is not a regular file", path)
+			return proj, fmt.Errorf("%s is not a regular file", path)
 		}
 		data, err := os.ReadFile(path)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			continue
 		case err != nil:
-			return nil, err
+			return proj, err
 		}
 		proj = append(proj, ProjectInstruction{Path: path, Body: string(data)})
 	}

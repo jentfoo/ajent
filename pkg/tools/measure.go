@@ -4,13 +4,16 @@ import (
 	"os"
 )
 
-// FileKind classifies what a measured path holds: text, binary or image.
+// FileKind classifies what a measured path holds: text, binary, image or a
+// special file that cannot be read.
 type FileKind uint8
 
 const (
 	KindText FileKind = iota
 	KindBinary
 	KindImage
+	// KindSpecial marks a pipe, device or socket, which no read can return
+	KindSpecial
 )
 
 // Measurement describes a path's shape without reading its whole content when
@@ -26,8 +29,8 @@ type Measurement struct {
 // A directory reports Dir with its byte size left zero. A file above
 // MeasureCeiling reports its bytes and kind but never reads it, so annotating a
 // giant file is itself bounded. A special file (pipe, device, socket) is never
-// opened: the annotation stays size-only and a later read names the refusal.
-// A missing path returns the os error.
+// opened and reports KindSpecial, so callers annotate it rather than plan a
+// read that can only fail. A missing path returns the os error.
 func Measure(path string) (Measurement, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -37,7 +40,7 @@ func Measure(path string) (Measurement, error) {
 		return Measurement{Dir: true}, nil
 	}
 	if specialFile(info.Mode()) {
-		return Measurement{Bytes: info.Size()}, nil
+		return Measurement{Kind: KindSpecial, Bytes: info.Size()}, nil
 	}
 	var m Measurement
 	m.Bytes = info.Size()

@@ -477,9 +477,9 @@ stops at whitespace or trailing punctuation, though a final `.` and `:` stay
 inside the token because dotted names and `x:y` need them. Whether they ended
 a sentence is decided at expand time. The annotation shape is matched
 strictly: a trailing `(...)` is absorbed only when it contains a digit or a
-known kind word (`binary`, `image`, `dir`, `lines`) and is made of the allowed
-tokens (digits, `b`/`kb`/`mb`, the kind words), so ordinary parenthetical prose
-after a path is never eaten.
+known kind word (`binary`, `image`, `special`, `dir`, `lines`) and is made of
+the allowed tokens (digits, `b`/`kb`/`mb`, the kind words), so ordinary
+parenthetical prose after a path is never eaten.
 
 ### Expand (`refs/expand.go`)
 
@@ -496,7 +496,7 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 | a path the same message already named | planned once; the repeat stays literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
 | image on a vision model | `read` pair planned, so the image arrives through the ordinary read path |
-| image without vision, large, binary, or over the cap | annotation replaced in place, cap trim adds a notice |
+| image without vision, special (pipe/device/socket), large, binary, or over the cap | annotation replaced in place, cap trim adds a notice |
 
 Resolution is existence-aware about sentence punctuation: because Parse keeps
 a trailing `.` or `:` inside the token, a written form that names nothing real

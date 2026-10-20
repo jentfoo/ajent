@@ -805,13 +805,20 @@ containment check by default. Extensions layer their own limits via guards.
 No tool opens a path that stats as a named pipe, device or socket. The open
 can block forever (an unopened FIFO waits for a writer) and such a file
 carries no diffable content anyway. One shared predicate and refusal serve
-every open site, including the git repo-open metadata reads a hostile work
-tree controls. Each surface keeps its existing behavior for an unreadable
-file: read refuses, measure annotates without reading, git work-tree diffs
-render the side as deleted, and the tracker treats it as changed rather than
-deduping against it. The same rule guards AGENTS.md loading in `pkg/agent`
-(its own mask, since agent cannot import tools). Directory listings need no
-guard, since a fifo fails the directory open immediately.
+every ajent open site, and the billy filesystems handed to go-git wrap the
+same refusal (`git.go` `guardedFS`), so go-git's own opens of `HEAD`, `config`,
+the index, refs, object files and `.gitmodules` cannot hang inside repo
+opening either. The one go-git read left unguarded is the work-tree hashing
+walk, which skips non-regular nodes before opening. Each surface keeps its
+existing behavior for a special path: read, edit and write refuse (a write
+must not unlink a node it cannot inspect), measure reports `KindSpecial` so
+`@ref` annotates the path instead of planning a read that can only fail, git
+work-tree diffs render the side as deleted, and the tracker treats it as
+changed rather than deduping against it. The same rule guards AGENTS.md
+loading in `pkg/agent` (its own mask, since agent cannot import tools). A
+special AGENTS.md fails the load naming its path while instructions already
+read stay in the result. Directory listings need no guard, since a fifo
+fails the directory open immediately.
 
 ### Read tracking (`track.go`)
 

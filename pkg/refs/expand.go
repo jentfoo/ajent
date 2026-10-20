@@ -345,7 +345,8 @@ func stripNote(out string, ref Ref) string {
 }
 
 // measurementText renders the annotation shape: "800 lines, 64kb" for text,
-// "binary, 1.2mb" for binary, "image, 1.2mb" for images, "dir" for a directory.
+// "binary, 1.2mb" for binary, "image, 1.2mb" for images, "special" for a pipe,
+// device or socket, "dir" for a directory.
 func measurementText(m tools.Measurement) string {
 	if m.Dir {
 		return "dir"
@@ -355,6 +356,8 @@ func measurementText(m tools.Measurement) string {
 		return "binary, " + strutil.HumanSize(m.Bytes)
 	case tools.KindImage:
 		return "image, " + strutil.HumanSize(m.Bytes)
+	case tools.KindSpecial:
+		return "special"
 	default:
 		if m.Lines > 0 {
 			return fmt.Sprintf("%d lines, %s", m.Lines, strutil.HumanSize(m.Bytes))

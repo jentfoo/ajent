@@ -30,6 +30,9 @@ func TestParse(t *testing.T) {
 		{"absorbs_annotation", "@file (800 lines, 64kb)", []Ref{
 			{Path: "file", Start: 0, End: 23, Note: " (800 lines, 64kb)"},
 		}},
+		{"absorbs_special_annotation", "@pipe (special)", []Ref{
+			{Path: "pipe", Start: 0, End: 15, Note: " (special)"},
+		}},
 		{"prose_paren_not_absorbed", "@file (see above)", []Ref{
 			{Path: "file", Start: 0, End: 5},
 		}},

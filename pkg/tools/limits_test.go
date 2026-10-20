@@ -352,10 +352,7 @@ func TestWriterSpillsAtBound(t *testing.T) {
 }
 
 func TestApplyLimitsNonZeroFields(t *testing.T) {
-	t.Parallel()
-
-	testLimitsGate.Lock()
-	t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
+	// mutates the shared limits: sequential, not parallel with limit readers
 	orig := Limits{
 		Bash: BashLimit(), Read: ReadFileLimit(), Find: FindResultLimit(),
 		Grep: GrepResultLimit(), Ls: LsResultLimit(), Other: OtherLimit(),

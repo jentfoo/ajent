@@ -85,22 +85,20 @@ func TestGitShow(t *testing.T) {
 		assert.Contains(t, out, "commit "+g.b) // the header is the answer's anchor
 		assert.Contains(t, out, "(no changes)")
 	})
+}
 
-	t.Run("header_full_never_claims_no_changes", func(t *testing.T) {
-		g := newGitRepo(t)
+// TestGitShowHeaderFullBound narrows the shared git limit, so it runs in the
+// sequential phase rather than parallel with every limit reader.
+func TestGitShowHeaderFullBound(t *testing.T) {
+	// the header alone fills the 3-line bound
+	applyTestLimits(t, Limits{Git: Limit{Lines: 3}})
 
-		testLimitsGate.Lock()
-		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
-		orig := GitResultLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Git: orig}) })
-		ApplyLimits(Limits{Git: Limit{Lines: 3}}) // the header alone fills the line bound
-
-		// commit a adds two paths, both counted as skipped once full
-		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.a+`"}`)
-		assert.False(t, isErr)
-		assert.Contains(t, out, "commit "+g.a) // the kept header prefix survives
-		assert.Contains(t, out, "2 more changed paths not shown")
-		assert.Contains(t, out, "truncated:")
-		assert.NotContains(t, out, "(no changes)")
-	})
+	g := newGitRepo(t)
+	// commit a adds two paths, both counted as skipped once full
+	out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.a+`"}`)
+	assert.False(t, isErr)
+	assert.Contains(t, out, "commit "+g.a) // the kept header prefix survives
+	assert.Contains(t, out, "2 more changed paths not shown")
+	assert.Contains(t, out, "truncated:")
+	assert.NotContains(t, out, "(no changes)")
 }

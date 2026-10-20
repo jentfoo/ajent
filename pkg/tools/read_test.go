@@ -182,25 +182,6 @@ func TestRead(t *testing.T) {
 		assert.True(t, e.tracker.Unchanged(path))
 	})
 
-	// a byte-bound cut is partial even at the default window: what landed stops
-	// short of the file's end
-	t.Run("byte_bound_read_never_dedupes", func(t *testing.T) {
-		testLimitsGate.Lock()
-		t.Cleanup(testLimitsGate.Unlock) // unlock runs after the restore below
-		orig := ReadFileLimit()
-		t.Cleanup(func() { ApplyLimits(Limits{Read: orig}) })
-		ApplyLimits(Limits{Read: Limit{Bytes: 24}})
-
-		e := newToolEnv(t.TempDir())
-		e.writeFile("a.txt", "1111111111\n2222222222\n3333333333\n4444444444\n")
-		path := filepath.Join(e.cwd, "a.txt")
-
-		res := e.readExec(t.Context(), `{"path":"a.txt"}`)
-		assert.False(t, res.IsError)
-		assert.Contains(t, textOf(res), "... truncated at line") // the window was cut
-		assert.False(t, e.tracker.Unchanged(path))
-	})
-
 	// a rejected image lands nothing in context, so it must not let @refs dedupe
 	t.Run("failed_image_fit_records_nothing", func(t *testing.T) {
 		e := newToolEnv(t.TempDir())
@@ -269,4 +250,21 @@ func TestReadImageGate(t *testing.T) {
 	// gate on: the note no longer vouches, the next @img re-injects the picture
 	SetImagesEnabled(true)
 	assert.False(t, e.tracker.Unchanged(filepath.Join(e.cwd, "pic.png")))
+}
+
+// TestReadByteBoundNoDedupe narrows the shared read limit, so it runs in the
+// sequential phase rather than parallel with every limit reader.
+func TestReadByteBoundNoDedupe(t *testing.T) {
+	applyTestLimits(t, Limits{Read: Limit{Bytes: 24}})
+
+	// a byte-bound cut is partial even at the default window: what landed stops
+	// short of the file's end
+	e := newToolEnv(t.TempDir())
+	e.writeFile("a.txt", "1111111111\n2222222222\n3333333333\n4444444444\n")
+	path := filepath.Join(e.cwd, "a.txt")
+
+	res := e.readExec(t.Context(), `{"path":"a.txt"}`)
+	assert.False(t, res.IsError)
+	assert.Contains(t, textOf(res), "... truncated at line") // the window was cut
+	assert.False(t, e.tracker.Unchanged(path))
 }

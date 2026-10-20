@@ -116,7 +116,7 @@ func absorbNote(text string, pos int) (end int, ok bool) {
 }
 
 // looksLikeNote reports whether inner matches a measurement shape like
-// (N lines, SIZE), (binary, SIZE) or (dir). Strict enough that ordinary
+// (N lines, SIZE), (binary, SIZE), (special) or (dir). Strict enough that ordinary
 // parenthetical prose after a path is never treated as an annotation.
 func looksLikeNote(inner string) bool {
 	inner = strings.TrimSpace(inner)
@@ -127,6 +127,7 @@ func looksLikeNote(inner string) bool {
 	if !strings.ContainsAny(inner, "0123456789") &&
 		!strings.Contains(inner, "binary") &&
 		!strings.Contains(inner, "image") &&
+		!strings.Contains(inner, "special") &&
 		!strings.Contains(inner, "dir") &&
 		!strings.Contains(inner, "lines") {
 		return false
@@ -136,7 +137,7 @@ func looksLikeNote(inner string) bool {
 		return r == ' ' || r == ',' || r == '.'
 	}) {
 		if isSizeToken(tok) || tok == "lines" || tok == "binary" || tok == "image" ||
-			tok == "dir" || tok == "b" || tok == "kb" || tok == "mb" {
+			tok == "special" || tok == "dir" || tok == "b" || tok == "kb" || tok == "mb" {
 			continue
 		}
 		return false

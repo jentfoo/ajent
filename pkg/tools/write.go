@@ -30,8 +30,8 @@ var _ Previewer = (*writeTool)(nil)
 
 // Preview returns the file's current and new content for a write call, so the
 // change is shown before it runs. A brand-new file previews as all additions,
-// and an existing file whose bytes cannot be read previews with a marker line
-// naming its stat size in place of the displaced lines.
+// an existing file whose bytes cannot be read previews a marker naming its
+// stat size, and a special file is refused as Execute refuses it.
 func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
 	var p writeParams
 	if err := decode(call.Input, &p); err != nil {
@@ -39,6 +39,9 @@ func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
 	}
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
+		return Change{}, err
+	}
+	if err := refuseSpecial(full); err != nil {
 		return Change{}, err
 	}
 	after := normalizeToLF(p.Content) // preview in LF space so the diff stays clean
@@ -80,6 +83,11 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	full, err := t.policy.Resolve(p.Path)
 	if err != nil {
 		return agent.ErrorToolResult(err.Error()), nil
+	}
+	// a write that cannot read its target must not destroy it: the rename
+	// would unlink the node and leave a regular file in its place
+	if err := refuseSpecial(full); err != nil {
+		return agent.ErrorToolResult("write: " + err.Error()), nil
 	}
 
 	// an overwrite keeps the existing file's majority line ending, a new file gets LF
@@ -124,10 +132,10 @@ type displaced struct {
 
 // readDisplaced classifies the current state of path. A directory is never
 // displaced content, writing over one fails regardless. A special file reads
-// as unreadable rather than being opened.
+// as unreadable, keeping stat's size so its note stays honest.
 func readDisplaced(path string) displaced {
-	if refuseSpecial(path) != nil {
-		return displaced{state: dispUnreadable}
+	if fi, err := os.Stat(path); err == nil && specialFile(fi.Mode()) {
+		return displaced{state: dispUnreadable, size: fi.Size()}
 	}
 	b, err := os.ReadFile(path)
 	if err == nil {

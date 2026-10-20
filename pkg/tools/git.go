@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path"
@@ -50,13 +51,15 @@ func openGitRepo(path string) (*git.Repository, error) {
 	if dotRoot == "" { // not under any .git: treat path itself as a bare repository
 		dotRoot = path
 	}
-	s := filesystem.NewStorage(repoFilesystem(dotRoot), sharedGitCache)
+	// go-git reads HEAD, config, index, refs, objects and .gitmodules through
+	// its own opens, so both filesystems pass the special-file guard
+	s := filesystem.NewStorage(guardedFS{repoFilesystem(dotRoot)}, sharedGitCache)
 	var (
 		r   *git.Repository
 		err error
 	)
 	if wtRoot != "" {
-		r, err = git.Open(s, osfs.New(wtRoot))
+		r, err = git.Open(s, guardedFS{osfs.New(wtRoot)})
 	} else { // bare: no work tree
 		r, err = git.Open(s, nil)
 	}
@@ -118,6 +121,25 @@ func repoFilesystem(dotRoot string) billy.Filesystem {
 		return dotgit.NewRepositoryFilesystem(osfs.New(dotRoot), osfs.New(common))
 	}
 	return osfs.New(dotRoot)
+}
+
+// guardedFS refuses to open a pipe, device or socket before delegating, so a
+// hostile repository cannot hang a git_* tool inside go-git's own reads
+type guardedFS struct{ billy.Filesystem }
+
+// Open routes through OpenFile so one guard covers both entry points
+func (f guardedFS) Open(name string) (billy.File, error) {
+	return f.OpenFile(name, os.O_RDONLY, 0)
+}
+
+// OpenFile reports the shared special-file refusal. Stat runs through the
+// wrapped fs so chroot and commondir path mapping still apply, and follows
+// symlinks: a link to a regular file reads, a link to a fifo refuses
+func (f guardedFS) OpenFile(name string, flag int, perm os.FileMode) (billy.File, error) {
+	if fi, err := f.Stat(name); err == nil && specialFile(fi.Mode()) {
+		return nil, &fs.PathError{Op: "open", Path: f.Join(f.Root(), name), Err: errNotRegular}
+	}
+	return f.Filesystem.OpenFile(name, flag, perm)
 }
 
 // worktreeCommonDir returns the shared storage directory a linked-worktree
