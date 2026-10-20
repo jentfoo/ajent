@@ -7,6 +7,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLineContinuation(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want int
+	}{
+		{"lf", "a\\\nb", 2},
+		{"crlf", "a\\\r\nb", 3},
+		{"escaped backslash", "a\\\\\nb", 0},
+		{"ordinary escape", "a\\nb", 0},
+		{"trailing backslash", "a\\", 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, lineContinuation(c.in, 1))
+		})
+	}
+}
+
 func TestTokenizeRaw(t *testing.T) {
 	t.Parallel()
 
@@ -24,6 +45,30 @@ func TestTokenizeRaw(t *testing.T) {
 		{`empty single quote`, `echo '' x`, []string{"echo", "", "x"}},
 		// backslash survives inside single quotes so regexes hold
 		{`quoted regex survives`, `grep 'a\.b' f`, []string{"grep", "a\\.b", "f"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, tokenizeRaw(c.in))
+		})
+	}
+}
+
+func TestTokenizeRawContinuations(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		// bash removes a backslash-newline before tokens form, argv arriving joined
+		{"unquoted joins", "rg --\\\npre=id f", []string{"rg", "--pre=id", "f"}},
+		{"crlf joins", "rg --\\\r\npre f", []string{"rg", "--pre", "f"}},
+		{"double quoted joins", "awk \"BEGIN{print \\\n\\\"hi\\\"}\"", []string{"awk", `BEGIN{print "hi"}`}},
+		// single quotes keep the pair literal, no continuation inside them
+		{"single quoted keeps", "sed 'a\\\nb' f", []string{"sed", "a\\\nb", "f"}},
+		// an escaped backslash then a newline is no continuation: both survive
+		{"escaped backslash keeps", "a\\\\\nb", []string{"a\\\nb"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

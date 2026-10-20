@@ -158,13 +158,36 @@ func TestClassifyEdgeCases(t *testing.T) {
 	})
 
 	// awk splices backslash-newline before tokens form, so a redirect or pipe on
-	// the next physical line still belongs to the print statement: the read-only
-	// verdict must not survive the splice
+	// the next physical line still belongs to the print statement, and awk's own
+	// lexing decides comments and strings: the read-only verdict must not survive
 	t.Run("awk_continuation_still_prompts", func(t *testing.T) {
 		for _, cmd := range []string{
 			"awk 'BEGIN{print \\\n> \"/tmp/evil\"}'",
 			"printf 'x\\n' | awk '{print $1 \\\n| \"sort\"}'",
 			"awk 'BEGIN{print \\\r\n> \"/tmp/evil\"}'",
+			// unquoted continuation joins the program word in bash itself
+			"awk BEGIN\\{print\\\n\\|\"id\"}",
+			// a comment ends at the newline, an apostrophe opens no awk string
+			"awk \"# don't\nBEGIN{system(\\\"id\\\")}\" /dev/null",
+			"awk '# \" x\nBEGIN{system(\"id\")}'",
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
+	})
+
+	// a segment carrying shell expansion the analyser cannot resolve never
+	// verifies read-only: the argv it runs differs from the text analysed
+	t.Run("expanded_forms_prompt", func(t *testing.T) {
+		for _, cmd := range []string{
+			"file {--compile,-m} ./magic",
+			"file $'-C' -m ./magic",
+			"date --{se,t}=2025-01-01",
+			"rg --\\\npre=id f",
+			"sort --\\\noutput=/tmp/evil f",
+			"date --\\\nset=2030-01-01",
+			"date +%s && date -s 2030-01-01",
+			"date -S 2025-01-01",
+			"file -z f.gz",
 		} {
 			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
 		}

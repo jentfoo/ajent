@@ -44,6 +44,15 @@ func TestDateReadOnly(t *testing.T) {
 		// -t sets the BSD kernel timezone
 		{"tz set separate", []string{"date", "-t", "300"}, false},
 		{"tz set attached", []string{"date", "-t300"}, false},
+		// options off the tables are unverifiable: unknown spellings and busybox's
+		// hardware-clock -S fail safe
+		{"busybox hwclock set", []string{"date", "-S", "2025-01-01"}, false},
+		{"unknown short", []string{"date", "-q"}, false},
+		{"unknown long", []string{"date", "--nope"}, false},
+		{"unknown in cluster", []string{"date", "-uq"}, false},
+		{"utc abbreviation", []string{"date", "--ut"}, true},
+		{"option terminator only", []string{"date", "--"}, true},
+		{"bare dash operand", []string{"date", "-"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -146,7 +146,16 @@ provenance). The classification decisions that shape everything else:
   `getopt_long` resolves any proper prefix, and whether one is ambiguous
   depends on the installed binary's option table. A write/exec long option
   therefore matches by prefix (`sort --outp=/x` fails like `--output`), an
-  over-match merely prompting.
+  over-match merely prompting. Option tables are closed: an unknown spelling
+  cannot be verified inert, so it prompts instead of allowing.
+- A per-invocation verdict must hold for the argv the process receives. The
+  shell joins backslash-newline continuations before tokens form, and
+  unresolved expansion (`$` or backticks outside single quotes, unquoted
+  brace patterns) can rewrite a flag or split into words after analysis, so
+  such a segment never verifies read-only.
+- An awk script is analysed under awk's own lexer rules, never shell lexing:
+  strings, regex constants and comments delimit as awk reads them, and a
+  program the analyser cannot reconstruct prompts.
 - Heredoc and subshell bodies are not this line's tokens on the allow side: an
   interpreter payload or `( … )` prompts rather than being scanned as named
   commands. The deny list alone resolves whatever hides the head, since a

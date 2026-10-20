@@ -185,6 +185,49 @@ func TestAllSegmentsReadOnly(t *testing.T) {
 	}
 }
 
+func TestExpansionUnresolved(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		// $ and backtick stay live outside single quotes
+		{"dollar arg", "cat $F", true},
+		{"dollar in dquote", `awk "BEGIN{print \"$X\"}"`, true},
+		{"backtick arg", "cat `pwd`", true},
+		{"dollar escaped", `cat \$F`, false},
+		{"dollar single quoted", `awk '{print $1}'`, false},
+		// brace patterns rewrite into several words after analysis
+		{"brace comma", "file {--compile,-m} ./magic", true},
+		{"brace range", "date --{se,t}=x", true},
+		{"brace literal keeps", "date -d 'a{2}' f", false},
+		// ansi-c quoting keeps its escaping outside single quotes
+		{"ansi-c quote", "file $'-C' -m ./magic", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, expansionUnresolved(c.in), c.in)
+		})
+	}
+}
+
+func TestExpansionBlocksReadOnlyVerdict(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{
+		"file {--compile,-m} ./magic",
+		"file $'-C' -m ./magic",
+		"date --{se,t}=2025-01-01",
+		"rg --\\\npre=id f",
+		"sort --\\\noutput=/tmp/evil f",
+		"date --\\\nset=2030-01-01",
+	} {
+		assert.False(t, allSegmentsReadOnly(scanCommand(in)), in)
+	}
+}
+
 // corpusCase pins the scan-level facts a command must satisfy: whether it splits,
 // carries an unsafe op, and how many collapsed segments result.
 type corpusCase struct {

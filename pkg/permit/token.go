@@ -8,8 +8,26 @@ import (
 	"github.com/go-analyze/bulk"
 )
 
+// lineContinuation reports the byte length of a backslash-newline line
+// continuation at i (2, or 3 spanning CRLF), 0 when the backslash quotes an
+// ordinary character instead.
+func lineContinuation(s string, i int) int {
+	if i+1 >= len(s) || s[i] != '\\' {
+		return 0
+	}
+	if s[i+1] == '\n' {
+		return 2
+	}
+	if s[i+1] == '\r' && i+2 < len(s) && s[i+2] == '\n' {
+		return 3
+	}
+	return 0
+}
+
 // tokenizeRaw splits a raw segment on unquoted whitespace, stripping quote
 // chars and joining adjacent quoted/unquoted pieces (-e's/a/b/' -> -es/a/b/).
+// A backslash-newline outside single quotes joins like bash does, both chars
+// dropping before tokens form, so tokens carry what the process receives.
 func tokenizeRaw(segment string) []string {
 	var tokens []string
 	b := strings.Builder{}
@@ -33,6 +51,10 @@ func tokenizeRaw(segment string) []string {
 		}
 		started = true
 		if ch == '\\' && i+1 < n {
+			if cont := lineContinuation(segment, i); cont > 0 {
+				i += cont // line continuation, bash removes the pair
+				continue
+			}
 			b.WriteByte(segment[i+1])
 			i += 2
 			continue
@@ -41,17 +63,23 @@ func tokenizeRaw(segment string) []string {
 			quote := ch
 			i++
 			for i < n && segment[i] != quote {
-				if quote == '"' && segment[i] == '\\' && i+1 < n {
-					esc := segment[i+1]
-					if esc == '"' || esc == '\\' || esc == '$' || esc == '`' {
-						b.WriteByte(esc)
-					} else {
-						// other backslashes stay literal so sed regex escapes survive
-						b.WriteString("\\")
-						b.WriteByte(esc)
+				if quote == '"' {
+					if cont := lineContinuation(segment, i); cont > 0 {
+						i += cont // continuation joins inside double quotes too
+						continue
 					}
-					i += 2
-					continue
+					if segment[i] == '\\' && i+1 < n {
+						esc := segment[i+1]
+						if esc == '"' || esc == '\\' || esc == '$' || esc == '`' {
+							b.WriteByte(esc)
+						} else {
+							// other backslashes stay literal so sed regex escapes survive
+							b.WriteString("\\")
+							b.WriteByte(esc)
+						}
+						i += 2
+						continue
+					}
 				}
 				b.WriteByte(segment[i])
 				i++

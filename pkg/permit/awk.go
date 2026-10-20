@@ -71,43 +71,85 @@ func awkRegexOpens(out string) bool {
 	}
 }
 
-// awkStripStrings returns script with every string literal and regex constant
-// replaced by one space, so exec/write vectors inside literals never match.
-func awkStripStrings(script string) string {
+// awkLex returns script with backslash-newline continuations spliced and every
+// string literal, regex constant and comment replaced by one space, the text
+// awk's own lexer sees. ok is false on an unterminated string or regex, which
+// awk rejects before running any of it.
+func awkLex(script string) (code string, ok bool) {
 	var b strings.Builder
 	var i int
 	n := len(script)
 	for i < n {
 		ch := script[i]
 		if ch == '\\' && i+1 < n {
+			if cont := lineContinuation(script, i); cont > 0 {
+				i += cont // continuation joins before tokens form
+				continue
+			}
+			// an escaped backslash in code position is a syntax error in real awks,
+			// so whether the newline still splices varies only across invalid programs:
+			// splicing keeps the association and only ever fails safe
+			if script[i+1] == '\\' {
+				if cont := lineContinuation(script, i+1); cont > 0 {
+					b.WriteByte(ch)
+					i += 1 + cont
+					continue
+				}
+			}
 			b.WriteByte(ch)
 			b.WriteByte(script[i+1])
-			i += 2 // \X skips two outside quotes, keeps \" visible to later checks
+			i += 2
 			continue
 		}
-		if ch == '"' || ch == '\'' {
-			quote := ch
-			i++
-			for i < n && script[i] != quote {
-				if quote == '"' && script[i] == '\\' && i+1 < n {
-					i += 2 // \X skips two inside double quotes
+		if ch == '#' {
+			b.WriteByte(' ') // comment: awk ends it at the newline, no escape extends one
+			for i < n && script[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if ch == '"' {
+			i++ // single quotes never delimit awk strings, only double do
+			var closed bool
+			for i < n {
+				if cont := lineContinuation(script, i); cont > 0 {
+					i += cont // mawk/busybox splice continuations inside strings
 					continue
+				}
+				if script[i] == '\n' {
+					return "", false // a string constant never spans a raw newline
+				}
+				if script[i] == '\\' && i+1 < n {
+					i += 2 // escaped char, \" cannot close the string
+					continue
+				}
+				if script[i] == '"' {
+					closed = true
+					i++
+					break
 				}
 				i++
 			}
-			if i < n {
-				i++ // closing quote
+			if !closed {
+				return "", false
 			}
 			b.WriteByte(' ')
 			continue
 		}
 		if ch == '/' && awkRegexOpens(b.String()) {
-			i++ // consume the opening slash, an unterminated one rescan its contents below
+			i++
 			end := -1
 			for k := i; k < n; k++ {
+				if cont := lineContinuation(script, k); cont > 0 {
+					k += cont - 1 // loop's k++ completes the skip
+					continue
+				}
 				if script[k] == '\\' && k+1 < n {
 					k++
 					continue
+				}
+				if script[k] == '\n' {
+					break // a regex constant never spans a raw newline
 				}
 				if script[k] == '/' {
 					end = k
@@ -115,8 +157,7 @@ func awkStripStrings(script string) string {
 				}
 			}
 			if end < 0 {
-				b.WriteByte('/') // unterminated: emit opener, contents stay visible below
-				continue
+				return "", false // unterminated regex, awk rejects the program
 			}
 			b.WriteByte(' ')
 			i = end + 1
@@ -125,7 +166,7 @@ func awkStripStrings(script string) string {
 		b.WriteByte(ch)
 		i++
 	}
-	return b.String()
+	return b.String(), true
 }
 
 // awkIsWordChar reports whether b can continue an identifier.
@@ -150,11 +191,11 @@ func awkKeywordAt(code string, i int, kw string) bool {
 // of exec and file-write vectors. False positives (prompting a safe call) are
 // acceptable, false negatives are not.
 func awkScriptReadSafe(script string) bool {
-	// normalize CRLF, then splice backslash-newline: awk joins continuations
-	// before tokens form (POSIX; mawk/busybox also inside strings), else one
-	// hides statement boundaries or splits keywords
-	logical := strings.ReplaceAll(script, "\r\n", "\n")
-	code := awkStripStrings(strings.ReplaceAll(logical, "\\\n", ""))
+	// CRLF folds to LF first so a \r\n continuation splices like \n
+	code, ok := awkLex(strings.ReplaceAll(script, "\r\n", "\n"))
+	if !ok {
+		return false // malformed program, refuse rather than guess
+	}
 	if awkSystemCallRe.MatchString(code) || awkGetlinePipeRe.MatchString(code) ||
 		awkAtDirectiveRe.MatchString(code) {
 		return false

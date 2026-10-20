@@ -52,6 +52,17 @@ tem("x")}'`, false},
 		{"continuation in string", `awk 'BEGIN{print "a \
 > b"}'`, true},
 
+		// unquoted continuations join in tokenizeRaw before awk sees the script,
+		// so the pipe stays attached to its print
+		{"unquoted continuation pipe", "awk BEGIN\\{print\\\n\\|\"id\"}", false},
+
+		// awk comments end at the newline and single quotes are not string
+		// delimiters, so an apostrophe or a quote inside one hides nothing
+		{"comment apostrophe hides nothing", "awk \"# don't\nBEGIN{system(\\\"id\\\")}\" /dev/null", false},
+		{"comment quote hides nothing", "awk '# \" x\nBEGIN{system(\"id\")}'", false},
+		{"comment backslash no extend", "awk '# c \\\nBEGIN{system(\"id\")}'", false},
+		{"dquote continuation joins", "awk \"BEGIN{print \\\n\\\"hi\\\"}\" f", true},
+
 		// unverifiable flag forms and missing scripts fail safe.
 		{"script file", "awk -f prog.awk f", false},
 		{"dangling expression", "awk -e", false},
@@ -96,6 +107,20 @@ tem("x")}`, false},
 b/`, true},
 		{"spliced string literal", `BEGIN{print "a\
 b"}`, true},
+		// mawk splices an escaped backslash's continuation too, keeping the print
+		// and its redirect attached, so the splice reading is the one analysed
+		{"escaped backslash redirect", "{print $1 \\\\\n> \"f\"}", false},
+
+		// comments end at the newline, single quotes never open a string
+		{"comment then system", "# don't\nBEGIN{system(\"x\")}", false},
+		{"comment trailing backslash", "# c \\\nBEGIN{system(\"x\")}", false},
+		{"apostrophe in string", `BEGIN{print "don't"}`, true},
+
+		// malformed programs refuse instead of guessing
+		{"unterminated string", `BEGIN{print "x`, false},
+		{"string spans lines", "BEGIN{print \"a\nb\"}", false},
+		{"unterminated regex", `$1 ~ /a`, false},
+		{"newline in regex", "$1 ~ /a\nb/", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

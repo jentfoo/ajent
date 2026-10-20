@@ -26,6 +26,17 @@ func TestFileReadOnly(t *testing.T) {
 		{"compile abbrev", []string{"file", "--comp", "-m", "./magic"}, false},
 		{"compile minimal abbrev", []string{"file", "--c"}, false},
 		{"compile eq", []string{"file", "--compile=1"}, false},
+		// helper-running and sandbox-dropping spellings fail safe as unknowns
+		{"uncompress helper", []string{"file", "-z", "f.gz"}, false},
+		{"uncompress noread", []string{"file", "-Z", "f.gz"}, false},
+		{"preserve date utimes", []string{"file", "-p", "f"}, false},
+		{"no sandbox long", []string{"file", "--no-sandbox", "f"}, false},
+		{"preserve long", []string{"file", "--preserve-date", "f"}, false},
+		// unknown spellings prompt rather than allow
+		{"unknown short", []string{"file", "-q", "f"}, false},
+		{"unknown long", []string{"file", "--nope"}, false},
+		{"short with value ok", []string{"file", "-m", "./magic"}, true},
+		{"option terminator only", []string{"file", "--"}, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

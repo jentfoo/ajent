@@ -294,7 +294,7 @@ Categories:
 Compound constructs (pipelines, command substitution $(...) or backticks, loops for/while/until, and conditionals if/case) have no side effect of their own. Judge them by the commands they actually run: if every command inside only reads or inspects, the whole thing is "allow"; if any one writes, it is "deny". Examples: 'for f in *.md; do head -20 "$f"; done' and 'echo "=== $(basename "$f") ==="' are allow; 'for f in *.tmp; do rm "$f"; done' and 'x=$(mktemp)' are deny.
 
 Use your general knowledge of Unix tools. The examples below are illustrative, NOT exhaustive. Judge any unlisted command by what it actually does, not by whether it appears here.
-- allow examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file, df, du, wc, echo, printf, ps, env, uname, hostname, which, date, awk, jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
+- allow examples: ls, cat, head, tail, grep, rg, find (no -exec/-delete), stat, file (no -C/--compile), df, du, wc, echo, printf, ps, env, uname, hostname, which, date (no -s/--set), awk (inline script only, no system(), pipe or print redirect), jq, sed (without -i/--in-place and with no s///w or s///e flags in the script), tree, git status/log/diff/show.
 - deny examples: rm, mv, cp, touch, mkdir, rmdir, chmod, chown, ln, dd, truncate, tee, sed -i or sed --in-place; find -exec/-delete; git add/commit/checkout/reset/restore/push/pull/rebase/merge/stash; package installs (npm/pnpm/yarn/pip/apt/brew/cargo/go install); docker run/rm/kill, systemctl, mount, kill; curl/wget reading from or saving to the network.
 
 Reserve "unsure" for unrecognized commands. Respond with ONLY the one word.`

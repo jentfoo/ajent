@@ -5,32 +5,41 @@ import (
 	"strings"
 )
 
-// dateSetLong reports whether name is --set or a getopt_long abbreviation
-// of it, date's only long option starting with s.
-func dateSetLong(name string) bool {
-	return len(name) >= 3 && strings.HasPrefix("--set", name)
-}
-
 // dateValueLongs are date's read-only long options taking a separate argument.
 var dateValueLongs = []string{"--date", "--file", "--reference"}
 
-// dateValueLong reports whether name is a value-taking read-only long option
-// or an abbreviation of one.
+// datePlainLongs are date's read-only long options taking no separate value.
+// --iso-8601 and --rfc-3339 carry only attached =FMT values.
+var datePlainLongs = []string{
+	"--utc", "--universal", "--iso-8601", "--rfc-2822", "--rfc-3339",
+}
+
+// dateValueLong reports whether name is, or abbreviates, a value-taking
+// read-only long option.
 func dateValueLong(name string) bool {
 	return slices.ContainsFunc(dateValueLongs, func(flag string) bool {
 		return len(name) >= 3 && strings.HasPrefix(flag, name)
 	})
 }
 
-// dateValueShorts are the value-taking shorts across date variants (-d/-D
-// describe, -f input format, -r reference, -v display adjust). -s/-t are
-// rejected separately, -I carries an optional attached value.
+// datePlainLong reports whether name is, or abbreviates, a value-free
+// read-only long option.
+func datePlainLong(name string) bool {
+	return slices.ContainsFunc(datePlainLongs, func(flag string) bool {
+		return len(name) >= 3 && strings.HasPrefix(flag, name)
+	})
+}
+
+// dateValueShorts are the value-taking read-only shorts across date variants
+// (-d/-D describe or input format, -f input format, -r reference, -v display
+// adjust), -I carrying its optional value attached.
 const dateValueShorts = "dDfrv"
 
 // dateReadOnly reports whether a date invocation leaves the system clock
 // alone. Setting goes through -s/--set (GNU, busybox), -t (BSD kernel
-// timezone) or a bare new_date operand (BSD/macOS, -j opting out of the set).
-// Formats start with + and never set.
+// timezone) or a bare new_date operand (BSD/macOS, -j opting out of the set),
+// and formats start with +. Options off the tables are unverifiable: the
+// clock-setting spellings and busybox's -S fail safe as unknowns.
 func dateReadOnly(tokens []string) bool {
 	var jFlag, value bool
 	for _, tok := range tokens[1:] {
@@ -39,32 +48,36 @@ func dateReadOnly(tokens []string) bool {
 			continue
 		}
 		switch {
+		case tok == "--":
 		case strings.HasPrefix(tok, "--"):
 			name := tok
+			attached := strings.Contains(tok, "=")
 			if i := strings.IndexByte(name, '='); i >= 0 {
 				name = name[:i]
 			}
-			if dateSetLong(name) {
-				return false
+			if dateValueLong(name) {
+				if !attached {
+					value = true
+				}
+			} else if !datePlainLong(name) {
+				return false // unknown or clock-setting long option
 			}
-			value = dateValueLong(name)
 		case strings.HasPrefix(tok, "-") && tok != "-":
 			for k := 1; k < len(tok); k++ {
-				switch tok[k] {
-				case 's', 't':
-					return false // clock or kernel timezone set
-				case 'I':
+				switch c := tok[k]; {
+				case c == 'I':
 					k = len(tok) // optional attached FMT value
-				case 'j':
+				case c == 'j':
 					jFlag = true // display/conversion only
-				default:
-					if strings.IndexByte(dateValueShorts, tok[k]) >= 0 {
-						if k+1 == len(tok) {
-							value = true // separate value follows
-						} else {
-							k = len(tok) // attached value
-						}
+				case c == 'u' || c == 'R':
+				case strings.IndexByte(dateValueShorts, c) >= 0:
+					if k+1 == len(tok) {
+						value = true // separate value follows
+					} else {
+						k = len(tok) // attached value
 					}
+				default:
+					return false // unknown or clock-setting short
 				}
 			}
 		case !strings.HasPrefix(tok, "+") && !jFlag:

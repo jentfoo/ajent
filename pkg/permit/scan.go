@@ -601,11 +601,59 @@ func forEachSegment(s Scan, ok func(seg, raw string) bool) bool {
 	return true
 }
 
+// braceExpandRe matches a brace expansion pattern outside quotes, which the
+// shell rewrites into several words after analysis. Elements without a comma
+// or .. range (a{2}, {}) stay literal, so they never match.
+var braceExpandRe = regexp.MustCompile(`\{[^\s{}]*,[^\s{}]*\}|\{[^\s{}]*\.\.[^\s{}]*\}`)
+
+// expansionUnresolved reports whether raw carries shell expansion the analyser
+// cannot resolve: $ or a backtick outside single quotes, double quotes keeping
+// both live, or a brace pattern outside quotes. Such text can rewrite a flag or
+// split into several words after analysis, so it never verifies read-only.
+func expansionUnresolved(raw string) bool {
+	var unquoted strings.Builder
+	var i int
+	n := len(raw)
+	for i < n {
+		ch := raw[i]
+		switch {
+		case ch == '\\' && i+1 < n:
+			i += 2 // escaped pair, neither char expands
+		case ch == '\'':
+			i = skipQuoted(raw, i) // single-quoted text is literal
+			unquoted.WriteByte(' ')
+		case ch == '"':
+			j := i + 1
+			for j < n && raw[j] != '"' {
+				if raw[j] == '\\' && j+1 < n {
+					j += 2
+					continue
+				}
+				if raw[j] == '$' || raw[j] == '`' {
+					return true // expansion stays live inside double quotes
+				}
+				j++
+			}
+			i = j + 1 // past the closing quote, or past end when unterminated
+			unquoted.WriteByte(' ')
+		case ch == '$' || ch == '`':
+			return true
+		default:
+			unquoted.WriteByte(ch)
+			i++
+		}
+	}
+	return braceExpandRe.MatchString(unquoted.String())
+}
+
 // segmentIsReadOnly reports whether one collapsed segment (with its verbatim raw)
 // names a verifiably read-only command. find's flags are matched against both the
 // collapsed and verbatim text so a quoted "-delete" can never slip past, and any
 // env assignment defeats the verdict since the shell would treat it as one too.
 func segmentIsReadOnly(seg, raw string) bool {
+	if expansionUnresolved(raw) {
+		return false // the argv differs from the text analysed
+	}
 	if slices.ContainsFunc(findUnsafeFlags, func(re *regexp.Regexp) bool { return re.MatchString(seg) || re.MatchString(raw) }) {
 		return false
 	}
