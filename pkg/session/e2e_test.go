@@ -59,6 +59,75 @@ func toolTurn(id, name string) []llm.Event {
 	}
 }
 
+// TestReusedCallIDResumeRebuilds runs a session whose provider reuses one
+// tool-call id every step and verifies the rebuilt context equals what the loop
+// saw: each exchange under its own id, nothing collapsed or dropped.
+func TestReusedCallIDResumeRebuilds(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "session.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion, Model: "test"})
+	require.NoError(t, err)
+	r := NewRecorder(w)
+
+	set := &singleSet{tool: &noopTool{}}
+	// a fully framed text reply, so the final message carries a real block and
+	// round-trips through the transcript without nil-vs-empty skew
+	done := []llm.Event{
+		{Type: llm.EventTextStart, Index: 0},
+		{Type: llm.EventTextDelta, Index: 0, Text: "done"},
+		{Type: llm.EventTextEnd, Index: 0, Block: llm.TextBlock{Text: "done"}},
+		{Type: llm.EventDone, StopReason: llm.StopEndTurn},
+	}
+	scripted := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: toolTurn("c1", "bash")},
+		{Events: toolTurn("c1", "bash")},
+		{Events: done},
+	}}
+	var live []llm.Message
+	a := agent.New(&agent.State{
+		Model:     llm.Model{ID: "test"},
+		Reasoning: llm.ReasoningConfig{},
+		Tools:     []string{"bash"},
+		Tokens:    tokens.New(llm.Model{ID: "test"}),
+	}, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return scripted, nil },
+		Sinks:    []agent.Sink{r.Sink(agent.NopSink{})},
+		Tools:    set,
+		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"},
+		OnMessage: []func(agent.MessageInfo){
+			r.Message,
+			func(info agent.MessageInfo) { live = append(live, info.Message) },
+		},
+	})
+
+	require.NoError(t, a.Prompt(t.Context(), agent.Input{Text: "run it twice"}))
+	require.NoError(t, w.Close())
+
+	entries, warns, rerr := Read(p)
+	require.NoError(t, rerr)
+	assert.Empty(t, warns)
+	branch := Branch(entries, Head(entries))
+	st, swarns := State(branch, func(key string) (llm.Model, error) { return llm.Model{ID: "test"}, nil })
+	assert.Empty(t, swarns)
+
+	// rebuild equality: the transcript replays to exactly what the loop saw
+	assert.Equal(t, live, st.Messages)
+	assert.True(t, wellFormed(st.Messages))
+
+	var callIDs []string
+	for _, m := range st.Messages {
+		for _, b := range m.Content {
+			if tc, ok := b.(llm.ToolCallBlock); ok {
+				callIDs = append(callIDs, tc.ID)
+			}
+		}
+	}
+	require.Len(t, callIDs, 2)
+	assert.Equal(t, "c1", callIDs[0])   // the first exchange keeps the provider id
+	assert.Equal(t, "c1_2", callIDs[1]) // the reuse was renamed before persist
+}
+
 // TestCrashResumeRebuildsState kills an agent mid-tool-dispatch and verifies the
 // transcript rebuilds to exactly what it saw before the crash.
 func TestCrashResumeRebuildsState(t *testing.T) {

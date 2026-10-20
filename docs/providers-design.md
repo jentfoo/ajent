@@ -121,10 +121,12 @@ sent:
   before any later turn or at the end of the list. Assistant turns whose stop
   reason is `error` are skipped, and their tool results dropped with them. This
   makes well-formedness a request-build invariant rather than just an abort-time
-  repair. A call or result with an empty id drops, and a repeated id keeps only
-  its first call and first result, since neither shape can ever pair. (The
-  agent loop rewrites degenerate ids when the stream delivers them, so live
-  turns never carry them.)
+  repair. A call or result with an empty id drops, and two calls sharing one id
+  in one assistant turn keep only the first, since neither shape can ever pair.
+  An id a later exchange reuses is renamed instead of dropped: distinct round
+  trips are distinct history, and both ship under unambiguous ids. (The agent
+  loop rewrites degenerate and reused ids at the stream boundary, so live turns
+  never carry them. The rename here covers transcripts recorded before that.)
 - **Malformed tool-call input** rides as `{}`: argument JSON that never parsed
   fails its one call at the stream boundary (invariant 7), so substituting loses
   nothing. Shipping the raw bytes would break every later request instead:

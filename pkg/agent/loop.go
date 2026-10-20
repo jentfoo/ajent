@@ -243,11 +243,12 @@ func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 			result.Err = err
 			break
 		}
-		// a provider that sent duplicate or absent ids gets them repaired before the
-		// message lands, so the transcript, dispatch and the abort fill all pair by id
-		if fixed, changed := llm.RepairToolCallIDs(msg); changed {
+		// a provider that sent duplicate or absent ids, or reused one an earlier
+		// turn already spent, gets them repaired before the message lands, so the
+		// transcript, dispatch, the abort fill and every later request pair by id
+		if fixed, changed := llm.RepairToolCallIDs(msg, a.state.Messages); changed {
 			msg = fixed
-			sink.Notice("repaired duplicate or missing tool-call ids from the stream", LevelWarn)
+			sink.Notice("repaired duplicate, missing or reused tool-call ids from the stream", LevelWarn)
 		}
 		// usage rides with the assistant message it came from so a session records
 		// per-message token accounting (user echoes and tool results carry none).

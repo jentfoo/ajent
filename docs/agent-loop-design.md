@@ -339,12 +339,14 @@ Dispatch rules:
   `llm.RepairToolInputs` at append), so the transcript entry persists and its
   tool result never orphans.
 - **Degenerate call ids are repaired at the stream boundary.** A misbehaving
-  server can emit two calls sharing one id or a call whose id never arrives.
-  The loop rewrites those ids (`llm.RepairToolCallIDs`) when the message
-  assembles, before append, dispatch or the abort fill see it, with a visible
-  notice. Matching by id everywhere downstream means the transcript, request
-  building and replay never have to tolerate the degenerate shape. Synthesized
-  ids are deterministic so a replayed transcript rebuilds identically.
+  server can emit two calls sharing one id, a call whose id never arrives, or a
+  call reusing an id an earlier turn already spent. The loop rewrites those ids
+  (`llm.RepairToolCallIDs`, unique against every id the session already holds)
+  when the message assembles, before append, dispatch or the abort fill see it,
+  with a visible notice. Matching by id everywhere downstream means the
+  transcript, request building and replay never have to tolerate the degenerate
+  shape. Synthesized ids derive deterministically from what the transcript
+  stores, so a replayed transcript rebuilds identically.
 - **A tool may end the turn** by returning `ToolResult{EndTurn: true}`: results
   are appended as usual and the loop stops with `StopEndTurn` instead of
   streaming another reply. It is how a control tool hands a phase to another

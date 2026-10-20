@@ -478,14 +478,26 @@ func TestRepairToolCallIDs(t *testing.T) {
 			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
 			ToolCallBlock{ID: "c2", Name: "read", Input: json.RawMessage(`{}`)},
 		}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.False(t, changed)
 		assert.Same(t, &in.Content[0], &out.Content[0]) // clean path shares backing
 	})
 
+	t.Run("clean_ids_untouched_over_history", func(t *testing.T) {
+		history := []Message{{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c9", Name: "read", Input: json.RawMessage(`{}`)},
+		}}}
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in, history)
+		assert.False(t, changed)
+		assert.Same(t, &in.Content[0], &out.Content[0])
+	})
+
 	t.Run("no_calls_untouched", func(t *testing.T) {
 		in := Message{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "hi"}}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.False(t, changed)
 		assert.Equal(t, in, out)
 	})
@@ -494,7 +506,7 @@ func TestRepairToolCallIDs(t *testing.T) {
 		in := Message{Role: RoleAssistant, Content: BlockList{
 			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{"a":1}`)},
 		}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.True(t, changed)
 		tc := out.Content[0].(ToolCallBlock)
 		assert.NotEmpty(t, tc.ID)
@@ -507,13 +519,12 @@ func TestRepairToolCallIDs(t *testing.T) {
 			ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
 			ToolCallBlock{ID: "c1", Name: "b", Input: json.RawMessage(`{}`)},
 		}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.True(t, changed)
 		first := out.Content[0].(ToolCallBlock)
 		second := out.Content[1].(ToolCallBlock)
 		assert.Equal(t, "c1", first.ID)
-		assert.NotEqual(t, "c1", second.ID)
-		assert.NotEmpty(t, second.ID)
+		assert.Equal(t, "c1_2", second.ID) // recognizable derivation, not a hash
 		assert.Equal(t, "b", second.Name)
 	})
 
@@ -522,7 +533,7 @@ func TestRepairToolCallIDs(t *testing.T) {
 			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
 			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
 		}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.True(t, changed)
 		first := out.Content[0].(ToolCallBlock)
 		second := out.Content[1].(ToolCallBlock)
@@ -538,11 +549,62 @@ func TestRepairToolCallIDs(t *testing.T) {
 			ToolCallBlock{ID: want, Name: "read", Input: json.RawMessage(`{}`)},
 			ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)},
 		}}
-		out, changed := RepairToolCallIDs(in)
+		out, changed := RepairToolCallIDs(in, nil)
 		assert.True(t, changed)
 		second := out.Content[1].(ToolCallBlock)
 		assert.NotEqual(t, want, second.ID)
 		assert.NotEmpty(t, second.ID)
+	})
+
+	t.Run("history_collision_renamed", func(t *testing.T) {
+		// an id an earlier turn already spent is a distinct exchange, not a
+		// duplicate: both must ship, so the newcomer is renamed recognizably
+		history := []Message{
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{CallID: "c1"}}},
+		}
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)},
+		}}
+		out, changed := RepairToolCallIDs(in, history)
+		assert.True(t, changed)
+		assert.Equal(t, "c1_2", out.Content[0].(ToolCallBlock).ID)
+	})
+
+	t.Run("history_suffix_probe_skips_taken", func(t *testing.T) {
+		history := []Message{
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1_2"}}},
+		}
+		in := Message{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}}
+		out, changed := RepairToolCallIDs(in, history)
+		assert.True(t, changed)
+		assert.Equal(t, "c1_3", out.Content[0].(ToolCallBlock).ID)
+	})
+
+	t.Run("identical_empty_ids_across_turns_unique", func(t *testing.T) {
+		// the exact regression the history set exists for: two turns, same
+		// name/args/index, both empty ids must not hash to one shared id
+		mk := func() Message {
+			return Message{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{"a":1}`)},
+			}}
+		}
+		first, _ := RepairToolCallIDs(mk(), nil)
+		second, _ := RepairToolCallIDs(mk(), []Message{first})
+		id1 := first.Content[0].(ToolCallBlock).ID
+		id2 := second.Content[0].(ToolCallBlock).ID
+		assert.NotEqual(t, id1, id2)
+		assert.Contains(t, id2, synthCallIDPrefix)
+	})
+
+	t.Run("synth_derivable_from_persisted_input", func(t *testing.T) {
+		// the hash must run over {} (what the transcript stores after the input
+		// repair), so an id stays derivable from what was persisted
+		raw := ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{"pa`)}
+		fixed := ToolCallBlock{ID: "", Name: "bash", Input: json.RawMessage(`{}`)}
+		taken := map[string]struct{}{}
+		assert.Equal(t, synthCallID(raw, 0, taken), synthCallID(fixed, 0, taken))
 	})
 
 	t.Run("deterministic", func(t *testing.T) {
@@ -552,9 +614,24 @@ func TestRepairToolCallIDs(t *testing.T) {
 				ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
 			}}
 		}
-		first, _ := RepairToolCallIDs(mk())
-		second, _ := RepairToolCallIDs(mk())
+		first, _ := RepairToolCallIDs(mk(), nil)
+		second, _ := RepairToolCallIDs(mk(), nil)
 		assert.Equal(t, first, second)
+	})
+
+	t.Run("repair_idempotent_over_history", func(t *testing.T) {
+		history := []Message{{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read"},
+		}}}
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "", Name: "b", Input: json.RawMessage(`{}`)},
+		}}
+		once, changed := RepairToolCallIDs(in, history)
+		assert.True(t, changed)
+		twice, changedAgain := RepairToolCallIDs(once, history)
+		assert.False(t, changedAgain)
+		assert.Equal(t, once, twice)
 	})
 }
 
@@ -656,6 +733,89 @@ func TestRepairTurns(t *testing.T) {
 		tr := out[1].Content[0].(ToolResultBlock)
 		assert.True(t, tr.IsError)
 		assert.Equal(t, noResult, tr.Content[0].(TextBlock).Text)
+	})
+
+	t.Run("reused_id_across_exchanges_preserved", func(t *testing.T) {
+		// the reported shape: a provider reusing one id every step. Both round
+		// trips are distinct history, so the later one is renamed, not dropped
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "r1"}}}}},
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "r2"}}}}},
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 4) // nothing deleted from context
+		assert.Equal(t, "c1", out[0].Content[0].(ToolCallBlock).ID)
+		assert.Equal(t, "c1", out[1].Content[0].(ToolResultBlock).CallID)
+		assert.Equal(t, "c1_2", out[2].Content[0].(ToolCallBlock).ID)       // renamed, recognizable
+		assert.Equal(t, "c1_2", out[3].Content[0].(ToolResultBlock).CallID) // result follows its call
+		assert.Equal(t, "r2", out[3].Content[0].(ToolResultBlock).Content[0].(TextBlock).Text)
+	})
+
+	t.Run("third_exchange_next_suffix", func(t *testing.T) {
+		exchange := func() (Message, Message) {
+			return Message{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+				Message{Role: RoleUser, Content: BlockList{ToolResultBlock{CallID: "c1"}}}
+		}
+		c1, r1 := exchange()
+		c2, r2 := exchange()
+		c3, r3 := exchange()
+		in := []Message{c1, r1, c2, r2, c3, r3}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 6)
+		assert.Equal(t, "c1", out[0].Content[0].(ToolCallBlock).ID)
+		assert.Equal(t, "c1_2", out[2].Content[0].(ToolCallBlock).ID)
+		assert.Equal(t, "c1_3", out[4].Content[0].(ToolCallBlock).ID)
+	})
+
+	t.Run("same_batch_duplicate_keeps_first", func(t *testing.T) {
+		// two calls sharing one id inside one batch still cannot pair, so the
+		// recorded single-request rule applies: first call, first result
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "a"}, ToolCallBlock{ID: "c1", Name: "b"}}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "ra"}}},
+				ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "rb"}}}}},
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 2)
+		assert.Len(t, out[0].Content, 1)
+		assert.Len(t, out[1].Content, 1)
+		assert.Equal(t, "ra", out[1].Content[0].(ToolResultBlock).Content[0].(TextBlock).Text)
+	})
+
+	t.Run("errored_id_reuse_keeps_later_results", func(t *testing.T) {
+		// an errored turn and a later turn sharing an id: the skip must release
+		// the id so the new exchange keeps its own result
+		in := []Message{
+			{Role: RoleAssistant, Stop: StopError, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "old"}}}}},
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "new"}}}}},
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 2) // the errored round trip dropped, the live one whole
+		assert.Equal(t, "new", out[1].Content[0].(ToolResultBlock).Content[0].(TextBlock).Text)
+	})
+
+	t.Run("reused_id_prepare_idempotent", func(t *testing.T) {
+		in := []Message{
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "r1"}}}}},
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1"}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{
+				CallID: "c1", Content: BlockList{TextBlock{Text: "r2"}}}}},
+		}
+		once := Prepare(Request{Model: m, Messages: in})
+		twice := Prepare(Request{Model: m, Messages: once.Messages})
+		assert.Equal(t, once.Messages, twice.Messages) // renamed ids are stable
 	})
 
 	t.Run("bridging_assistant_inserted", func(t *testing.T) {

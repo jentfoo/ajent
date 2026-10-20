@@ -28,10 +28,10 @@ const processedTools = "I have processed the tool results."
 // Prepare returns req with its messages normalized for the target model: images
 // downgraded, leaked inline reasoning split back into thinking blocks, foreign
 // reasoning degraded to text or dropped, retention applied, tool-call ids made
-// legal and unanswered calls answered, malformed tool-call inputs replaced with
-// {}. Every request path passes through it so the estimator and the wire never
-// disagree about what is sent. It is idempotent, so calling it twice yields an
-// identical message list.
+// legal and reused ones disambiguated, unanswered calls answered, malformed
+// tool-call inputs replaced with {}. Every request path passes through it so the
+// estimator and the wire never disagree about what is sent. It is idempotent, so
+// calling it twice yields an identical message list.
 func Prepare(req Request) Request {
 	caps := req.Model.Caps
 	target := Origin{Provider: req.Model.Provider, Dialect: caps.Dialect, Model: req.Model.ID}
@@ -477,14 +477,16 @@ func trHasText(content BlockList) bool {
 // skipped along with their tool results (their results would be an unmatched
 // tool_result Anthropic rejects), aborted ones stay because the abort path fills
 // every pending call, and unanswered calls receive a synthetic error result.
-// Empty ids drop and a repeated id keeps only its first call and first result,
-// the only shapes that still pair on the wire.
+// Empty ids drop and two calls sharing one id inside a batch keep only the
+// first, the only shapes that still cannot pair. An id a later exchange reuses
+// is renamed instead: distinct round trips are distinct history, and both ship.
 func repairTurns(msgs []Message, caps Capabilities) []Message {
 	out := make([]Message, 0, len(msgs))
 	skippedCalls := map[string]struct{}{}
 	pending := map[string]ToolCallBlock{}
 	seenCalls := map[string]struct{}{} // every call id already emitted, answered or not
 	answered := map[string]struct{}{}  // every call id a result already answered
+	renamed := map[string]string{}     // reused id -> the id its latest exchange ships under
 	var order []string
 	var lastWasResults bool // whether the last emitted message was tool-results-only
 
@@ -541,6 +543,9 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 				if _, skip := skippedCalls[tr.CallID]; skip {
 					continue // result of a skipped (errored) call
 				}
+				if nid := renamed[tr.CallID]; nid != "" {
+					tr.CallID = nid // a reused exchange reads under its renamed id
+				}
 				if _, dup := answered[tr.CallID]; dup {
 					continue // echo of an already-answered duplicate call
 				}
@@ -558,12 +563,23 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 				if tc.ID == "" {
 					continue // unanswerable, dropped rather than sent dangling
 				}
+				// a live call re-owning the id frees an earlier errored turn's skip
+				delete(skippedCalls, tc.ID)
 				if _, dup := seenCalls[tc.ID]; dup {
-					continue // repeated id: the first call is the one results pair with
+					if _, open := pending[tc.ID]; open {
+						continue // same batch: two calls cannot pair under one id, first stands
+					}
+					// a later exchange reusing an id an earlier one spent: rename so
+					// both round trips ship, the first keeps the original
+					nid := uniqueCallID(tc.ID, seenCalls)
+					renamed[tc.ID] = nid
+					tc.ID = nid
 				}
 				seenCalls[tc.ID] = struct{}{}
 				pending[tc.ID] = tc
 				order = append(order, tc.ID)
+				content = append(content, tc)
+				continue
 			}
 			content = append(content, b)
 		}
@@ -630,42 +646,39 @@ func repairCallInputs(m Message) (Message, bool) {
 	return m, true
 }
 
-// synthCallIDPrefix leads every id synthesized for a degenerate tool call, so
+// synthCallIDPrefix leads every id synthesized for an absent tool-call id, so
 // repairs stay recognizable in transcripts and request logs.
 const synthCallIDPrefix = "synth_"
 
-// RepairToolCallIDs returns m with every empty or repeated tool-call id made
-// unique, and reports whether any id changed. Only a unique id pairs a call
-// with its own result on the wire.
-func RepairToolCallIDs(m Message) (Message, bool) {
-	if !hasDegenerateCallID(m.Content) {
-		return m, false
-	}
-	// every id the message holds, so a synthesized one cannot collide with a sibling
-	taken := make(map[string]struct{})
-	for _, b := range m.Content {
-		if tc, ok := b.(ToolCallBlock); ok && tc.ID != "" {
-			taken[tc.ID] = struct{}{}
-		}
-	}
-
+// RepairToolCallIDs returns m with every tool-call id that is empty, repeated
+// in m, or already used by history rewritten to a unique one, and reports
+// whether any id changed. History is every message the session already holds,
+// so a rewritten id cannot collide with the transcript either. Only a unique
+// id pairs a call with its own result on the wire.
+func RepairToolCallIDs(m Message, history []Message) (Message, bool) {
+	// ids history already spent, joined by each first occurrence in m
+	taken := usedCallIDs(history)
 	var content BlockList
-	seen := make(map[string]struct{}, len(taken)) // first occurrences kept
 	for i, b := range m.Content {
 		tc, ok := b.(ToolCallBlock)
 		if !ok {
 			continue
 		}
 		if tc.ID != "" {
-			if _, first := seen[tc.ID]; !first {
-				seen[tc.ID] = struct{}{}
+			if _, used := taken[tc.ID]; !used {
+				taken[tc.ID] = struct{}{} // first occurrence stands
 				continue
 			}
 		}
 		if content == nil {
 			content = slices.Clone(m.Content)
 		}
-		tc.ID = synthCallID(tc, i, taken)
+		if tc.ID == "" {
+			tc.ID = synthCallID(tc, i, taken) // absent id: nothing to keep, hash-name it
+		} else {
+			// repeated in m or reused from history: keep the id recognizable
+			tc.ID = uniqueCallID(tc.ID, taken)
+		}
 		taken[tc.ID] = struct{}{}
 		content[i] = tc
 	}
@@ -676,29 +689,41 @@ func RepairToolCallIDs(m Message) (Message, bool) {
 	return m, true
 }
 
-// hasDegenerateCallID reports whether blocks carry an empty or repeated tool-call id.
-func hasDegenerateCallID(blocks BlockList) bool {
-	for i, b := range blocks {
-		tc, ok := b.(ToolCallBlock)
-		if !ok {
-			continue
-		}
-		if tc.ID == "" {
-			return true
-		}
-		if slices.ContainsFunc(blocks[:i], func(p Block) bool {
-			ptc, isCall := p.(ToolCallBlock)
-			return isCall && ptc.ID == tc.ID
-		}) {
-			return true
+// usedCallIDs returns every tool-call id and result call id msgs holds.
+func usedCallIDs(msgs []Message) map[string]struct{} {
+	set := make(map[string]struct{})
+	for _, m := range msgs {
+		for _, b := range m.Content {
+			switch v := b.(type) {
+			case ToolCallBlock:
+				if v.ID != "" {
+					set[v.ID] = struct{}{}
+				}
+			case ToolResultBlock:
+				if v.CallID != "" {
+					set[v.CallID] = struct{}{}
+				}
+			}
 		}
 	}
-	return false
+	return set
 }
 
 // synthCallID returns an id for the tool call at index i that no entry of taken holds.
+// Invalid input hashes as {}, matching the form the transcript persists, so the id
+// stays derivable from stored state.
 func synthCallID(tc ToolCallBlock, i int, taken map[string]struct{}) string {
-	base := synthCallIDPrefix + shortHash(tc.Name+"\x00"+string(tc.Input)+"\x00"+strconv.Itoa(i))
+	input := tc.Input
+	if !json.Valid(input) {
+		input = json.RawMessage("{}")
+	}
+	base := synthCallIDPrefix + shortHash(tc.Name+"\x00"+string(input)+"\x00"+strconv.Itoa(i))
+	return uniqueCallID(base, taken)
+}
+
+// uniqueCallID returns base, or base with the first free _N suffix, so a
+// rewritten id never collides with one taken already holds.
+func uniqueCallID(base string, taken map[string]struct{}) string {
 	id := base
 	for n := 2; ; n++ {
 		if _, ok := taken[id]; !ok {

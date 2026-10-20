@@ -468,7 +468,38 @@ func TestLoopRepairsDegenerateCallIDs(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, ids[1], call.ID) // transcript call matches its result
 
-		assert.Contains(t, rec.calls, "notice:repaired duplicate or missing tool-call ids from the stream")
+		assert.Contains(t, rec.calls, "notice:repaired duplicate, missing or reused tool-call ids from the stream")
+	})
+
+	// a provider reusing one id on each step: every exchange is distinct
+	// history, so the second is renamed before persist and nothing drops out
+	// of later requests
+	t.Run("reused_across_turns", func(t *testing.T) {
+		set := &mapSet{tools: map[string]Tool{"a": &stubTool{name: "a", result: "ra"}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "a")},
+			{Events: toolCallEvents("c1", "a")},
+			{Events: textOnly("done")},
+		}}
+		rec := &recordingSink{}
+		a := newTestAgent(nil, p, rec)
+		a.opts.Tools = set
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.True(t, wellFormed(a.state.Messages))
+
+		var callIDs []string
+		for _, msg := range a.state.Messages {
+			for _, b := range msg.Content {
+				if tc, ok := b.(llm.ToolCallBlock); ok {
+					callIDs = append(callIDs, tc.ID)
+				}
+			}
+		}
+		require.Len(t, callIDs, 2)
+		assert.Equal(t, "c1", callIDs[0])   // the first exchange keeps the provider id
+		assert.Equal(t, "c1_2", callIDs[1]) // the reuse renamed before anything persisted
+		assert.Contains(t, rec.calls, "notice:repaired duplicate, missing or reused tool-call ids from the stream")
 	})
 
 	// a call whose id never arrives still executes and gets answered under a
