@@ -37,7 +37,9 @@ type fakeHost struct {
 	askErr   error
 	// messages is what the live context carries, for the summary fallback
 	messages []llm.Message
-	// landed says the persisted entry is followed by messages on the branch
+	// landed says the newest custom entry is followed by messages on the
+	// branch. A persist drops it to false the way a real append would, so a
+	// restore must read it before persisting
 	landed  bool
 	forkErr error
 
@@ -109,6 +111,7 @@ func (f *fakeHost) host() Host {
 			defer f.mu.Unlock()
 			p, _ := v.(persisted)
 			f.persisted = append(f.persisted, p)
+			f.landed = false // the appended custom entry sits at the tail
 			return nil
 		},
 		Restore: func(v any) bool {

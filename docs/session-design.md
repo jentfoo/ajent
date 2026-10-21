@@ -65,7 +65,7 @@ entry point owns its own surfacing policy (detailed in the resume table below).
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
 | `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON. A JSON null marks a reset: the override was cleared, so replay returns that domain to its unrecorded state instead of applying it |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
-| `custom` | `CustomData` | opaque extension state that must survive a resume; `LatestCustom(branch, type, v)` reads the newest one back, so a feature stores latest-wins state rather than writing its own reverse scan |
+| `custom` | `CustomData` | opaque extension state that must survive a resume; `LatestCustom(branch, type, v)` reads the newest one back and `CustomLanded(branch, type)` reports whether a message follows it, so a feature stores latest-wins state rather than writing its own reverse scan |
 
 Unknown types and unknown payload fields round-trip untouched, so older binaries
 can read files written by newer ones.

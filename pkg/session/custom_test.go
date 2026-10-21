@@ -97,4 +97,14 @@ func TestCustomLanded(t *testing.T) {
 	t.Run("missing_custom_nothing_pending", func(t *testing.T) {
 		assert.True(t, CustomLanded([]Entry{msgWithID("m1", llmText("hi"))}, "plan"))
 	})
+
+	// a branch of bookkeeping alone reaches the scan's end, which the godoc
+	// counts as landed: no entry of the type, nothing pending
+	t.Run("bookkeeping_only_lands", func(t *testing.T) {
+		branch := []Entry{
+			{ID: "s1", Type: TypeSession},
+			{ID: "mc1", Type: TypeModelChange},
+		}
+		assert.True(t, CustomLanded(branch, "plan"))
+	})
 }

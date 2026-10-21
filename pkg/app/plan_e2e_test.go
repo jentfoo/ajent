@@ -194,18 +194,15 @@ func (h *planHarness) host() plan.Host {
 
 		Persist: func(v any) error { return rec.rec.Custom(plan.CustomType, v) },
 		Restore: func(v any) bool {
-			entries, _, rerr := session.Read(w.Path())
-			if rerr != nil {
+			branch, ok := resumedBranch(w)
+			if !ok {
 				return false
 			}
-			return session.LatestCustom(session.Branch(entries, w.Head()), plan.CustomType, v)
+			return session.LatestCustom(branch, plan.CustomType, v)
 		},
 		Landed: func() bool {
-			entries, _, rerr := session.Read(w.Path())
-			if rerr != nil {
-				return true
-			}
-			return session.CustomLanded(session.Branch(entries, w.Head()), plan.CustomType)
+			branch, ok := resumedBranch(w)
+			return !ok || session.CustomLanded(branch, plan.CustomType)
 		},
 		ResolveModel: h.resolveModel,
 
@@ -276,9 +273,8 @@ func (h *planHarness) resumeFromTranscript(t *testing.T) []llm.Message {
 
 	// the resumed process registers its own control tools
 	h.toolsReg.Unregister(plan.Source)
-	entries, _, err := session.Read(h.rec.w.Path())
-	require.NoError(t, err)
-	branch := session.Branch(entries, resumeHead(h.rec.w.Head(), entries))
+	branch, ok := resumedBranch(h.rec.w)
+	require.True(t, ok)
 	rebuilt, _ := session.State(branch, func(key string) (llm.Model, error) {
 		m, ok := h.resolveModel(key)
 		if !ok {
@@ -510,4 +506,76 @@ func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	planningCtx := texts(h.planner.Requests()[0])
 	assert.Contains(t, planningCtx, "planning, not implementing")
 	assert.Contains(t, planningCtx, "add a --version flag")
+}
+
+// TestPlanResumeLandedKickoffStaysSingle drives a mid-workflow resume whose
+// kickoff already landed: the restore must stay silent and the next prompt must
+// not carry a second copy of the review kickoff.
+func TestPlanResumeLandedKickoffStaysSingle(t *testing.T) {
+	t.Parallel()
+
+	// the first review ends with no verdict, so the plain-mode ask fails and the
+	// workflow parks in reviewing with both kickoffs delivered
+	h := newPlanHarness(t,
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("1", plan.DevImplementTool, `{"plan":"the plan"}`)},
+			{Events: textTurn("still reading the diff")},
+			{Events: devCallTurn("2", plan.DevCompleteTool, `{}`)},
+		},
+		[]llm.ScriptedTurn{
+			{Events: devCallTurn("3", plan.DevReviewTool, `{"summary":"added the flag"}`)},
+		},
+	)
+	require.Empty(t, h.ctl.Start(t.Context(), ""))
+	h.prompt(t, "add a --version flag")
+	h.prompt(t, "the plan") // implementing and review kickoffs both land
+	require.True(t, h.ctl.Active())
+
+	h.resumeFromTranscript(t)
+	require.True(t, h.ctl.Active())
+	assert.NotContains(t, strings.Join(h.notices, "\n"), "never reached the transcript")
+
+	_, changed := h.ctl.BeforePrompt(t.Context(), agent.Input{Text: "ship it"})
+	assert.False(t, changed) // no repaired kickoff rides ahead of the prompt
+
+	h.prompt(t, "ship it")
+	require.False(t, h.ctl.Active())
+	finalCtx := texts(h.planner.Requests()[2])
+	assert.Equal(t, 1, strings.Count(finalCtx, "<plan>\n"))
+	assert.Equal(t, 1, strings.Count(finalCtx, "<implementation_summary>"))
+	assert.Contains(t, finalCtx, "ship it")
+}
+
+// TestPlanResumeLandedGoalStaysCaptured covers the planning half of the same
+// resume: a goal that already landed must stay captured, so a later prompt is
+// an ordinary steer rather than the goal all over again.
+func TestPlanResumeLandedGoalStaysCaptured(t *testing.T) {
+	t.Parallel()
+
+	h := newPlanHarness(t,
+		[]llm.ScriptedTurn{
+			{Events: textTurn("exploring the tree")},
+			{Events: devCallTurn("1", plan.DevImplementTool, `{"plan":"the plan"}`)},
+		},
+		nil,
+	)
+	require.Empty(t, h.ctl.Start(t.Context(), ""))
+	h.prompt(t, "add a --version flag") // the goal lands, the planner explores
+	require.True(t, h.ctl.Active())
+
+	h.resumeFromTranscript(t)
+	require.True(t, h.ctl.Active())
+	notices := strings.Join(h.notices, "\n")
+	assert.NotContains(t, notices, "never reached the transcript")
+	assert.NotContains(t, notices, "becomes the goal")
+
+	_, changed := h.ctl.BeforePrompt(t.Context(), agent.Input{Text: "also handle windows"})
+	assert.False(t, changed) // an ordinary steer, not the goal retyped
+
+	h.prompt(t, "also handle windows")
+	require.Equal(t, []string{"the plan"}, h.editor) // the gate is reached normally
+	steerCtx := texts(h.planner.Requests()[1])
+	assert.Equal(t, 1, strings.Count(steerCtx, "planning, not implementing"))
+	assert.Equal(t, 1, strings.Count(steerCtx, "add a --version flag"))
+	assert.Contains(t, steerCtx, "also handle windows")
 }

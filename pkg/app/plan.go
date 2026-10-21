@@ -123,19 +123,17 @@ func newPlanController(d planDeps) *plan.Controller {
 
 		Persist: func(v any) error { return d.rec.rec.Custom(plan.CustomType, v) },
 		Restore: func(v any) bool {
-			entries, _, err := session.Read(d.rec.w.Path())
-			if err != nil || len(entries) == 0 {
+			branch, ok := resumedBranch(d.rec.w)
+			if !ok {
 				return false
 			}
-			branch := session.Branch(entries, resumeHead(d.rec.w.Head(), entries))
 			return session.LatestCustom(branch, plan.CustomType, v)
 		},
 		Landed: func() bool {
-			entries, _, err := session.Read(d.rec.w.Path())
-			if err != nil {
+			branch, ok := resumedBranch(d.rec.w)
+			if !ok {
 				return true // unreadable: leave the phase as persisted
 			}
-			branch := session.Branch(entries, resumeHead(d.rec.w.Head(), entries))
 			return session.CustomLanded(branch, plan.CustomType)
 		},
 		ResolveModel: func(key string) (llm.Model, bool) {
@@ -159,6 +157,16 @@ func newPlanController(d planDeps) *plan.Controller {
 		},
 		Git: plan.GitState,
 	})
+}
+
+// resumedBranch reads the live transcript's branch at the writer head, the
+// one a resume continues. ok is false when the file cannot be read.
+func resumedBranch(w *session.Writer) ([]session.Entry, bool) {
+	entries, _, err := session.Read(w.Path())
+	if err != nil {
+		return nil, false
+	}
+	return session.Branch(entries, resumeHead(w.Head(), entries)), true
 }
 
 // planHooksFor adapts the controller onto the pump and drain seams, reading the

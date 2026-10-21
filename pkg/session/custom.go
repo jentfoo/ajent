@@ -40,5 +40,5 @@ func CustomLanded(branch []Entry, customType string) bool {
 			}
 		}
 	}
-	return false
+	return true
 }

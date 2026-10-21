@@ -190,24 +190,29 @@ design: it is the user's agent.
 
 One latest-wins `custom` entry, `customType: "plan"`, written at every
 transition on the branch that transition creates. `session.LatestCustom`
-reverse-scans the resumed branch for it. `PhaseDone`/`PhaseIdle` is terminal, so
-a later resume never resurrects a finished run, and a model that no longer
-resolves abandons the restore with a notice. Tool sets are runtime-only, so a
-resume re-applies the phase scope rather than reconstructing it from
-`setting_change` entries.
+reverse-scans the resumed branch for it, and `session.CustomLanded` tells
+whether a message follows the entry it found. `PhaseDone`/`PhaseIdle` is
+terminal, so a later resume never resurrects a finished run, and a model that
+no longer resolves abandons the restore with a notice. Tool sets are
+runtime-only, so a resume re-applies the phase scope rather than reconstructing
+it from `setting_change` entries.
 
-The entry also persists the awaiting draft (`draftPlan`) at the gate, and resume
-puts it back into the editor: a crash or exit while parked must not silently
-turn the next arbitrary prompt into the plan of record. The draft is cleared
-once the gate passes.
+The entry also persists the awaiting draft (`draftPlan`) at the gate and the
+implementation summary (`execSummary`) a reviewing resume's repair kickoff
+quotes, and resume puts the draft back into the editor: a crash or exit while
+parked must not silently turn the next arbitrary prompt into the plan of
+record. The draft is cleared once the gate passes.
 
 A restore validates the restored phase against the branch. Transition ordering
 makes the phase's first message follow the entry that recorded it, so an entry
 alone at the tail means a crash landed between persisting and delivering. The
 missing kickoff is re-delivered ahead of the next prompt, and a missing goal
-lets the next prompt become the goal. The check reads the transcript rather
-than the rebuilt context, so compaction cannot make a delivered kickoff read
-as missing.
+lets the next prompt become the goal, the re-arm recorded so a later resume
+warns once. The verdict is taken before the restore persists anything, since
+its own append lands a custom entry at the tail and would fire the repair on
+every resume; rewinding to a point before a delivery legitimately re-arms it
+there. The check reads the transcript rather than the rebuilt context, so
+compaction cannot make a delivered kickoff read as missing.
 
 Phase kickoffs are injected messages carrying the replay mark, so replay shows
 each one as its own block above the turn it fed rather than echoing it as a

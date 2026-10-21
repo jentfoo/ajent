@@ -77,7 +77,8 @@ type Host struct {
 
 	// Landed reports whether the newest persisted workflow state has message
 	// entries after it on the resumed branch, telling a restore the recorded
-	// phase actually began. Nil disables the crash-window repair.
+	// phase actually began. Restore consults it before persisting anything,
+	// since its own append would read as un-landed. Nil disables the repair.
 	Landed func() bool
 
 	// Messages reads the live context. Its trailing assistant text stands in as

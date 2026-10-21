@@ -93,6 +93,11 @@ func (c *Controller) Restore() bool {
 		}
 	}
 
+	// landed-ness is judged before anything is written: the restore's own
+	// persist appends a custom entry at the branch tail, which would always
+	// read as un-landed and fire the repair on every resume
+	landed := c.h.Landed == nil || c.h.Landed()
+
 	c.planner, c.implementor, c.savedModel = planner, implementor, saved
 	// a set that round-tripped empty is unknown rather than "disable everything"
 	if len(p.SavedTools) > 0 {
@@ -114,7 +119,7 @@ func (c *Controller) Restore() bool {
 	c.phase = p.Phase
 	c.applyScopeLocked(p.Phase)
 	c.setPhaseLocked(p.Phase)
-	c.repairFromBranch()
+	c.repairFromBranch(landed)
 	// a parked gate loses its draft unless it is put back, so the user can read,
 	// edit and submit rather than an arbitrary prompt becoming the plan of record
 	if c.phase == PhaseAwaitingPlan && c.draftPlan != "" && c.h.SetInput != nil {
@@ -124,12 +129,14 @@ func (c *Controller) Restore() bool {
 	return true
 }
 
-// repairFromBranch validates the restored phase against the branch: a crash
-// between persisting a transition and delivering its message leaves the entry
-// at the tail with nothing behind it, so the missing message is re-delivered
-// ahead of the next prompt. Caller holds mu.
-func (c *Controller) repairFromBranch() {
-	if c.h.Landed == nil || c.h.Landed() {
+// repairFromBranch validates the restored phase against the branch as the
+// resume found it: a crash between persisting a transition and delivering its
+// message leaves the entry at the tail with nothing behind it, so the missing
+// message is re-delivered ahead of the next prompt. landed carries the
+// pre-restore verdict, since the restore's own persist reads as un-landed.
+// Caller holds mu.
+func (c *Controller) repairFromBranch(landed bool) {
+	if landed {
 		return
 	}
 	switch c.phase {
@@ -141,8 +148,10 @@ func (c *Controller) repairFromBranch() {
 	case PhasePlanning:
 		if c.goalCaptured {
 			// the goal was recorded as captured before its message landed, so the
-			// next prompt becomes the goal
+			// next prompt becomes the goal. Recorded, so a later resume without
+			// a prompt in between stays silent
 			c.goalCaptured = false
+			c.persistLocked()
 			c.notify("the recorded goal never reached the transcript; the next prompt "+
 				"becomes the goal", agent.LevelWarn)
 		}
