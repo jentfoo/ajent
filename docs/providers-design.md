@@ -387,6 +387,10 @@ Deliberate choices in this loader:
   commas are blanked rather than deleted, so byte offsets still refer to the
   original file and a genuine syntax error reports the line, column and the text
   it is on.
+- **Blank means absent, stray values abort.** An empty or comment-only
+  models.json loads as nothing, like a missing one. Any other top-level value
+  that is not an object (a stray `null`, array or scalar) rejects the file with
+  the same line-accurate error instead of decoding as empty configuration.
 - **Duplicate keys warn.** `encoding/json` keeps the last silently, so a
   repeated key is a setting that looks applied and is not. Hand-written configs
   do this.
@@ -746,13 +750,20 @@ list, and over-masking a benign name only costs log detail. Masked surfaces:
 every credential request header (the map is walked rather than probed, so
 non-canonical casing cannot slip past), URL credentials (userinfo dropped,
 query parameters matched by the same rule) and the error body some providers
-echo the key into. The body scrubs literal request credential values, drawn
-from headers, query values and userinfo alike, longest-first plus common key
-shapes (`sk-…`, `AIza…`, `Bearer …`) before
+echo the key into. The body scrubs common key shapes (`sk-…`, `AIza…`,
+`Bearer …`) ahead of literal request credential values, drawn from headers,
+query values and userinfo alike in every spelling an echoed URL can render,
+longest-first so a value that prefixes another cannot leave its tail visible.
+The pattern pass leads because a literal replacement could split a longer key
+past recognition, and literals too short or too plain to tell apart from body
+noise stay out rather than mangling ordinary text. Everything applies before
 clipping to its keep limit, so a credential straddling the cut cannot survive
 as a partial prefix. Transport errors get the same treatment: the `*url.Error`
 URL is rewritten to its redacted form before leaving the package, so what a
-caller prints agrees with the LogEvent.
+caller prints agrees with the LogEvent. Construction failures are covered too:
+no parsed request exists to scrape, so the raw URL string has userinfo dropped
+and credential query values masked structurally, in both the returned error and
+the attempt's LogEvent.
 
 **11. `sse.go` knows no dialect.** No JSON, no vendor names, one const for the
 `[DONE]` sentinel and a method to report it, with the policy left to the caller.

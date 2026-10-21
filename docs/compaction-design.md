@@ -91,8 +91,10 @@ Two things it fixes by construction:
   `Summary` is set. That is a summary-only compaction, where the compaction
   entry's own position is the boundary and every message before it folds into
   the summary. That is how a manual compact can shrink a session with no older
-  turn to keep. A non-empty id missing from the branch warns and keeps nothing.
-
+  turn to keep. A non-empty id missing from the branch warns and degrades to no
+  checkpoint at all, keeping every recorded message: damage must leave the
+  session holding what it would hold without that entry, never less, exactly as
+  an undecodable payload already does.
 ## The reduction pass (free)
 
 `spanStubs` runs over the region still in context and returns replacements for
@@ -362,12 +364,15 @@ that is actually in context. A summary-only prior is first resolved to an
 explicit `FirstKeptEntryID`, or carrying it into a newer entry would re-cut at
 the new entry's own position and drop everything between the two.
 
-**5a. Before and after describe the real request.** Both are measured with the
-prior compaction applied, never against the raw branch. Measuring against the
-raw branch made invariant 0 unenforceable: a plan that reopened folded history
-still compared favourably to a context the session had not sent in a long time.
-A prior cut missing from the branch means the effective context is
-unrecoverable, so the run fails rather than silently rebasing onto raw.
+**5a. Before and after describe the real request.** Both are measured through
+the same assembly the rebuild uses with the newest checkpoint applied, never
+against an independent estimate. A damaged checkpoint makes that assembly fall
+back to the unreduced branch, so every measure falls back with it: measuring
+anything else made invariant 0 unenforceable, since a plan that reopened folded
+history still compared favourably to a context the session had not sent in a
+long time. The degradation is reported, and because a decline records nothing
+that could carry the warning, a damaged pass left with nothing to record fails
+instead of hiding behind "nothing to compact".
 
 **6. On rebuild, context and spend come from different places.** A compaction
 rewrites what the branch sends, so the prompt sizes recorded against its
@@ -382,7 +387,10 @@ decides between two paths in `State` (ledger mechanics live in
   also accounts the synthetic summary message that is not an entry of its own.
   Recorded usage still counts toward spend for every entry, including ones the
   cut removed: those tokens were billed whether or not they still occupy
-  context.
+  context. A corrupt newest payload takes this path too even though it applies
+  no plan: its whole-branch rebuild can hold messages whose recorded prompt
+  sizes describe compacted requests, so replaying them would under-report until
+  the next response.
 - **untouched**: nothing rewrote the branch, so the recorded prompt plus output
   is still exactly what the next request carries and it is replayed as before.
 

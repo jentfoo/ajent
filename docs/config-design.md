@@ -28,6 +28,11 @@ ignored at merge time instead of stripping every default beneath it. Object keys
 that match the schema only by letter case are normalized to each field's
 declared name when a file layer loads, so merge, provenance and typed decode
 agree on one spelling.
+File layers follow one document rule, shared with models.json and mcp.json via
+`RelaxedObject`: blank or comment-only content behaves as an absent layer,
+while any other top-level value that is not an object fails startup naming the
+file and line. A stray word must never surface later as "layer user is not a
+JSON object".
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
 it. That is the difference between a config system and a mystery.
 
@@ -225,15 +230,17 @@ are seeded so a session saved blocked comes back blocked.
 ## The writer
 
 Saving re-marshals an order-preserving object tree: unknown keys and key order
-survive, formatting is normalized, comments are dropped. When the target file
-already carries `//` comments the save warns that they will be lost. Writes go
-through `WriteFileAtomic` with secret permissions.
+survive, formatting is normalized, comments are dropped. A save that lands
+having dropped `//` comments warns about the loss. A refused or failed write
+changes nothing, so it reports no warnings beside its error. Writes go through
+`WriteFileAtomic` with secret permissions.
 
 Only hand-edit artifacts the parser can fully consume are forgiven: `//` line
 comments and trailing commas, blanked by RelaxJSON before the rewrite. Bytes
 after the top-level value cannot survive a tree rebuild, so they fail the save
-with an error instead of being dropped silently (Load rejects them too). Such
-bytes can only appear by editing while ajent runs.
+with an error instead of being dropped silently (Load rejects them too). The
+refusal names the file and position like every load failure. Such bytes can
+only appear by editing while ajent runs.
 
 A save is a whole-file replacement, so without coordination two concurrent
 sessions compose last-writer-wins over every key. User-layer saves and

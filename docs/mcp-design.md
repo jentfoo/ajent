@@ -51,9 +51,11 @@ user's for that server in full, never field-by-field. It deliberately does not
 reuse `config.Merge`, whose deep fold would merge entries key by key against
 this spec.
 
-- The read path follows `pkg/llm/config.go`'s `LoadFile`: `RelaxJSON` →
-  unmarshal → unknown-key and duplicate-key warnings returned as strings for the
-  caller to surface. A missing or empty file is not an error.
+- The read path follows `pkg/llm/config.go`'s `LoadFile`: relax → shape check
+  (`config.RelaxedObject`) → unmarshal → unknown-key and duplicate-key warnings
+  returned as strings for the caller to surface. A missing, empty or
+  comment-only file is not an error. Any other non-object document fails like a
+  malformed one, with the stray value's position.
 - `${env:VAR}` references in env values, headers and URL expand at load, and an unset
   variable is a **clear error naming it**, never an empty header or value.
 - Each server must declare exactly one of `command` (stdio) or `url` (network),
