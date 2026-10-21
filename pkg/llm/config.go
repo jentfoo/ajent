@@ -417,15 +417,16 @@ func SaveUserFile(f File) ([]string, error) {
 }
 
 // compatWarnings reports configuration that will not behave as authored for the
-// dialect d: an unknown thinkingFormat value and any set field whose dialect tag
-// excludes d. It returns nil when nothing is wrong with o.
+// dialect d: an unknown thinkingFormat value, alias spellings set twice in one
+// block, and any set field whose dialect tag excludes d. It returns nil when
+// nothing is wrong with o.
 func compatWarnings(o *Compat, d Dialect) []string {
 	if o == nil {
 		return nil
 	}
 	t := reflect.TypeOf(*o)
 	v := reflect.ValueOf(*o)
-	var out []string
+	out := compatAliasWarnings(o)
 	if o.ThinkingFormat != nil {
 		if _, ok := parseThinkingFormat(*o.ThinkingFormat); !ok {
 			out = append(out, fmt.Sprintf("compat thinkingFormat %q is not supported, the provider default is used", *o.ThinkingFormat))
@@ -450,22 +451,68 @@ func compatWarnings(o *Compat, d Dialect) []string {
 }
 
 // mergeCompat layers every set field of over onto base into a new block. A nil
-// argument on either side returns the other unchanged.
+// argument on either side returns the other unchanged. Alias pairs are promoted
+// then collapsed, so the merged block carries one spelling per quirk and
+// applyCompat's within-block precedence never re-decides which layer won.
 func mergeCompat(base, over *Compat) *Compat {
 	if over == nil {
 		return base
 	} else if base == nil {
 		return over
 	}
+	local := *over
+	promoteCompatAliases(&local) // a copy, the caller's block stays untouched
 	out := *base
 	dst := reflect.ValueOf(&out).Elem()
-	src := reflect.ValueOf(*over)
+	src := reflect.ValueOf(local)
 	for i := range src.NumField() {
 		if compatFieldSet(src, i) {
 			dst.Field(i).Set(src.Field(i))
 		}
 	}
+	collapseCompatAliases(&out)
 	return &out
+}
+
+// promoteCompatAliases moves an alias without its canonical partner onto the
+// canonical field, so a later layer's write lands whichever spelling it used.
+func promoteCompatAliases(c *Compat) {
+	if c.SupportsStreamUsage != nil && c.SupportsUsageInStreaming == nil {
+		c.SupportsUsageInStreaming = c.SupportsStreamUsage
+	}
+	if c.SupportsThinkingTokenBudget != nil && c.ThinkingTokenBudgetField == nil {
+		// the boolean alias maps to the vLLM field name, false clears it
+		field := ""
+		if *c.SupportsThinkingTokenBudget {
+			field = fieldThinkingTokenBudget
+		}
+		c.ThinkingTokenBudgetField = &field
+	}
+}
+
+// collapseCompatAliases promotes any remaining alias value, then drops the alias
+// fields, leaving one canonical spelling per pair.
+func collapseCompatAliases(c *Compat) {
+	promoteCompatAliases(c)
+	c.SupportsStreamUsage = nil
+	c.SupportsThinkingTokenBudget = nil
+}
+
+// compatAliasWarnings names a block setting both spellings of one aliased
+// quirk, which the canonical spelling wins. mergeCompat collapses the pair, so
+// blocks it merges are reported by collapsedAliasWarnings instead.
+func compatAliasWarnings(o *Compat) []string {
+	if o == nil {
+		return nil
+	}
+	var out []string
+	if o.SupportsStreamUsage != nil && o.SupportsUsageInStreaming != nil {
+		out = append(out, "compat sets both supportsUsageInStreaming and supportsStreamUsage; supportsUsageInStreaming wins")
+	}
+	if o.SupportsThinkingTokenBudget != nil && o.ThinkingTokenBudgetField != nil {
+		out = append(out, "compat sets both thinkingTokenBudgetField and supportsThinkingTokenBudget; thinkingTokenBudgetField wins")
+	}
+	return out
 }
 
 // compatFieldSet reports whether the struct field at i was set in configuration.

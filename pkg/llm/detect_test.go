@@ -138,4 +138,12 @@ func TestDetectCompat(t *testing.T) {
 		detected := detectCompat("deepseek", "https://api.deepseek.com", "")
 		assert.False(t, applyCompat(base, &detected).Reasoning)
 	})
+
+	t.Run("stream_usage_spells_the_canonical_field", func(t *testing.T) {
+		// a merged block can never carry both spellings this way
+		got := detectCompat("deepseek", "https://api.deepseek.com", "")
+		assert.Nil(t, got.SupportsStreamUsage)
+		require.NotNil(t, got.SupportsUsageInStreaming)
+		assert.True(t, *got.SupportsUsageInStreaming)
+	})
 }

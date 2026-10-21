@@ -255,8 +255,54 @@ func TestMergeCompat(t *testing.T) {
 	})
 
 	t.Run("does_not_mutate_either_side", func(t *testing.T) {
-		_ = mergeCompat(base, &Compat{SupportsStore: ptr(false)})
+		over := &Compat{SupportsStore: ptr(false)}
+		_ = mergeCompat(base, over)
 		assert.True(t, *base.SupportsStore)
+		assert.Nil(t, over.SupportsUsageInStreaming) // promotion works on a copy
+	})
+
+	t.Run("alias_write_beats_base_canonical", func(t *testing.T) {
+		// the bug: a later layer's opt-out lost to the base's canonical true
+		got := mergeCompat(&Compat{SupportsUsageInStreaming: ptr(true)},
+			&Compat{SupportsStreamUsage: ptr(false)})
+		require.NotNil(t, got)
+		assert.False(t, *got.SupportsUsageInStreaming)
+	})
+
+	t.Run("canonical_write_beats_base_alias", func(t *testing.T) {
+		got := mergeCompat(&Compat{SupportsStreamUsage: ptr(true)},
+			&Compat{SupportsUsageInStreaming: ptr(false)})
+		require.NotNil(t, got)
+		assert.False(t, *got.SupportsUsageInStreaming)
+	})
+
+	t.Run("result_carries_one_spelling", func(t *testing.T) {
+		got := mergeCompat(&Compat{SupportsStreamUsage: ptr(true)},
+			&Compat{SupportsStreamUsage: ptr(false)})
+		require.NotNil(t, got)
+		assert.Nil(t, got.SupportsStreamUsage)
+		assert.False(t, *got.SupportsUsageInStreaming)
+	})
+
+	t.Run("block_with_both_spellings_keeps_canonical", func(t *testing.T) {
+		got := mergeCompat(&Compat{SupportsStore: ptr(true)},
+			&Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)})
+		require.NotNil(t, got)
+		assert.False(t, *got.SupportsUsageInStreaming)
+		assert.Nil(t, got.SupportsStreamUsage)
+	})
+
+	t.Run("budget_alias_promotes_and_collapses", func(t *testing.T) {
+		got := mergeCompat(&Compat{ThinkingTokenBudgetField: ptr("other")},
+			&Compat{SupportsThinkingTokenBudget: ptr(true)})
+		require.NotNil(t, got)
+		assert.Nil(t, got.SupportsThinkingTokenBudget)
+		assert.Equal(t, fieldThinkingTokenBudget, *got.ThinkingTokenBudgetField)
+
+		cleared := mergeCompat(&Compat{ThinkingTokenBudgetField: ptr("other")},
+			&Compat{SupportsThinkingTokenBudget: ptr(false)})
+		require.NotNil(t, cleared)
+		assert.Empty(t, *cleared.ThinkingTokenBudgetField) // an explicit off
 	})
 }
 
@@ -339,6 +385,25 @@ func TestCompatWarnings(t *testing.T) {
 
 	t.Run("anthropic_tagged_field_accepted_by_anthropic_messages", func(t *testing.T) {
 		w := compatWarnings(&Compat{ForceAdaptiveThinking: ptr(true)}, DialectAnthropic)
+		assert.Empty(t, w)
+	})
+
+	t.Run("both_stream_usage_spellings_warn", func(t *testing.T) {
+		w := compatWarnings(&Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)},
+			DialectOpenAICompletions)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "supportsUsageInStreaming wins")
+	})
+
+	t.Run("both_budget_spellings_warn", func(t *testing.T) {
+		w := compatWarnings(&Compat{SupportsThinkingTokenBudget: ptr(true),
+			ThinkingTokenBudgetField: ptr(fieldThinkingTokenBudget)}, DialectOpenAICompletions)
+		assert.Len(t, w, 1)
+		assert.Contains(t, w[0], "thinkingTokenBudgetField wins")
+	})
+
+	t.Run("single_spelling_does_not_warn", func(t *testing.T) {
+		w := compatWarnings(&Compat{SupportsStreamUsage: ptr(true)}, DialectOpenAICompletions)
 		assert.Empty(t, w)
 	})
 }

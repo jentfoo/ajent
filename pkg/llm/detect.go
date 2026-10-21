@@ -69,7 +69,8 @@ func detectCompat(provider, baseURL, modelID string) Compat {
 	c.SupportsDeveloperRole = ptrOf(openRouterDevRoleModel || (!isNonStandard && !isOpenRouter))
 	c.SupportsReasoningEffort = ptrOf(!isGrok && !isZai && !isMoonshot && !isTogether &&
 		!isCFGateway && !isNvidia && !isAntLing)
-	c.SupportsStreamUsage = ptrOf(true) // stream usage is supported by default
+	// canonical, so a merged block can never carry both spellings
+	c.SupportsUsageInStreaming = ptrOf(true) // stream usage is supported by default
 	c.SupportsFinishReason = ptrOf(true)
 	c.SupportsStrictMode = ptrOf(!isMoonshot && !isTogether && !isCFGateway && !isNvidia)
 

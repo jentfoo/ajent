@@ -245,7 +245,7 @@ func zeroModelsWarning(name string, flavor Flavor, discover bool) string {
 // discovered entry, so an id the user declared is not a valid target.
 func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelOverride) ([]ModelConfig, []string) {
 	if len(declared) == 0 {
-		return applyOverrides(discovered, overrides), nil
+		return applyOverrides(discovered, overrides)
 	}
 	// a declared list is the whole list, so no override on this provider is reachable
 	warnings := unreachableOverrides(declared, discovered, overrides)
@@ -254,6 +254,7 @@ func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelO
 	out := make([]ModelConfig, len(declared))
 	for i, d := range declared {
 		if disc, ok := byID[d.ID]; ok {
+			warnings = append(warnings, collapsedAliasWarnings(disc.Compat, d.Compat, d.ID)...)
 			d = enrichModel(d, disc)
 		}
 		out[i] = d
@@ -261,16 +262,36 @@ func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelO
 	return out, warnings
 }
 
-// applyOverrides layers each matching override onto a copy of the discovered list.
-func applyOverrides(discovered []ModelConfig, overrides map[string]ModelOverride) []ModelConfig {
+// applyOverrides layers each matching override onto a copy of the discovered
+// list, the override winning, returning warnings for collapsed alias conflicts.
+// Headers, sampling params and compat merge per key rather than replace.
+func applyOverrides(discovered []ModelConfig, overrides map[string]ModelOverride) ([]ModelConfig, []string) {
 	if len(overrides) == 0 {
-		return discovered
+		return discovered, nil
 	}
 	out := slices.Clone(discovered)
+	var warnings []string
 	for i, d := range out {
-		if ov, ok := overrides[d.ID]; ok {
-			out[i] = applyOverride(d, ov)
+		ov, ok := overrides[d.ID]
+		if !ok {
+			continue
 		}
+		warnings = append(warnings, collapsedAliasWarnings(d.Compat, ov.Compat, d.ID)...)
+		out[i] = applyOverride(d, ov)
+	}
+	return out, warnings
+}
+
+// collapsedAliasWarnings reports an authored compat block whose alias conflict a
+// merge hides from compatWarnings, which only sees the collapsed result. A nil
+// base means no merge happens and compatWarnings reports the block itself.
+func collapsedAliasWarnings(base, over *Compat, id string) []string {
+	if base == nil {
+		return nil
+	}
+	out := compatAliasWarnings(over)
+	for i, w := range out {
+		out[i] = fmt.Sprintf("model %s: %s", id, w)
 	}
 	return out
 }

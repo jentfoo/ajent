@@ -250,6 +250,15 @@ Every `Compat` field is a pointer so "unset" is distinguishable from "explicitly
 false". Without that tri-state, `"supportsTemperature": false` is
 indistinguishable from not mentioning it, and the default silently wins.
 
+Two `Compat` fields are aliases of one quirk: `supportsStreamUsage` is ajent's
+historical spelling of `supportsUsageInStreaming`, and
+`supportsThinkingTokenBudget` is the boolean form of `thinkingTokenBudgetField`.
+A block setting both spellings is a conflict the canonical one wins, and the
+author hears about it rather than it resolving silently. Layer precedence is a
+separate rule: whichever layer speaks last wins regardless of which synonym it
+used, so a declared or override opt-out stays an opt-out in either spelling.
+Detection and discovery write canonical spellings only.
+
 `Timeouts` fields are `*Duration` for the same reason: nil takes the dialect
 default, an explicit `"0s"` disables the bound. A plain zero cannot say
 "disabled", which is precisely what an lm-studio endpoint needs.

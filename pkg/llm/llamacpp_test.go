@@ -123,6 +123,21 @@ func TestLlamaCppStreamUsageResolution(t *testing.T) {
 		assert.False(t, m.Caps.StreamUsage)
 	})
 
+	t.Run("declared_alias_beats_discovery", func(t *testing.T) {
+		// pre-canonical models.json files spell the opt-out historically
+		merged, _ := mergeModels([]ModelConfig{{ID: discovered[0].ID,
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, discovered, nil)
+		m := resolveModel(ctx, base, nil, merged[0])
+		assert.False(t, m.Caps.StreamUsage)
+	})
+
+	t.Run("override_alias_beats_discovery", func(t *testing.T) {
+		overridden, _ := mergeModels(nil, discovered, map[string]ModelOverride{
+			discovered[0].ID: {Compat: &Compat{SupportsStreamUsage: ptr(false)}}})
+		m := resolveModel(ctx, base, nil, overridden[0])
+		assert.False(t, m.Caps.StreamUsage)
+	})
+
 	t.Run("provider_compat_fills_where_discovery_is_silent", func(t *testing.T) {
 		// an old build sets nothing, so a hand-written enablement survives
 		old, err := parseLlamaProps([]byte(`{"model_path":"/m/x.gguf","build_info":"b6000-old"}`))

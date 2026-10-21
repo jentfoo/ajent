@@ -394,6 +394,41 @@ func TestMergeModels(t *testing.T) {
 		_, _ = mergeModels(nil, disc, map[string]ModelOverride{"a": {Name: "Renamed"}})
 		assert.Equal(t, "Discovered A", disc[0].Name)
 	})
+
+	// the historical alias must opt out against a discovered canonical value, the
+	// seam where layer precedence met the within-block spelling rule
+	t.Run("declared_alias_optout_beats_discovered_canonical", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsUsageInStreaming: ptr(true)}}}
+		got, _ := mergeModels([]ModelConfig{{ID: "a",
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, disc, nil)
+		require.NotNil(t, got[0].Compat)
+		assert.False(t, *got[0].Compat.SupportsUsageInStreaming)
+	})
+
+	t.Run("override_alias_optout_beats_discovered_canonical", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsUsageInStreaming: ptr(true)}}}
+		got, w := mergeModels(nil, disc, map[string]ModelOverride{"a": {
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}})
+		assert.Empty(t, w) // different spellings across layers are not a conflict
+		require.NotNil(t, got[0].Compat)
+		assert.False(t, *got[0].Compat.SupportsUsageInStreaming)
+	})
+
+	t.Run("declared_block_with_both_spellings_warns", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsStore: ptr(true)}}}
+		_, w := mergeModels([]ModelConfig{{ID: "a",
+			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}}, disc, nil)
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], "model a: compat sets both")
+	})
+
+	t.Run("override_block_with_both_spellings_warns", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsStore: ptr(true)}}}
+		_, w := mergeModels(nil, disc, map[string]ModelOverride{"a": {
+			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}})
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], "model a: compat sets both")
+	})
 }
 
 func TestApplyOverride(t *testing.T) {
@@ -534,6 +569,23 @@ func TestRegistryWithCache(t *testing.T) {
 		m, err := r.Resolve("llamacpp/m.gguf")
 		require.NoError(t, err)
 		assert.True(t, m.Caps.StreamUsage)
+	})
+
+	t.Run("llamacpp_alias_optout_reaches_the_caps", func(t *testing.T) {
+		// a pre-canonical models.json disables through the historical spelling
+		f := File{Providers: map[string]ProviderConfig{"llamacpp": {Models: []ModelConfig{
+			{ID: "m.gguf", Compat: &Compat{SupportsStreamUsage: ptr(false)}},
+		}}}}
+		cache := map[string]CacheEntry{"llamacpp": {Models: []ModelConfig{
+			{ID: "m.gguf", Name: "m.gguf",
+				Compat: &Compat{SupportsUsageInStreaming: ptr(true)}},
+		}}}
+
+		r, warnings := NewRegistry(f, cache, RegistryOptions{})
+		assert.Empty(t, warnings)
+		m, err := r.Resolve("llamacpp/m.gguf")
+		require.NoError(t, err)
+		assert.False(t, m.Caps.StreamUsage)
 	})
 }
 
