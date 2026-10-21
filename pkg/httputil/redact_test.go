@@ -244,6 +244,38 @@ func TestScrubSecrets(t *testing.T) {
 		assert.Equal(t, "key: "+redactedMask, got)
 	})
 
+	t.Run("short_literal_not_applied", func(t *testing.T) {
+		body := []byte(`invalid id`)
+
+		got := string(scrubSecrets(body, []string{"id"}))
+		assert.Equal(t, "invalid id", got)
+	})
+
+	t.Run("alpha_only_literal_not_applied", func(t *testing.T) {
+		body := []byte(`{"error":"password too short"}`)
+
+		got := string(scrubSecrets(body, []string{"password"}))
+		assert.Equal(t, string(body), got)
+	})
+
+	t.Run("literal_cannot_split_a_key", func(t *testing.T) {
+		body := []byte(`key: sk-abcd1234efgh5678`)
+
+		got := string(scrubSecrets(body, []string{"abcd1234"}))
+		assert.Equal(t, "key: "+redactedMask, got)
+	})
+
+	t.Run("scrubs_multi_url_body", func(t *testing.T) {
+		body := []byte(`failed for https://user:p%40ss@x.test/v1 and ` +
+			`https://y.test/v2?key=` + testPlainKey)
+		secrets := append(urlSecrets(parseTestURL(t, "https://user:p%40ss@x.test/v1")),
+			urlSecrets(parseTestURL(t, "https://y.test/v2?key="+testPlainKey))...)
+
+		got := string(scrubSecrets(body, secrets))
+		assert.NotContains(t, got, "p%40ss")
+		assert.NotContains(t, got, testPlainKey)
+	})
+
 	t.Run("masks_key_shaped_strings", func(t *testing.T) {
 		tests := []struct {
 			name string
@@ -283,7 +315,9 @@ func TestExpandSecrets(t *testing.T) {
 		want []string
 	}{
 		{"drops_empty_values", []string{"", testAPIKey}, []string{testAPIKey}},
-		{"sorts_longest_first", []string{testAPIKey, "abc"}, []string{testAPIKey, "abc"}},
+		{"sorts_longest_first", []string{testAPIKey, testPlainKey}, []string{testPlainKey, testAPIKey}},
+		{"drops_short_values", []string{"abc", testAPIKey}, []string{testAPIKey}},
+		{"drops_alpha_only_values", []string{"password"}, []string{}},
 		{"splits_bearer_pair", []string{"Bearer " + testAPIKey},
 			[]string{"Bearer " + testAPIKey, testAPIKey}},
 		{"splits_lowercase_scheme", []string{"bearer " + testAPIKey},
@@ -292,10 +326,11 @@ func TestExpandSecrets(t *testing.T) {
 			[]string{"Basic dXNlcjpwYXNz", "dXNlcjpwYXNz"}},
 		{"splits_token_scheme", []string{"Token ghp_1234567890"},
 			[]string{"Token ghp_1234567890", "ghp_1234567890"}},
+		{"unfit_token_keeps_whole", []string{"Token abc"}, []string{"Token abc"}},
+		{"bare_scheme_prefix_dropped", []string{"Bearer "}, []string{}},
 		{"unknown_scheme_kept_whole", []string{"Negotiate abcdef"}, []string{"Negotiate abcdef"}},
 		{"cookie_pair_not_split", []string{"sessionid=x; Path=/"}, []string{"sessionid=x; Path=/"}},
 		{"scheme_without_space", []string{"BearerNoSpace"}, []string{"BearerNoSpace"}},
-		{"empty_token_not_split", []string{"Bearer "}, []string{"Bearer "}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -333,6 +368,16 @@ func TestURLSecrets(t *testing.T) {
 	t.Run("collects_userinfo", func(t *testing.T) {
 		u := parseTestURL(t, "https://user:pw@x.test/v1")
 		assert.Equal(t, []string{"user", "pw"}, urlSecrets(u))
+	})
+
+	t.Run("collects_encoded_userinfo", func(t *testing.T) {
+		u := parseTestURL(t, "https://user:p%40ss@x.test/v1")
+		assert.Equal(t, []string{"user", "p@ss", "p%40ss"}, urlSecrets(u))
+	})
+
+	t.Run("collects_password_only_userinfo", func(t *testing.T) {
+		u := parseTestURL(t, "https://:"+testPlainKey+"@x.test/v1")
+		assert.Equal(t, []string{testPlainKey}, urlSecrets(u))
 	})
 
 	t.Run("collects_username_without_password", func(t *testing.T) {
@@ -375,7 +420,7 @@ func TestSecretValues(t *testing.T) {
 
 	t.Run("collects_userinfo_credentials", func(t *testing.T) {
 		got := secretValues(nil, parseTestURL(t, "https://user:"+testPlainKey+"@x.test/v1"))
-		assert.Equal(t, []string{testPlainKey, "user"}, got)
+		assert.Equal(t, []string{testPlainKey}, got)
 	})
 
 	t.Run("merges_header_and_url_values", func(t *testing.T) {
@@ -397,6 +442,50 @@ func TestSecretValues(t *testing.T) {
 
 	t.Run("empty_inputs", func(t *testing.T) {
 		assert.Empty(t, secretValues(http.Header{}, nil))
+	})
+}
+
+func TestRedactRawURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"drops_userinfo", "https://user:pw@x.test/v1", "https://x.test/v1"},
+		{"last_at_wins", "https://a:b@c@d/p", "https://d/p"},
+		{"masks_credential_query", "https://h/p?model=opus&key=" + testPlainKey + "#f",
+			"https://h/p?model=opus&key=redacted#f"},
+		{"encoded_name_masked", "https://h/p?api%5Fkey=" + testPlainKey, "https://h/p?api%5Fkey=redacted"},
+		{"valueless_pair_kept", "https://h/p?key", "https://h/p?key"},
+		{"no_scheme_masks_query", "/p?token=" + testPlainKey, "/p?token=redacted"},
+		{"nothing_to_redact", "ht tp://x", "ht tp://x"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, redactRawURL(tc.raw))
+		})
+	}
+}
+
+func TestRedactRawErrURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("parse_error_rewritten", func(t *testing.T) {
+		raw := "https://user:" + testPlainKey + "%zz@x.test/v1"
+		//nolint:staticcheck // an invalid escape is the case under test
+		_, err := url.Parse(raw)
+		require.Error(t, err)
+
+		redactRawErrURL(err)
+		assert.NotContains(t, err.Error(), testPlainKey)
+	})
+
+	t.Run("other_errors_untouched", func(t *testing.T) {
+		plain := io.EOF
+		redactRawErrURL(plain)
+		assert.Equal(t, io.EOF, plain)
 	})
 }
 

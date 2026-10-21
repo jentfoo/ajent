@@ -120,12 +120,19 @@ func Do(ctx context.Context, hc *http.Client, r Request) (*http.Response, error)
 
 // doAttempt performs a single request, reporting any Retry-After the server sent.
 func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, attemptNum int) (*http.Response, time.Duration, error) {
+	start := h.now()
 	req, err := newRequest(ctx, r)
 	if err != nil {
+		// a construction failure never reaches the send path's redaction, and a
+		// parse failure is a *url.Error carrying the raw URL verbatim, so both
+		// surfaces are scrubbed structurally here instead
+		redactRawErrURL(err)
+		emit(r.Log, LogEvent{Name: r.Name, Method: r.Method,
+			URL: redactRawURL(r.URL), Header: redactedCallerHeaders(r.Headers),
+			Attempt: attemptNum, Duration: h.now().Sub(start), Err: err})
 		return nil, 0, err
 	}
 
-	start := h.now()
 	resp, err := hc.Do(req)
 	if err != nil {
 		// the raw *url.Error would render the credentialed URL verbatim, and the
@@ -177,6 +184,16 @@ func wrapIdle(rc io.ReadCloser, idle *time.Duration, afterFunc func(time.Duratio
 		return rc // explicitly disabled
 	}
 	return &idleReader{rc: rc, d: d, afterFunc: afterFunc}
+}
+
+// redactedCallerHeaders lifts the Request's header map so a construction
+// failure logs the same redacted view later events carry.
+func redactedCallerHeaders(h map[string]string) http.Header {
+	out := make(http.Header, len(h))
+	for k, v := range h {
+		out.Set(k, v)
+	}
+	return redactHeaders(out)
 }
 
 func newRequest(ctx context.Context, r Request) (*http.Request, error) {

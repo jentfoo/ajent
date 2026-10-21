@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -368,6 +369,33 @@ func TestDo(t *testing.T) {
 
 		assert.NotContains(t, got, testPlainKey)
 		assert.Contains(t, got, redactedMask)
+	})
+
+	t.Run("construction_error_redacts_url", func(t *testing.T) {
+		r, hc, _, logs := testRequest(t, "https://x.test")
+		r.URL = "https://user:" + testPlainKey + "%zz@host/v1" // a bad escape fails the parse
+		_, err := Do(t.Context(), hc, r)
+		require.Error(t, err)
+
+		var ue *url.Error
+		require.ErrorAs(t, err, &ue)
+		assert.Equal(t, "parse", ue.Op)
+		assert.NotContains(t, err.Error(), testPlainKey)
+		require.Len(t, *logs, 1)
+		assert.NotContains(t, (*logs)[0].URL, testPlainKey)
+		assert.Equal(t, redactedMask, (*logs)[0].Header.Get("Authorization"))
+	})
+
+	t.Run("invalid_method_still_logs_redacted", func(t *testing.T) {
+		r, hc, _, logs := testRequest(t, "https://x.test")
+		r.Method = "GE T"
+		r.URL += "?api_key=" + testAPIKey
+		_, err := Do(t.Context(), hc, r)
+		require.Error(t, err)
+
+		assert.NotContains(t, err.Error(), testAPIKey)
+		require.Len(t, *logs, 1)
+		assert.Contains(t, (*logs)[0].URL, redactedQuery)
 	})
 
 	t.Run("permanent_transport_error_fails_fast", func(t *testing.T) {
