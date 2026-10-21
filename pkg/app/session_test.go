@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -228,9 +229,10 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	r.rec.ModelChange(bModel, "command")
 
 	// rewind onto the first user message and restore the fork model: it must stay b
-	save := r.liveModel(a)
+	save, ok := r.liveModel(a)
+	require.True(t, ok)
 	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
-	require.NoError(t, r.restoreForkModel(nil, a, reg, save, "rewind: "))
+	require.NoError(t, r.restoreForkModel(nil, a, reg, save))
 
 	var got llm.Model
 	a.WithState(func(st *agent.State) { got = st.Model })
@@ -1050,9 +1052,10 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	assert.NotZero(t, cs.Used)
 }
 
-// holdTurn starts a blocked turn on a fresh agent, holding it mid-stream so
-// WithState refuses until the returned release ends it.
-func holdTurn(t *testing.T) (*agent.Agent, *agent.State, func()) {
+// heldTurnAgent builds an agent whose turns block mid-stream until their
+// context ends. start runs one held turn and returns once it claims the loop.
+// release ends it and is a no-op when start never ran.
+func heldTurnAgent(t *testing.T) (*agent.Agent, *agent.State, func(), func()) {
 	t.Helper()
 
 	bp := &blockingProvider{
@@ -1069,22 +1072,41 @@ func holdTurn(t *testing.T) (*agent.Agent, *agent.State, func()) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel) // the held turn always ends, even on a failed assertion
 	errCh := make(chan error, 1)
-	go func() { errCh <- ag.Prompt(ctx, agent.Input{Text: "held"}) }()
-	select {
-	case <-bp.onCreate:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the held turn never started")
+	var began atomic.Bool
+	start := func() {
+		began.Store(true)
+		go func() { errCh <- ag.Prompt(ctx, agent.Input{Text: "held"}) }()
+		select {
+		case <-bp.onCreate:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the held turn never started")
+		}
+		require.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
 	}
-	require.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
-	return ag, st, func() {
+	release := func() {
+		if !began.Load() {
+			return
+		}
 		cancel()
 		require.NoError(t, <-errCh)
 	}
+	return ag, st, start, release
+}
+
+// holdTurn starts a blocked turn on a fresh agent, holding it mid-stream so
+// WithState refuses until the returned release ends it.
+func holdTurn(t *testing.T) (*agent.Agent, *agent.State, func()) {
+	t.Helper()
+
+	ag, st, start, release := heldTurnAgent(t)
+	start()
+	return ag, st, release
 }
 
 // TestSwitchStateRefusedMidTurn covers a switch racing a turn: the refusal must
 // leave the writer head, switch callbacks and live state all untouched, where
-// the old code panicked on a nil ledger after moving the head.
+// the old code panicked on a nil ledger after moving the head. A later switch
+// still lands once the turn ends, as the guard's contract implies.
 func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1093,7 +1115,7 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	}, nil, llm.RegistryOptions{})
 	require.Empty(t, warnings)
 
-	ui, out := plainUI(t)
+	ui, _, out := plainUI(t)
 	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
@@ -1122,14 +1144,20 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	assert.False(t, slices.ContainsFunc(st.Messages, func(m llm.Message) bool {
 		return textOf(m) == "hello" // the branch context never landed
 	}))
-	release()
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "rewind: a turn is running")
 	}, 2*time.Second, 5*time.Millisecond)
+
+	release()
+	require.NoError(t, r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	assert.True(t, switched) // the retry fires what the refusal held back
+	assert.True(t, resumed)
+	assert.Equal(t, entries[len(entries)-1].ID, w.Head())
 }
 
 // TestRestoreForkModelRefusedMidTurn covers the post-switch model restore racing
-// a turn: the refusal reports rather than panicking, leaving the model alone.
+// a turn: the refusal reports rather than panicking, leaving the model alone,
+// and a later restore still lands once the turn ends.
 func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1138,7 +1166,7 @@ func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	}, nil, llm.RegistryOptions{})
 	require.Empty(t, warnings)
 
-	ui, out := plainUI(t)
+	ui, _, _ := plainUI(t)
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
@@ -1149,14 +1177,136 @@ func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	require.NoError(t, err)
 	ag, st, release := holdTurn(t)
 
-	err = r.restoreForkModel(ui, ag, reg, m, "rewind: ")
-	release()
-
+	err = r.restoreForkModel(ui, ag, reg, m)
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, "m", st.Model.ID) // the live model is untouched
+
+	release()
+	require.NoError(t, r.restoreForkModel(ui, ag, reg, m))
+	assert.Equal(t, "b", st.Model.ID)
+}
+
+// TestLiveModelRefusedMidTurn covers the pre-switch capture racing a turn: ok
+// reads false and the zero model is never mistaken for a captured one.
+func TestLiveModelRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	ag, _, release := holdTurn(t)
+	r := &sessRec{}
+
+	m, ok := r.liveModel(ag)
+	release()
+
+	assert.False(t, ok)
+	assert.Zero(t, m)
+}
+
+// TestRewindCaptureRefusedMidTurn covers the rewind picker racing a turn: the
+// refusal returns before the head moves, with nothing redrawn.
+func TestRewindCaptureRefusedMidTurn(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, inW, out := plainUI(t)
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, err)
+	head := w.Head()
+	before := out()
+
+	ag, _, start, release := heldTurnAgent(t)
+	rewound := make(chan struct{})
+	go func() {
+		defer close(rewound)
+		r.rewind(ui, ag, reg)
+	}()
+	// one exclusive filter answers the picker, the race lands the turn before it
+	_, err = io.WriteString(inW, "one\n")
+	require.NoError(t, err)
+	start()
+	<-rewound
+	release()
+
+	assert.Equal(t, head, w.Head()) // nothing moved
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "rewind: a turn is running")
 	}, 2*time.Second, 5*time.Millisecond)
+	assert.True(t, strings.HasSuffix(out(), before)) // the screen never redrew
+}
+
+// TestRewindRefusedAfterSwitch covers the unguarded window between the rewind's
+// head move and its model restore: a turn landing there leaves the move applied,
+// names the model that was not kept, skips the redraw, and a later rewind lands.
+func TestRewindRefusedAfterSwitch(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}, {ID: "b"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, inW, out := plainUI(t)
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-model.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, err)
+	entries := readEntriesRewind(t, p)
+	sessionHead := entries[0].ID // rewinding onto "one" sets the head before it
+
+	b, err := reg.Resolve("p/b")
+	require.NoError(t, err)
+
+	var discarded bool
+	ag, st, start, release := heldTurnAgent(t)
+	ag.WithState(func(s *agent.State) { s.Model = b }) // the live switch the rewind keeps
+	// discardStaged fires between the head move and the restore: land the turn there
+	land := start
+	r := &sessRec{w: w, rec: session.NewRecorder(w), discardStaged: func() {
+		discarded = true
+		land()
+	}}
+	_, err = io.WriteString(inW, "one\n")
+	require.NoError(t, err)
+	rewound := make(chan struct{})
+	go func() {
+		defer close(rewound)
+		r.rewind(ui, ag, reg)
+	}()
+	<-rewound
+
+	assert.Equal(t, sessionHead, w.Head()) // the move stands
+	assert.True(t, discarded)              // the abandoned branch's staging never rides
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "rewind: branch switched but a turn is running, model p/b not kept")
+	}, 2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, "a", st.Model.ID) // the kept branch's model, the b restore never landed
+
+	release()
+	// a later rewind lands once the loop is free: the restore re-applies b, which
+	// only it can set after the switch rebuilt the branch's own a
+	land = func() {} // the loop stays free for the retry
+	ag.WithState(func(s *agent.State) { s.Model = b })
+	_, err = io.WriteString(inW, "one\n")
+	require.NoError(t, err)
+	rewound = make(chan struct{})
+	go func() {
+		defer close(rewound)
+		r.rewind(ui, ag, reg)
+	}()
+	<-rewound
+	assert.Equal(t, "b", st.Model.ID) // the restore landed on the retry
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.
@@ -1181,8 +1331,9 @@ func (s *syncBuffer) String() string {
 }
 
 // plainUI opens a plain-mode UI whose painted output drains into a buffer, so
-// notifications are assertable; the returned func snapshots it.
-func plainUI(t *testing.T) (*tui.UI, func() string) {
+// notifications are assertable. The returned writer feeds its input, so a test
+// can answer the prompts plain mode reads; the last func snapshots the output.
+func plainUI(t *testing.T) (*tui.UI, io.Writer, func() string) {
 	t.Helper()
 
 	inR, inW, err := os.Pipe()
@@ -1201,7 +1352,7 @@ func plainUI(t *testing.T) (*tui.UI, func() string) {
 
 	buf := &syncBuffer{}
 	go func() { _, _ = io.Copy(buf, outR) }()
-	return ui, buf.String
+	return ui, inW, buf.String
 }
 
 func TestRestoreStateReadFailure(t *testing.T) {
@@ -1241,7 +1392,7 @@ func TestRestoreStateReadFailure(t *testing.T) {
 func TestRebuildWarnsUnreadable(t *testing.T) {
 	t.Parallel()
 
-	ui, out := plainUI(t)
+	ui, _, out := plainUI(t)
 	reg, warnings := llm.NewRegistry(llm.File{
 		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
 	}, nil, llm.RegistryOptions{})
@@ -1270,7 +1421,7 @@ func TestRebuildWarnsUnreadable(t *testing.T) {
 func TestRewindWarnsUnreadable(t *testing.T) {
 	t.Parallel()
 
-	ui, out := plainUI(t)
+	ui, _, out := plainUI(t)
 	p := filepath.Join(t.TempDir(), "s.jsonl")
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)

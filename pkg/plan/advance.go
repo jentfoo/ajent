@@ -260,7 +260,7 @@ func (c *Controller) fork(head string, m llm.Model) {
 		return
 	}
 	if err := c.h.Fork(head, m); err != nil {
-		c.notify("could not switch branch ("+err.Error()+"); the context may be stale, "+
-			"consider /plan-stop", agent.LevelError)
+		c.notify("could not complete the branch switch ("+err.Error()+"), the context "+
+			"may be stale, consider /plan-stop", agent.LevelError)
 	}
 }

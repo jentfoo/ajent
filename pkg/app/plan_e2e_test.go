@@ -76,7 +76,7 @@ type planHarness struct {
 func TestForkToRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
-	ui, out := plainUI(t)
+	ui, _, out := plainUI(t)
 	reg, warnings := llm.NewRegistry(llm.File{
 		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
 	}, nil, llm.RegistryOptions{})
@@ -105,6 +105,58 @@ func TestForkToRefusedMidTurn(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "plan: a turn is running")
 	}, 2*time.Second, 5*time.Millisecond)
+}
+
+// TestForkToRefusedAfterSwitch covers the unguarded window between a fork's
+// head move and its model restore: the new root still gains its model_change as
+// its first entry, so a resume resolves the branch's model.
+func TestForkToRefusedAfterSwitch(t *testing.T) {
+	t.Parallel()
+
+	ui, _, out := plainUI(t)
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+
+	m, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	ag, _, start, release := heldTurnAgent(t)
+	// onSwitch fires between the head move and the restore: land the turn there
+	r.onSwitch = func([]llm.Message) { start() }
+
+	err = r.forkTo(ui, ag, reg, "", m) // empty head: the implementation round's new root
+	release()
+
+	require.ErrorIs(t, err, errTurnRunning)
+	require.Eventually(t, func() bool {
+		return strings.Contains(out(), "plan: model p/a recorded but not applied")
+	}, 2*time.Second, 5*time.Millisecond)
+
+	// the moved head owns the new root, whose first entry is the model change
+	entries := readEntriesRewind(t, p)
+	branch := session.Branch(entries, w.Head())
+	require.NotEmpty(t, branch)
+	assert.Equal(t, session.TypeModelChange, branch[0].Type)
+	assert.Empty(t, branch[0].ParentID)
+	var data session.ModelData
+	require.NoError(t, branch[0].Decode(&data))
+	assert.Equal(t, "p/a", data.Model)
+
+	// the live model is whatever the turn runs with, not the recorded one
+	var live llm.Model
+	ag.WithState(func(s *agent.State) { live = s.Model })
+	assert.Equal(t, "m", live.ID)
+
+	// the branch still resolves its model once the turn ends
+	rebuilt, _ := r.stateFor(modelResolver(reg), entries, w.Head())
+	assert.Equal(t, "p/a", rebuilt.Model.Key())
 }
 
 // newPlanHarness wires the workflow over a real session and agent. Only the

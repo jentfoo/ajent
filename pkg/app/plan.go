@@ -233,10 +233,14 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 	if err := r.switchState(ui, ag, reg, head, "plan: "); err != nil {
 		return err
 	}
-	if err := r.restoreForkModel(ui, ag, reg, m, "plan: "); err != nil {
+	// record ahead of the live restore: a moved head keeps its model entry even
+	// on a refused restore, trading a stale record for a resolvable root
+	r.rec.ModelChange(m, "plan")
+	if err := r.restoreForkModel(ui, ag, reg, m); err != nil {
+		ui.Notify("plan: model "+m.Key()+" recorded but not applied while a turn runs, "+
+			"/model applies it", tui.LevelWarn)
 		return err
 	}
-	r.rec.ModelChange(m, "plan")
 	if moved {
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}

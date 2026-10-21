@@ -305,7 +305,7 @@ func TestControllerAdvance(t *testing.T) {
 		f.mu.Unlock()
 
 		submitPlan(t, c, "the plan")
-		assert.Contains(t, f.notices[len(f.notices)-2], "could not switch branch")
+		assert.Contains(t, f.notices[len(f.notices)-2], "could not complete the branch switch")
 	})
 
 	t.Run("revision_cap_reports", func(t *testing.T) {

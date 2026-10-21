@@ -586,13 +586,17 @@ func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
 	})
 }
 
-func (r *sessRec) liveModel(ag *agent.Agent) llm.Model {
+// liveModel captures the live model for a switch to keep across a rebuild. ok
+// is false when a turn claims the loop, so nothing was captured.
+func (r *sessRec) liveModel(ag *agent.Agent) (llm.Model, bool) {
 	if ag == nil {
-		return llm.Model{}
+		return llm.Model{}, true
 	}
-	save := llm.Model{}
-	ag.WithState(func(st *agent.State) { save = st.Model })
-	return save
+	var save llm.Model
+	if !ag.WithState(func(st *agent.State) { save = st.Model }) {
+		return llm.Model{}, false
+	}
+	return save, true
 }
 
 func syncModelUI(ui *tui.UI, reg *llm.Registry, m llm.Model) {
@@ -613,8 +617,9 @@ func replaySink(ui *tui.UI) agent.Sink {
 
 // restoreForkModel re-applies m as the live model over the switched context,
 // reseeding the ledger against it. It reports errTurnRunning when a turn claims
-// the loop first, leaving the model as the switch left it.
-func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model, prefix string) error {
+// the loop first, leaving the model as the switch left it. The caller owns the
+// refusal notice.
+func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) error {
 	if m.ID == "" || ag == nil {
 		return nil
 	}
@@ -625,7 +630,6 @@ func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registr
 		st.Tokens.Reseed(tokens.EstimateFor(m, st.Reasoning.Retain, st.Messages))
 		ledger = st.Tokens
 	}) {
-		ui.Notify(prefix+errTurnRunning.Error(), tui.LevelWarn)
 		return errTurnRunning
 	}
 	// this deliberately overwrites what switchState seeded, so the base is measured
@@ -720,7 +724,12 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	// keep the current model across a fork: rebuilding from an earlier point
 	// would otherwise revert to whatever model was active there, silently undoing
 	// a /model switch when that prior message is re-sent.
-	saveModel := r.liveModel(ag)
+	saveModel, ok := r.liveModel(ag)
+	if !ok {
+		// a refused capture means a turn owns the loop, nothing may move
+		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
+		return
+	}
 	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
 		return
 	}
@@ -729,7 +738,11 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	}
 	// a turn claiming the loop here runs against the switched state, so the redraw
 	// below would wipe its live output: leave the screen to it
-	if err := r.restoreForkModel(ui, ag, reg, saveModel, "rewind: "); err != nil {
+	if err := r.restoreForkModel(ui, ag, reg, saveModel); err != nil {
+		// the model is never forced through the refusal, the notice names it
+		ui.Notify(fmt.Sprintf(
+			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
+			saveModel.Key()), tui.LevelWarn)
 		return
 	}
 
