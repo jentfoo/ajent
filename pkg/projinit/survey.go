@@ -232,21 +232,43 @@ func repoFiles(ctx context.Context, cwd string) []string {
 	return walkFiles(ctx, cwd)
 }
 
-// gitLsFiles returns tracked and untracked non-ignored paths, or nil on failure.
+// gitLsFiles returns tracked and untracked non-ignored paths under cwd, or nil
+// on failure.
 func gitLsFiles(ctx context.Context, cwd string) []string {
 	dctx, cancel := context.WithTimeout(ctx, gitTimeout)
 	defer cancel()
 	var out strings.Builder
-	cmd := exec.CommandContext(dctx, "git", "-C", cwd, "ls-files", "-co", "--exclude-standard")
+	// The "." pathspec keeps ls-files to cwd's subtree. Raw -z framing: text
+	// output quotes non-ASCII names (core.quotePath) and a whole-output trim eats
+	// the first record's leading whitespace.
+	cmd := exec.CommandContext(dctx, "git", "-C", cwd,
+		"ls-files", "-co", "--exclude-standard", "-z", "--", ".")
 	cmd.Stdout = &out
 	if cmd.Run() != nil {
 		return nil
 	}
-	text := strings.TrimSpace(out.String())
-	if text == "" {
-		return nil
+	parts := strings.Split(out.String(), "\x00")
+	files := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, f := range parts {
+		if f == "" { // the trailing separator always yields one empty element
+			continue
+		}
+		p := filepath.Join(cwd, f)
+		if _, ok := tools.WithinRoot(cwd, p); !ok { // older git still emits ../, never leave scope
+			continue
+		}
+		// -c lists deleted-but-tracked files; Lstat drops symlinks like pkg/tools' walk
+		if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if _, dup := seen[f]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
+			continue
+		}
+		seen[f] = struct{}{}
+		files = append(files, f)
 	}
-	return strings.Split(text, "\n")
+	return files
 }
 
 // walkFiles is the non-repository fallback: a bounded walk skipping VCS and
@@ -268,6 +290,9 @@ func walkFiles(ctx context.Context, cwd string) []string {
 			if strings.HasPrefix(d.Name(), ".") || tools.IsSkippedDir(path) {
 				return filepath.SkipDir
 			}
+			return nil
+		}
+		if !d.Type().IsRegular() { // symlinks stay unlisted, matching pkg/tools' walk
 			return nil
 		}
 		if out = append(out, filepath.ToSlash(rel)); len(out) >= maxWalkFiles {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -128,6 +129,20 @@ func writeTree(t *testing.T, dir string, paths ...string) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(full), 0o755))
 		require.NoError(t, os.WriteFile(full, []byte("package x\n"), 0o644))
 	}
+}
+
+// gitInit turns dir into a fresh repo with everything tracked.
+func gitInit(t *testing.T, dir string) {
+	t.Helper()
+
+	init := exec.CommandContext(t.Context(), "git", "init", "-q")
+	init.Dir = dir
+	if err := init.Run(); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	add := exec.CommandContext(t.Context(), "git", "add", "-A")
+	add.Dir = dir
+	require.NoError(t, add.Run())
 }
 
 // toolNames returns the tool name of every call block in msgs, in order.
