@@ -625,7 +625,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		pump, ag, console, stager, expander, rec != nil, ui, starts,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
-	// an argv prompt is the user's own input, recalled like a typed line
+	// an argv prompt is the user's own input, recalled like a typed line. It carries no
+	// editor escape, so Append sees the very text the transcript records and its secret
+	// exclusion cannot diverge from the transcript-derived indexes.
 	if initial := argvPrompt(args); initial != "" {
 		hist.Append(initial) // durable in the workspace store for ↑/↓ and Ctrl+R
 		// echo and accounting happen in the pump like every other prompt.
@@ -694,11 +696,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 					ui.Notify(n, tui.LevelWarn)
 				}
 			}
-			if line.Kind == command.KindCommand {
-				hist.AppendHidden(msg) // slash commands stay durable yet excluded from ↑/↓ and Ctrl+R
-			} else {
-				hist.Append(msg) // every prompt and !shell line recorded for recall, nil-safe
-			}
+			appendHistory(hist, secretPrefix, msg, line)
 			switch line.Kind {
 			case command.KindShell:
 				stager.Run(line.Rest, line.Excluded)
@@ -714,6 +712,21 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			shutdown()
 			return rec.exitLabel() // drop an abandoned session, else the resume hint label
 		}
+	}
+}
+
+// appendHistory records one submitted editor line on the workspace recall store;
+// a nil hist is a no-op. The pasted-secret exclusion is decided here, once per
+// submission and always on line.Rest (the exact text reaching the transcript), so
+// a raw line's escape space cannot land an excluded value in the durable file.
+func appendHistory(hist *session.EditorHistory, prefix string, msg string, line command.Line) {
+	switch {
+	case line.Kind == command.KindCommand:
+		hist.AppendHidden(msg) // slash commands stay durable yet excluded from ↑/↓ and Ctrl+R
+	case line.Kind == command.KindPrompt && session.HasSecretPrefix(prefix, line.Rest):
+		// skipped from history exactly as the transcript-derived indexes drop it
+	default:
+		hist.Append(msg) // every prompt and !shell line recorded for recall
 	}
 }
 

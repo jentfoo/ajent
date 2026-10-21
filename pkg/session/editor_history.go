@@ -18,10 +18,17 @@ const maxHistoryLines = 1000
 // historyFileName is the per-workspace message record inside a session directory.
 const historyFileName = "editor-history.lines"
 
-// hasSecretPrefix reports whether msg carries the pasted-secret prefix. One knob
-// governs every recall surface: editor history and both prompt indexes.
-func hasSecretPrefix(prefix, msg string) bool {
+// HasSecretPrefix reports whether msg opens with the pasted-secret marker. One
+// predicate governs every recall surface: editor history and both prompt indexes.
+func HasSecretPrefix(prefix, msg string) bool {
 	return prefix != "" && strings.HasPrefix(msg, prefix)
+}
+
+// secretTyped reports whether a raw typed line is excluded once its one-space
+// editor escape is removed, the form ParseLine strips before the transcript
+// records it. Rows written before the submit-time check heal through this too.
+func secretTyped(prefix, raw string) bool {
+	return HasSecretPrefix(prefix, strings.TrimPrefix(raw, " "))
 }
 
 // histLine is one persisted message plus whether it may be offered for recall.
@@ -65,14 +72,16 @@ func (h *EditorHistory) Append(msg string) { h.append(msg, false) }
 // a no-op.
 func (h *EditorHistory) AppendHidden(msg string) { h.append(msg, true) }
 
-// append writes msg durably and offers it for recall. Blank and secret-prefixed
-// messages are skipped, a failed write keeping the line recallable this session.
+// append writes msg durably and offers it for recall. Blank lines are skipped,
+// as is any line bearing the secret marker once its escape space is stripped (a
+// raw line cannot bypass what submit time excluded). A failed write keeps the
+// line recallable this session.
 func (h *EditorHistory) append(msg string, hidden bool) {
 	if h == nil || msg == "" { // nil receiver keeps callers free of guards
 		return
 	}
 	msg = strings.TrimRight(msg, "\r")
-	if msg == "" || hasSecretPrefix(h.secretPrefix, msg) {
+	if msg == "" || secretTyped(h.secretPrefix, msg) {
 		return
 	}
 	l := histLine{msg: msg, hidden: hidden}
@@ -163,7 +172,11 @@ func (h *EditorHistory) Compact() {
 	lines = append(lines, h.added...)
 
 	out := normalize(lines, h.secretPrefix)
-	if len(out) == 0 { // nothing to persist, don't create a phantom empty file
+	if len(out) == 0 { // nothing survives: empty a stale file rather than keep dropped rows
+		if _, serr := os.Stat(h.path); serr != nil {
+			return // no file either, and none gains a phantom empty placeholder
+		}
+		_ = h.writeFile(h.path, nil, config.SecretPerm) // excluded rows never queue, so a failed scrub loses nothing
 		return
 	}
 	var buf bytes.Buffer
@@ -231,14 +244,15 @@ func decodeHistLine(row string) (histLine, bool) {
 	return histLine{msg: row}, true // plain-text leftover
 }
 
-// normalize trims CRs, drops blank/secret lines, keeps each text's newest occurrence,
-// then caps at maxHistoryLines from the newest. A text stays visible when any copy was
-// typed, purely hidden texts staying excluded.
+// normalize trims CRs, drops blank/secret lines (re-tested on each row's escape-
+// stripped form, healing rows an older build stored raw), keeps each text's newest
+// occurrence, then caps at maxHistoryLines from the newest. A text stays visible
+// when any copy was typed, purely hidden texts staying excluded.
 func normalize(lines []histLine, secretPrefix string) []histLine {
 	clean := make([]histLine, 0, len(lines))
 	for _, l := range lines {
 		m := strings.TrimRight(l.msg, "\r")
-		if m != "" && !hasSecretPrefix(secretPrefix, m) {
+		if m != "" && !secretTyped(secretPrefix, m) {
 			clean = append(clean, histLine{msg: m, hidden: l.hidden})
 		}
 	}

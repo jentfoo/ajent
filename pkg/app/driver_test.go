@@ -507,6 +507,42 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 	})
 }
 
+func TestAppendHistory(t *testing.T) {
+	t.Parallel()
+
+	// pins the submit-time recall decision: the pasted-secret exclusion reads
+	// line.Rest (the text reaching the transcript), so a raw line's escape space
+	// cannot land an excluded value in the durable store, while every other kind
+	// keeps its typed form for round-tripping.
+	newHist := func(t *testing.T) *session.EditorHistory {
+		t.Helper()
+
+		s := session.StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		h, err := session.NewEditorHistory(s, t.TempDir(), secretPrefix)
+		require.NoError(t, err)
+		return h
+	}
+
+	for _, tc := range []struct {
+		name string
+		msg  string
+		want []string // the recall entries the submission leaves behind
+	}{
+		{"command_hidden", "/model x", nil},
+		{"shell_recorded", "!ls -la", []string{"!ls -la"}},
+		{"prompt_recorded", "hello world", []string{"hello world"}},
+		{"escaped_prompt_round_trips", " /notacommand", []string{" /notacommand"}},
+		{"plain_secret_skipped", "secret:hunter2", nil},
+		{"escaped_secret_skipped", " secret:hunter2", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHist(t)
+			appendHistory(h, secretPrefix, tc.msg, command.ParseLine(tc.msg))
+			assert.Equal(t, tc.want, h.Recent())
+		})
+	}
+}
+
 func TestPermissionsModeDefaultResolves(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	set, _, err := config.Load(config.Options{

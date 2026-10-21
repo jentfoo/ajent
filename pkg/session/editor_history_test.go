@@ -36,6 +36,26 @@ func storedMessages(path string) []string {
 	return out
 }
 
+func TestHasSecretPrefix(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name   string
+		prefix string
+		msg    string
+		want   bool
+	}{
+		{"empty_prefix_never_matches", "", "secret:x", false},
+		{"match_at_start", "secret:", "secret:hunter2", true},
+		{"no_match_mid_line", "secret:", "use secret:x", false},
+		{"leading_space_is_no_match", "secret:", " secret:x", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, HasSecretPrefix(tc.prefix, tc.msg))
+		})
+	}
+}
+
 func TestEditorHistoryAppend(t *testing.T) {
 	t.Parallel()
 
@@ -59,6 +79,17 @@ func TestEditorHistoryAppend(t *testing.T) {
 		h.Append("secret:api-key-value")
 		assert.Equal(t, []string{"good line"}, storedMessages(h.path))
 		assert.NotContains(t, string(mustReadFile(t, h.path)), "api-key-value")
+	})
+
+	// the escape space rides stored rows, so the exclusion re-runs on the stripped
+	// form: an escaped secret must not land in the durable file under its raw form.
+	t.Run("drops_escaped_secret", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.secretPrefix = "secret:"
+		h.Append(" /notacommand") // an escaped non-secret keeps its escape for round-tripping
+		h.Append(" secret:hunter2")
+		assert.Equal(t, []string{" /notacommand"}, h.Recent())
+		assert.NotContains(t, string(mustReadFile(t, h.path)), "hunter2")
 	})
 
 	t.Run("drops_blank_and_cr", func(t *testing.T) {
@@ -172,6 +203,15 @@ func TestEditorHistoryRecent(t *testing.T) {
 		assert.Empty(t, h.Recent())
 	})
 
+	// a row an older build stored raw (before the submit-time check covered escape
+	// spaces) heals out of recall on the first read.
+	t.Run("heals_legacy_secret_rows", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.secretPrefix = "secret:"
+		require.NoError(t, os.WriteFile(h.path, []byte("\" secret:hunter2\"\n\"good line\"\n"), 0o600))
+		assert.Equal(t, []string{"good line"}, h.Recent())
+	})
+
 	t.Run("caps_hand_edited_file", func(t *testing.T) {
 		var b []byte
 		for i := 0; i < maxHistoryLines+10; i++ { // over-long plain-text file from an external writer
@@ -273,6 +313,24 @@ func TestEditorHistoryCompact(t *testing.T) {
 		h.compacting = true // Recent armed a compaction before the file turned all-secret
 		h.Compact()
 		assert.False(t, h.compacting)
+	})
+
+	// an all-excluded legacy file must not keep carrying its rows forever: the
+	// rewrite empties it instead of leaving dropped values on disk.
+	t.Run("scrubs_all_excluded_file", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.secretPrefix = "secret:"
+		require.NoError(t, os.WriteFile(h.path, []byte("\" secret:hunter2\"\n\"secret:more\"\n"), 0o600))
+		h.Compact()
+		assert.Empty(t, storedMessages(h.path))
+		assert.NotContains(t, string(mustReadFile(t, h.path)), "hunter2")
+	})
+
+	// a missing file stays absent when nothing survives: no phantom empty file.
+	t.Run("no_phantom_file_when_empty", func(t *testing.T) {
+		h := newTestHistory(t, t.TempDir())
+		h.Compact()
+		assert.Empty(t, storedMessages(h.path))
 	})
 }
 

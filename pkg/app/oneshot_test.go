@@ -798,6 +798,35 @@ func TestRunHeadless(t *testing.T) {
 		assert.Contains(t, hist.Recent(), "recall me")
 	})
 
+	// a one-shot's prompt is its own transcript form (no editor escape), so the
+	// append-time exclusion alone must keep it out of both recall surfaces.
+	t.Run("secret_prompt_not_recalled", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		t.Setenv("AJENT_HOME", t.TempDir())
+		set, _, err := config.Load(config.Options{Workspace: config.Cwd()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		model := llm.Model{Provider: "p", ID: "m", ContextWindow: 100000}
+
+		sp := &llm.ScriptedProvider{ProviderName: "p", Turns: []llm.ScriptedTurn{{Events: textTurn("answer")}}}
+		var out, errw bytes.Buffer
+		code := RunHeadless(HeadlessOptions{
+			Prompt: "secret:hunter2", Output: OutputText, Set: set, Reg: reg,
+			Active: model, SessMode: ResumeNewSession,
+			Out: &out, Errw: &errw,
+			Provider: func(llm.Model) (llm.Provider, error) { return sp, nil },
+		})
+		require.Equal(t, ExitOK, code, errw.String())
+
+		store, serr := session.NewStore()
+		require.NoError(t, serr)
+		hist, herr := session.NewEditorHistory(store, config.Cwd(), secretPrefix)
+		require.NoError(t, herr)
+		assert.Empty(t, hist.Recent())
+		idx := session.NewPromptIndex(store, config.Cwd(), secretPrefix) // Ctrl+R backfill excludes it too
+		assert.Empty(t, session.PromptTexts(idx.Prompts()))
+	})
+
 	t.Run("no_model_exits_one", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		t.Setenv("AJENT_HOME", t.TempDir())

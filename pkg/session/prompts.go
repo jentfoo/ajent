@@ -122,7 +122,7 @@ func filePrompts(path string) []Prompt {
 // dropSecretPrompts removes prompts carrying the pasted-secret prefix, so a
 // transcript-derived surface cannot resurface what editor history never stored.
 func dropSecretPrompts(prefix string, ps []Prompt) []Prompt {
-	return bulk.SliceFilter(func(p Prompt) bool { return !hasSecretPrefix(prefix, p.Text) }, ps)
+	return bulk.SliceFilter(func(p Prompt) bool { return !HasSecretPrefix(prefix, p.Text) }, ps)
 }
 
 // PromptIndex caches a workspace's prompt list on a short TTL so Ctrl+R never
