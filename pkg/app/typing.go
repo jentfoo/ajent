@@ -18,11 +18,12 @@ const (
 // the loop goroutine, the dialog hold on tool goroutines dispatch serializes. Windows
 // are fields so tests can shorten them.
 type typingGate struct {
-	pending func() int               // queued steer items
-	status  func(text, short string) // status segment, empty text removes it
-	idle    time.Duration            // unchanged draft resumes the boundary after this
-	handoff time.Duration            // grace for a submitted line to reach the queue
-	poll    time.Duration            // hold re-check interval
+	pending   func() int               // queued steer items
+	searching func() (bool, time.Time) // Ctrl+R overlay open, and its last activity
+	status    func(text, short string) // status segment, empty text removes it
+	idle      time.Duration            // unchanged draft resumes the boundary after this
+	handoff   time.Duration            // grace for a submitted line to reach the queue
+	poll      time.Duration            // hold re-check interval
 
 	mu       sync.Mutex
 	draft    string    // editor text as of the last edit
@@ -102,9 +103,20 @@ func (g *typingGate) holdWhile(ctx context.Context, label string) {
 		session := g.session
 		g.mu.Unlock()
 
+		var searchOpen bool
+		var searchAt time.Time
+		if g.searching != nil {
+			searchOpen, searchAt = g.searching()
+		}
+
 		var deadline time.Time
 		var countdown bool
 		switch {
+		case searchOpen:
+			// a Ctrl+R search outranks the draft: its keys never fire edit events, so the
+			// draft's anchor is stale and only the search's own keeps the countdown honest
+			deadline = searchAt.Add(g.idle)
+			countdown = true
 		case draft != "":
 			deadline = at.Add(g.idle)
 			countdown = true // only a visible draft shows the countdown

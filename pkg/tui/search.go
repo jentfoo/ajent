@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"time"
 
 	"github.com/go-analyze/bulk"
 )
@@ -36,6 +37,7 @@ type searchOverlay struct {
 	matches []SearchItem // substring hits, newest first
 	cursor  int          // index into matches
 	pending bool         // provider still running
+	at      time.Time    // last open, key or delivery, the anchor a typing hold counts down from
 }
 
 // refilter recomputes the match set on a case-insensitive substring. An empty

@@ -458,7 +458,11 @@ it.
   dialogs: a barrier holds its dialog until the user pauses their message,
   clears, or submits (the prompter's `Hold`, driven by the driver's
   `typingGate`), so an approve/deny prompt never steals focus from a draft
-  mid-keystroke. The hold takes the turn's context, so an interrupt still
+  mid-keystroke. An open Ctrl+R history search holds the same way: its
+  keystrokes never reach the editor, so the TUI exposes the overlay's open
+  state and last activity (`UI.Searching`) and the gate anchors its countdown
+  there, outranking the draft whose own anchor goes stale while the overlay
+  owns the keys. The hold takes the turn's context, so an interrupt still
   cancels the wait and denies the call without opening a dialog.
 
   The delay gates only the human prompt, never AI decisions: the auto modes

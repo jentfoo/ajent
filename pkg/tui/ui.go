@@ -1355,6 +1355,19 @@ func (u *UI) SetHistorySearch(fn func() []SearchItem) {
 	u.repaint()
 }
 
+// Searching reports whether the Ctrl+R history-search overlay is open, and when
+// the user last acted in it or results last landed. Hosts hold dialogs and step
+// boundaries on it as they do on a draft, since search keys never reach the editor.
+func (u *UI) Searching() (bool, time.Time) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	if u.search == nil {
+		return false, time.Time{}
+	}
+	return true, u.search.at
+}
+
 // SetPromptHistory installs the plain ↑/↓ recall source, scoped however the
 // host chooses. An empty list falls back to the history-search source's texts.
 // fn runs off the key loop and a nil restores that fallback directly.
@@ -1376,7 +1389,7 @@ func (u *UI) openSearchLocked() {
 	fn := u.historySearch
 	u.completion = nil
 	u.cancelRewindLocked()
-	u.search = &searchOverlay{pending: true}
+	u.search = &searchOverlay{pending: true, at: time.Now()}
 	u.safeGo(func() { u.deliverSearch(fn()) }) // safeGo: a host source panic must not leave the terminal raw
 }
 
@@ -1535,6 +1548,7 @@ func (u *UI) deliverSearch(items []SearchItem) {
 	u.search.items = items
 	u.search.pending = false
 	u.search.refilter()
+	u.search.at = time.Now() // results landing re-anchor, a slow scan must not time out the hold
 	u.repaint()
 }
 
@@ -1589,6 +1603,7 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		default:
 			switch act := u.search.key(k); act {
 			case searchStay:
+				u.search.at = time.Now() // each consumed key re-anchors a typing hold
 				return nil, true, false
 			case searchAccept:
 				u.acceptSearchLocked() // Enter commits the highlighted prompt

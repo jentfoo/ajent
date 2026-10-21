@@ -55,11 +55,12 @@ func (r *statusRecorder) last() string {
 // idle window is wide by default so only an explicit release or cancel ends a hold.
 func newTypingGate() *typingGate {
 	return &typingGate{
-		pending: func() int { return 0 },
-		status:  func(string, string) {},
-		idle:    time.Hour,
-		handoff: 30 * time.Millisecond,
-		poll:    5 * time.Millisecond,
+		pending:   func() int { return 0 },
+		searching: func() (bool, time.Time) { return false, time.Time{} },
+		status:    func(string, string) {},
+		idle:      time.Hour,
+		handoff:   30 * time.Millisecond,
+		poll:      5 * time.Millisecond,
 	}
 }
 
@@ -357,6 +358,58 @@ func TestTypingGateHoldDialog(t *testing.T) {
 		case <-done:
 		case <-time.After(2 * time.Second):
 			t.Fatal("a cancelled context did not release the held dialog")
+		}
+	})
+
+	// an open Ctrl+R search holds like a draft: its keys never reach the editor
+	t.Run("open_search_holds", func(t *testing.T) {
+		g := newTypingGate()
+		var open atomic.Bool
+		open.Store(true)
+		g.searching = func() (bool, time.Time) { return open.Load(), time.Now() }
+
+		done := g.holdDialogIn(t.Context())
+		select {
+		case <-done:
+			t.Fatal("an open search must hold the dialog")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		open.Store(false)
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("closing the search did not release the held dialog")
+		}
+	})
+
+	t.Run("idle_search_releases", func(t *testing.T) {
+		g := newTypingGate()
+		g.idle = 40 * time.Millisecond
+		g.searching = func() (bool, time.Time) { return true, time.Now().Add(-time.Minute) }
+
+		select {
+		case <-g.holdDialogIn(t.Context()):
+		case <-time.After(2 * time.Second):
+			t.Fatal("an abandoned search must release the held dialog")
+		}
+	})
+
+	// the draft's anchor goes stale while the overlay owns the keys, so the search wins
+	t.Run("search_outranks_stale_draft", func(t *testing.T) {
+		g := newTypingGate()
+		g.idle = 20 * time.Millisecond
+		g.edit("stale draft")
+		g.mu.Lock()
+		g.at = time.Now().Add(-time.Minute)
+		g.mu.Unlock()
+		g.searching = func() (bool, time.Time) { return true, time.Now() }
+
+		done := g.holdDialogIn(t.Context())
+		select {
+		case <-done:
+			t.Fatal("an open search must hold over a draft whose anchor went stale")
+		case <-time.After(50 * time.Millisecond):
 		}
 	})
 

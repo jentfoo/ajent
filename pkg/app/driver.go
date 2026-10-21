@@ -180,10 +180,11 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	// typingGate holds the next step boundary while the user is mid-message, so a
 	// prompt they are still typing lands in this step instead of behind it.
 	gate := &typingGate{
-		idle:    typingIdle,
-		handoff: typingHandoff,
-		poll:    typingPoll,
-		pending: q.pending,
+		idle:      typingIdle,
+		handoff:   typingHandoff,
+		poll:      typingPoll,
+		pending:   q.pending,
+		searching: ui.Searching,
 	}
 	// the hold speaks through the shared hint board, so a quit countdown can
 	// take the line and hand it back to a still-held boundary when it releases.

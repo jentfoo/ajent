@@ -1097,6 +1097,36 @@ func TestUISearchOverlay(t *testing.T) {
 	})
 }
 
+func TestUISearchingReportsOverlayActivity(t *testing.T) {
+	t.Parallel()
+
+	v := newVT(60, 10)
+	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+	u := newTestUI(t, v, pr)
+	u.SetHistorySearch(func() []SearchItem { return []SearchItem{{Text: "fix the retry loop"}} })
+
+	open, at := u.Searching()
+	assert.False(t, open)
+	assert.True(t, at.IsZero())
+
+	searchPress(u, key{typ: keyReverseSearch})
+	u.waitOpenSearch(t)
+	open, at = u.Searching()
+	require.True(t, open)
+	require.False(t, at.IsZero())
+
+	// every key the overlay consumes re-anchors the activity timestamp
+	searchPress(u, key{typ: keyRune, text: "re"})
+	open, next := u.Searching()
+	require.True(t, open)
+	assert.True(t, next.After(at))
+
+	searchPress(u, key{typ: keyEnter}) // accept: the overlay closes, the editor holds the match
+	open, _ = u.Searching()
+	assert.False(t, open)
+	assert.Equal(t, "fix the retry loop", u.editor.Value())
+}
+
 func TestUISearchOverlayEscapeLeavesBuffer(t *testing.T) {
 	t.Parallel()
 
