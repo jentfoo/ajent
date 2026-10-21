@@ -41,6 +41,22 @@ func TestParseFlags(t *testing.T) {
 		assert.Equal(t, "hello there", f.prompt)
 	})
 
+	t.Run("prompt_trimmed_and_given", func(t *testing.T) {
+		f, err := parseFlags([]string{"-p", "  hello there  "})
+		require.NoError(t, err)
+		assert.True(t, f.promptGiven)
+		assert.Equal(t, "hello there", f.prompt)
+
+		f, err = parseFlags([]string{"--prompt="})
+		require.NoError(t, err)
+		assert.True(t, f.promptGiven) // a given-but-blank value is still an explicit ask
+		assert.Empty(t, f.prompt)
+
+		f, err = parseFlags(nil)
+		require.NoError(t, err)
+		assert.False(t, f.promptGiven)
+	})
+
 	t.Run("output_and_scopes", func(t *testing.T) {
 		f, err := parseFlags([]string{"-p", "x", "-o", "json", "--read-only"})
 		require.NoError(t, err)
@@ -202,6 +218,9 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"unknown_output", []string{"-p", "hi", "-o", "yaml"}, false},
 		{"output_without_prompt", []string{"-o", "json"}, false},
 		{"deny_tools_without_prompt", []string{"--deny-tools", "bash"}, false},
+		{"blank_prompt_flag", []string{"-p", "   "}, false},
+		{"empty_prompt_value", []string{"-p", ""}, false},
+		{"delete_with_blank_prompt", []string{"--delete", "a", "-p", "  "}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -225,6 +244,13 @@ func TestCliFlagsValidate(t *testing.T) {
 		// the = form reports the same thing from the parser
 		_, err = parseFlags([]string{"--delete-old=soon"})
 		require.EqualError(t, err, `--delete-old takes a number of days, not "soon"`)
+	})
+
+	// a prompt flag that trims away refuses like an all-blank pipe would
+	t.Run("blank_prompt_refused", func(t *testing.T) {
+		f, err := parseFlags([]string{"-p", "   "})
+		require.NoError(t, err)
+		require.EqualError(t, f.validate(), "--prompt is blank; give it a prompt or drop the flag")
 	})
 }
 

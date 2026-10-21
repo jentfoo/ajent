@@ -69,6 +69,7 @@ func TestRouteStartup(t *testing.T) {
 	tests := []struct {
 		name   string
 		prompt string // the -p value
+		args   []string
 		stdin  func(*testing.T) *os.File
 		stdout func(*testing.T) *os.File
 		want   startupRoute
@@ -81,6 +82,53 @@ func TestRouteStartup(t *testing.T) {
 			stdout: piped(""),
 			want:   routeHeadless,
 			text:   "explain the flake",
+		},
+		{
+			name:   "flag prompt trimmed",
+			prompt: "  explain the flake  ",
+			stdin:  broken, // -p must never drain stdin
+			stdout: piped(""),
+			want:   routeHeadless,
+			text:   "explain the flake",
+		},
+		{
+			name:   "argv args win", // the argv read must never decide the route first
+			args:   []string{"why did this fail"},
+			stdin:  broken, // an explicit prompt beside stdin is never drained either
+			stdout: piped(""),
+			want:   routeHeadless,
+			text:   "why did this fail",
+		},
+		{
+			name:   "argv args joined and trimmed",
+			args:   []string{"  why did this", "fail"},
+			stdin:  broken,
+			stdout: piped(""),
+			want:   routeHeadless,
+			text:   "why did this fail",
+		},
+		{
+			name:   "argv args beat blank pipe", // the seeded prompt 3874865 routed away
+			args:   []string{"why did this fail"},
+			stdin:  piped("\n"),
+			stdout: openTTY,
+			want:   routeHeadless,
+			text:   "why did this fail",
+		},
+		{
+			name:   "blank argv falls to streams",
+			args:   []string{"  ", ""},
+			stdin:  piped(""),
+			stdout: openTTY,
+			want:   routeUsage,
+			text:   "piped stdin was empty; use --prompt or pipe a prompt on stdin",
+		},
+		{
+			name:   "argv args in terminal pair",
+			args:   []string{"seed question"},
+			stdin:  openTTY,
+			stdout: openTTY,
+			want:   routeInteractive,
 		},
 		{
 			name:   "piped payload trimmed",
@@ -132,7 +180,7 @@ func TestRouteStartup(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			route, text := routeStartup(tt.prompt, tt.stdin(t), tt.stdout(t))
+			route, text := routeStartup(tt.prompt, tt.args, tt.stdin(t), tt.stdout(t))
 			assert.Equal(t, tt.want, route)
 			switch route {
 			case routeHeadless:

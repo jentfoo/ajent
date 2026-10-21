@@ -87,7 +87,7 @@ func Run(o RunOptions) int {
 	// headless path rather than running the driver with a prompter that cannot
 	// open. tmux and alt-screen still present TTYs, so this only fires on a real
 	// pipe or redirect.
-	route, text := routeStartup(o.Prompt, os.Stdin, os.Stdout)
+	route, text := routeStartup(o.Prompt, o.Args, os.Stdin, os.Stdout)
 	if route == routeUsage {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", text)
 		return ExitUsage
@@ -165,32 +165,46 @@ const (
 	routeUsage                           // nothing can run; usage text explains why
 )
 
-// routeStartup classifies an invocation by its -p prompt and process streams.
-// It returns which driver should run plus either the prompt to answer for
-// routeHeadless or the usage message to print for routeUsage.
-func routeStartup(prompt string, stdin, stdout *os.File) (startupRoute, string) {
-	if prompt != "" {
-		// the flag outranks the streams; piped bytes beside -p are never read
-		return routeHeadless, prompt
+// argvPrompt joins positional arguments into the bootstrap prompt they carry,
+// empty when nothing usable was given.
+func argvPrompt(args []string) string {
+	return strings.TrimSpace(strings.Join(args, " "))
+}
+
+// routeStartup classifies an invocation by its prompt sources (the -p flag,
+// positional arguments, piped stdin) and process streams. It returns which
+// driver should run plus either the prompt to answer for routeHeadless or the
+// usage message to print for routeUsage.
+func routeStartup(prompt string, args []string, stdin, stdout *os.File) (startupRoute, string) {
+	if p := strings.TrimSpace(prompt); p != "" {
+		// the flag outranks every other source, piped bytes beside -p are never read
+		return routeHeadless, p
+	}
+	if isTerminal(stdin) && isTerminal(stdout) {
+		// a terminal pair opens the TUI, where positional arguments seed the first prompt
+		return routeInteractive, ""
+	}
+	if p := argvPrompt(args); p != "" {
+		// positional arguments carry as explicit a prompt as the flag: with no editor
+		// to open it runs headless, and stdin beside it is never drained either
+		return routeHeadless, p
 	}
 	if isTerminal(stdin) {
-		if isTerminal(stdout) {
-			return routeInteractive, ""
-		}
-		// a redirect with no -p has nothing to run and nowhere interactive to go
+		// a typed-in invocation with redirected stdout has nothing to run and
+		// nowhere interactive to go
 		return routeUsage, "stdout is not a terminal; use --prompt or pipe a prompt on stdin"
 	}
 	data, err := io.ReadAll(stdin)
 	if err != nil {
 		return routeUsage, "reading piped stdin: " + err.Error()
 	}
-	prompt = strings.TrimSpace(string(data))
-	if prompt == "" {
+	text := strings.TrimSpace(string(data))
+	if text == "" {
 		// an emptied pipe leaves stdin at EOF: the TUI cannot take over and no
 		// prompt exists to run, so this is the usage error a redirect already gives
 		return routeUsage, "piped stdin was empty; use --prompt or pipe a prompt on stdin"
 	}
-	return routeHeadless, prompt
+	return routeHeadless, text
 }
 
 // isTerminal reports whether f is a character device, the same test the TUI

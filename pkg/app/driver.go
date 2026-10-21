@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -625,8 +624,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		pump, ag, console, stager, expander, rec != nil, ui, starts,
 		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
-	if len(args) > 0 { // an argv prompt is the user's own input, recalled like a typed line
-		initial := strings.Join(args, " ")
+	// an argv prompt is the user's own input, recalled like a typed line
+	if initial := argvPrompt(args); initial != "" {
 		hist.Append(initial) // durable in the workspace store for ↑/↓ and Ctrl+R
 		// echo and accounting happen in the pump like every other prompt.
 		send(pumpLine{kind: command.KindPrompt, rest: initial})

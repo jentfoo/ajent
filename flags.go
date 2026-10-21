@@ -39,16 +39,17 @@ type cliFlags struct {
 	deleteOld     bool   // --delete-old: sweep unnamed sessions unused past the cutoff
 	deleteOldDays int    // days from --delete-old <days>, 0 when the default applies
 
-	prompt     string
-	system     string // --system: replaces ajent's default prose guidance when non-empty
-	output     string
-	stats      bool
-	allowAll   bool
-	readOnly   bool
-	allowAuto  bool
-	autoWrite  bool
-	allowTools []string
-	denyTools  []string
+	prompt      string
+	promptGiven bool   // -p/--prompt appeared, even when its value trims away
+	system      string // --system: replaces ajent's default prose guidance when non-empty
+	output      string
+	stats       bool
+	allowAll    bool
+	readOnly    bool
+	allowAuto   bool
+	autoWrite   bool
+	allowTools  []string
+	denyTools   []string
 
 	args     []string // positional arguments, joined into a bootstrap prompt
 	headless []string // headless flag names actually given, for validation
@@ -127,6 +128,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 	f.sessionName = strings.TrimSpace(f.sessionName)
 	f.deleteGiven = fs.Changed("delete")
 	f.deleteTarget = strings.TrimSpace(f.deleteTarget)
+	f.promptGiven = fs.Changed("prompt")
+	f.prompt = strings.TrimSpace(f.prompt)
 	for _, name := range headlessFlagNames {
 		if fs.Changed(name) {
 			f.headless = append(f.headless, "--"+name)
@@ -164,7 +167,7 @@ func (f cliFlags) validate() error {
 			// only a day count follows --delete-old, so a leftover positional is one
 			// that did not parse as digits
 			return fmt.Errorf("--delete-old takes a number of days, not %q", f.args[0])
-		case f.resume || f.cont || f.sessionGiven || f.prompt != "" || len(f.args) > 0:
+		case f.resume || f.cont || f.sessionGiven || f.promptGiven || len(f.args) > 0:
 			return errors.New("--delete and --delete-old cannot be combined with a session or prompt flag")
 		}
 		return nil
@@ -182,6 +185,9 @@ func (f cliFlags) validate() error {
 		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
 	}
 	if f.prompt == "" {
+		if f.promptGiven {
+			return errors.New("--prompt is blank; give it a prompt or drop the flag")
+		}
 		if len(f.headless) > 0 {
 			return fmt.Errorf("%s only applies with --prompt", strings.Join(f.headless, ", "))
 		}
