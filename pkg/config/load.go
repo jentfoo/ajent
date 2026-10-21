@@ -241,8 +241,8 @@ func (s *Set) SeedSession(overrides map[string]json.RawMessage) []string {
 }
 
 // Save writes key into the named file layer ("user" or "project") and
-// re-resolves. Warnings report content that saving will drop (comments), while
-// errors are write failures.
+// re-resolves. Warnings report content a landed save dropped, such as //
+// comments; an error means nothing was written, so no warnings ride one.
 func (s *Set) Save(layer, key string, value any) ([]string, error) {
 	target := s.layerForSave(layer)
 	if target == nil {
@@ -255,20 +255,9 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 		defer release()
 	}
 
-	var warns []string
-	raw, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		raw = nil // a brand new file starts empty
-	case err != nil:
+	raw, droppedComments, err := ReadForSave(path)
+	if err != nil {
 		return nil, err
-	default:
-		// a trailing comma is fixed silently; only comments are content lost
-		relaxed, hasComments := RelaxJSONReport(raw)
-		if hasComments {
-			warns = append(warns, path+" has comments; saving will remove them")
-		}
-		raw = relaxed
 	}
 
 	// normalize odd-case keys before SetKey, so a canonical key is never
@@ -277,10 +266,15 @@ func (s *Set) Save(layer, key string, value any) ([]string, error) {
 
 	out, err := SetKey(raw, key, value)
 	if err != nil {
-		return warns, err
+		return nil, JSONError(path, raw, err)
 	}
 	if err = WriteFileAtomic(path, out, SecretPerm); err != nil {
-		return warns, err
+		return nil, err
+	}
+
+	var warns []string
+	if droppedComments {
+		warns = append(warns, path+" has comments; saving removed them")
 	}
 	s.mu.Lock()
 	target.set(out)

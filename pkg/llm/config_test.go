@@ -500,7 +500,7 @@ func TestSaveUserFile(t *testing.T) {
 		assert.False(t, got.Providers["zai"].Disabled) // governed by the saved value
 	})
 
-	t.Run("comments_warn_before_the_save_drops_them", func(t *testing.T) {
+	t.Run("comments_warn_when_save_lands", func(t *testing.T) {
 		path, err := config.UserPath(ModelsFileName)
 		require.NoError(t, err)
 		require.NoError(t, os.WriteFile(path, []byte("{ // hand edited\n}\n"), config.SecretPerm))
@@ -538,5 +538,23 @@ func TestSaveUserFile(t *testing.T) {
 
 		_, err = SaveUserFile(want)
 		require.Error(t, err)
+		assert.Contains(t, err.Error(), path) // the refusal names its file
+	})
+
+	t.Run("trailing_bytes_refusal_names_the_file", func(t *testing.T) {
+		path, err := config.UserPath(ModelsFileName)
+		require.NoError(t, err)
+		junked := "{\n  \"providers\": {}\n} junk\n"
+		require.NoError(t, os.WriteFile(path, []byte(junked), config.SecretPerm))
+
+		warns, err := SaveUserFile(want)
+		require.Error(t, err)
+		assert.Empty(t, warns) // nothing was written, so no comment loss to report
+		assert.Contains(t, err.Error(), path)
+		assert.Contains(t, err.Error(), ":3:3") // and points at the trailing junk
+
+		data, err := os.ReadFile(path)
+		require.NoError(t, err)
+		assert.Equal(t, junked, string(data)) // the hand edit is left untouched
 	})
 }

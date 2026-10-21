@@ -399,10 +399,33 @@ func TestSave(t *testing.T) {
 
 		_, err = s.Save("user", "reasoning.level", "high")
 		require.Error(t, err)
+		assert.Contains(t, err.Error(), userFile) // the refusal names its file
+		assert.Contains(t, err.Error(), ":1:18")  // and points at the trailing junk
 
 		b, err := os.ReadFile(userFile)
 		require.NoError(t, err)
 		assert.Equal(t, junked, string(b)) // the hand edit is left untouched
+	})
+
+	t.Run("failed_save_reports_no_loss", func(t *testing.T) {
+		// a refused save writes nothing, so it must not claim comments were dropped
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		userFile := userPathFor(t)
+		writeConfig(t, userFile, "{ // hand tuned\n  \"model\": \"keep\"\n}")
+		s, _, err := Load(Options{Workspace: "."})
+		require.NoError(t, err)
+
+		junked := "{ // hand tuned\n  \"model\": \"keep\"\n} extra\n"
+		require.NoError(t, os.WriteFile(userFile, []byte(junked), 0o600))
+
+		warns, err := s.Save("user", "reasoning.level", "high")
+		require.Error(t, err)
+		assert.Empty(t, warns) // nothing was written, so no comment loss to report
+
+		b, err := os.ReadFile(userFile)
+		require.NoError(t, err)
+		assert.Equal(t, junked, string(b)) // the file and its comments are untouched
 	})
 
 	t.Run("trailing_comma_only_file_saves_silently", func(t *testing.T) {

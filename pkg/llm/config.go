@@ -385,7 +385,8 @@ func LoadUserFile() (File, []string, error) {
 //
 // f overlays the existing file: fields the File schema declares follow f, and
 // unrecognized keys anywhere in the current contents survive the rewrite. The
-// returned warnings report content the save drops, such as // comments.
+// returned warnings report content a landed save dropped, such as // comments;
+// an error means nothing was written, so no warnings ride one.
 func SaveUserFile(f File) ([]string, error) {
 	path, err := config.UserPath(ModelsFileName)
 	if err != nil {
@@ -399,27 +400,24 @@ func SaveUserFile(f File) ([]string, error) {
 	release := config.LockSave()
 	defer release()
 
-	var warns []string
-	raw, err := os.ReadFile(path)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		raw = nil // a brand new file starts empty
-	case err != nil:
+	raw, droppedComments, err := config.ReadForSave(path)
+	if err != nil {
 		return nil, err
-	default:
-		// a trailing comma is fixed silently; only comments are content lost
-		relaxed, hasComments := config.RelaxJSONReport(raw)
-		if hasComments {
-			warns = append(warns, path+" has comments; saving will remove them")
-		}
-		raw = relaxed
 	}
 
 	out, err := config.OverlayJSON(raw, over, File{})
 	if err != nil {
+		return nil, config.JSONError(path, raw, err)
+	}
+	if err = config.WriteFileAtomic(path, out, config.SecretPerm); err != nil {
 		return nil, err
 	}
-	return warns, config.WriteFileAtomic(path, out, config.SecretPerm)
+
+	var warns []string
+	if droppedComments {
+		warns = append(warns, path+" has comments; saving removed them")
+	}
+	return warns, nil
 }
 
 // compatWarnings reports configuration that will not behave as authored for the

@@ -3,9 +3,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"slices"
 	"strings"
 )
@@ -37,8 +35,9 @@ type object struct {
 
 // parseNode decodes the one JSON value spanning all of data, treating empty
 // input as an empty object so SetKey can build layers from nothing. Numbers use
-// UseNumber to preserve them. Trailing bytes are an error: a save rebuilt from
-// the tree would silently drop anything past the top-level value.
+// UseNumber to preserve them. Trailing bytes are an error positioned at their
+// first byte: a save rebuilt from the tree would silently drop anything past
+// the top-level value.
 func parseNode(data []byte) (*val, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		data = []byte("{}")
@@ -49,11 +48,12 @@ func parseNode(data []byte) (*val, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = dec.Token(); !errors.Is(err, io.EOF) {
-		if err == nil {
-			err = errors.New("unexpected data after the top-level value")
+	rest := bytes.TrimLeft(data[dec.InputOffset():], " \t\r\n") // JSON whitespace only
+	if len(rest) > 0 {
+		return nil, &offsetError{
+			msg:    "unexpected data after the top-level value",
+			offset: int64(len(data) - len(rest)),
 		}
-		return nil, fmt.Errorf("config: %w", err)
 	}
 	return root, nil
 }

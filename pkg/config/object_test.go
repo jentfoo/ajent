@@ -37,6 +37,19 @@ func TestParseNode(t *testing.T) {
 			assert.Equal(t, tc.want, string(root.marshal()))
 		})
 	}
+
+	t.Run("trailing_bytes_error_is_positioned", func(t *testing.T) {
+		// the offset lands on the first trailing byte, so JSONError can name its
+		// line and column like every other config file failure
+		data := `"done"` + "\n  junk"
+		_, err := parseNode([]byte(data))
+		var oe *offsetError
+		require.ErrorAs(t, err, &oe)
+		assert.Equal(t, int64(9), oe.offset)
+
+		wrapped := JSONError("f.json", []byte(data), err)
+		assert.Contains(t, wrapped.Error(), "f.json:2:3")
+	})
 }
 
 func TestSetKey(t *testing.T) {

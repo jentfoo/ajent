@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +27,22 @@ func CheckSecretPerms(path string) string {
 	}
 	return path + " is readable by other users (mode " +
 		strconv.FormatUint(uint64(mode), 8) + "), it may hold an API key; chmod 600 it"
+}
+
+// ReadForSave reads the file a writer is about to replace, with hand-edit
+// artifacts relaxed by RelaxJSONReport. A missing file reads as empty.
+// droppedComments marks // comments the rewrite will drop; writers surface it
+// only once the write lands, so a refusal never claims a loss.
+func ReadForSave(path string) (raw []byte, droppedComments bool, err error) {
+	raw, err = os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil // a brand new file starts empty
+	} else if err != nil {
+		return nil, false, err
+	}
+	// a trailing comma is fixed silently; comments are the only content lost
+	raw, droppedComments = RelaxJSONReport(raw)
+	return raw, droppedComments, nil
 }
 
 // WriteFileAtomic writes data to path with perm atomically, so readers see
