@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -98,6 +99,55 @@ func TestRelaxJSONReport(t *testing.T) {
 		out, _ := RelaxJSONReport(in)
 		assert.Equal(t, string(RelaxJSON(in)), string(out))
 	})
+}
+
+func TestRelaxedObject(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantDoc string // expected returned JSON; empty means nil data
+	}{
+		{"empty_file_is_absent", "", ""},
+		{"whitespace_only_is_absent", " \t\n ", ""},
+		{"comment_only_is_absent", "// nothing yet\n// still nothing\n", ""},
+		{"object_passes_through_relaxed", "\n  {\"a\":1}\n", "\n  {\"a\":1}\n"},
+		// the comment is blanked, not deleted, so byte offsets survive
+		{"comment_inside_object_is_blanked", "{ // note\n}", "{" + strings.Repeat(" ", 8) + "\n}"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := RelaxedObject("settings.json", []byte(tc.input))
+			require.NoError(t, err)
+			if tc.wantDoc == "" {
+				assert.Nil(t, data)
+			} else {
+				assert.Equal(t, tc.wantDoc, string(data))
+			}
+		})
+	}
+
+	errTests := []struct {
+		name      string
+		input     string
+		errSubstr string
+	}{
+		{"null_document", "null", ":1:1: expected a JSON object at the top level, found null"},
+		{"array_document", "[1]", "found an array"},
+		{"string_document", `"x"`, "found a string"},
+		{"number_document", "123", "found a number"},
+		{"boolean_document", "true", "found a boolean"},
+		{"comment_then_null_names_line", "// tuned by hand\nnull", ":2:1: expected a JSON object at the top level, found null"},
+	}
+	for _, tc := range errTests {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := RelaxedObject("settings.json", []byte(tc.input))
+			require.Error(t, err)
+			assert.Nil(t, data)
+			assert.Contains(t, err.Error(), tc.errSubstr)
+		})
+	}
 }
 
 func TestJSONError(t *testing.T) {

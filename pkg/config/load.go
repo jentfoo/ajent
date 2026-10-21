@@ -322,8 +322,10 @@ func loadFile(path string) ([]byte, []string, error) {
 	} else if err != nil {
 		return nil, nil, err
 	}
-	data := RelaxJSON(raw)
-	if len(bytes.TrimSpace(data)) == 0 {
+	data, err := RelaxedObject(path, raw)
+	if err != nil {
+		return nil, nil, err
+	} else if data == nil {
 		return nil, nil, nil // blank or comment-only content behaves as an absent file
 	}
 

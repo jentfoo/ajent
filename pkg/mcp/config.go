@@ -7,6 +7,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -90,12 +91,17 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 // loadOne decodes a single mcp.json file following pkg/llm's LoadFile read path.
 func loadOne(path string) (map[string]ServerConfig, []string, error) {
 	raw, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil // no file is not an error
+	} else if err != nil {
 		return nil, nil, err
-	} else if os.IsNotExist(err) || len(strings.TrimSpace(string(raw))) == 0 {
-		return nil, nil, nil // no file (or empty) is not an error
 	}
-	data := config.RelaxJSON(raw)
+	data, err := config.RelaxedObject(path, raw)
+	if err != nil {
+		return nil, nil, err
+	} else if data == nil {
+		return nil, nil, nil // blank or comment-only content behaves as an absent file
+	}
 
 	var doc mcpDoc
 	if err = json.Unmarshal(data, &doc); err != nil {

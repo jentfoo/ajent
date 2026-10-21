@@ -122,6 +122,33 @@ func TestLoadConfig(t *testing.T) {
 		assert.Equal(t, "stdio", got["gh"].Transport)                     // explicit
 		assert.Equal(t, []string{"*"}, []string(got["browser"].ReadOnly)) // boolean true marks all
 	})
+
+	t.Run("blank_file_loads_no_servers", func(t *testing.T) {
+		for _, body := range []string{"", " \t\n ", "// no servers yet\n"} {
+			t.Setenv("AJENT_HOME", mkHome(t))
+			mkFile(t, os.Getenv("AJENT_HOME")+"/mcp.json", body)
+
+			got, warns, err := LoadConfig(t.TempDir())
+			require.NoError(t, err)
+			assert.Empty(t, got)
+			assert.Empty(t, warns)
+		}
+	})
+
+	t.Run("stray_document_errors", func(t *testing.T) {
+		dir := mkHome(t)
+		t.Setenv("AJENT_HOME", dir)
+		path := dir + "/mcp.json"
+		for _, body := range []string{"null", `[1]`} {
+			mkFile(t, path, body)
+
+			_, warns, err := LoadConfig(t.TempDir())
+			assert.Empty(t, warns)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), path)
+			assert.Contains(t, err.Error(), "expected a JSON object")
+		}
+	})
 }
 
 func TestValidateServer(t *testing.T) {

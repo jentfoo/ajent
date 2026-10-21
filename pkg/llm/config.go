@@ -324,7 +324,8 @@ type Compat struct {
 }
 
 // LoadFile reads a models.json, returning the decoded file and warnings for
-// anything questionable in it. A missing file is not an error.
+// anything questionable in it. A missing, empty or comment-only file returns
+// the zero value without error.
 //
 // Line comments and trailing commas are accepted, so an existing configuration
 // loads unchanged. A syntax error names the line and column it is on.
@@ -335,7 +336,12 @@ func LoadFile(path string) (File, []string, error) {
 	} else if err != nil {
 		return File{}, nil, err
 	}
-	data := config.RelaxJSON(raw)
+	data, err := config.RelaxedObject(path, raw)
+	if err != nil {
+		return File{}, nil, err
+	} else if data == nil {
+		return File{}, nil, nil // blank or comment-only content behaves as an absent file
+	}
 
 	var f File
 	if err = json.Unmarshal(data, &f); err != nil {

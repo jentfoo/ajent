@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 // RelaxJSON blanks out the two things hand edited configuration files carry that
@@ -28,6 +29,45 @@ func RelaxJSONReport(data []byte) (out []byte, hasComments bool) {
 	hasComments = blankComments(out)
 	blankTrailingCommas(out)
 	return out, hasComments
+}
+
+// RelaxedObject relaxes raw like RelaxJSON and applies the document shape rule
+// every settings loader shares: blank or comment-only content returns (nil,
+// nil), so a caller treats the file as an absent layer. Any other top-level
+// value that is not an object returns an error naming path, at the value's
+// position. Content after the opening brace may still fail to decode.
+func RelaxedObject(path string, raw []byte) ([]byte, error) {
+	data := RelaxJSON(raw)
+	start := bytes.IndexFunc(data, func(r rune) bool { return !unicode.IsSpace(r) })
+	if start < 0 {
+		return nil, nil // blank or comment-only content behaves as an absent file
+	}
+	if data[start] == '{' {
+		return data, nil
+	}
+	err := &offsetError{
+		msg:    "expected a JSON object at the top level, found " + jsonValueName(data[start:]),
+		offset: int64(start),
+	}
+	return nil, JSONError(path, data, err)
+}
+
+// jsonValueName names the kind of v's leading JSON value for error messages.
+func jsonValueName(v []byte) string {
+	switch c := v[0]; {
+	case c == '[':
+		return "an array"
+	case c == '"':
+		return "a string"
+	case c == '-' || (c >= '0' && c <= '9'):
+		return "a number"
+	case bytes.HasPrefix(v, []byte("null")):
+		return "null"
+	case c == 't' || c == 'f':
+		return "a boolean"
+	default:
+		return "something that is not JSON"
+	}
 }
 
 // blankComments overwrites // line comments with spaces, reporting whether any
@@ -198,8 +238,21 @@ func prevNonBlank(line string, i int) int {
 	return -1
 }
 
+// offsetError marks a message that belongs at a known byte offset of the source
+// document, letting JSONError report line and column for errors it constructs.
+type offsetError struct {
+	msg    string
+	offset int64
+}
+
+func (e *offsetError) Error() string { return e.msg }
+
 // jsonErrorOffset returns the byte offset an encoding/json error carries.
 func jsonErrorOffset(err error) (int64, bool) {
+	var oe *offsetError
+	if errors.As(err, &oe) {
+		return oe.offset, true
+	}
 	var syntax *json.SyntaxError
 	if errors.As(err, &syntax) {
 		return syntax.Offset, true

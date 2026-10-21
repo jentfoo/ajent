@@ -108,6 +108,31 @@ func TestLoad(t *testing.T) {
 		assert.Equal(t, "project-model", s.Settings().Model)
 	})
 
+	t.Run("stray_documents_name_the_file", func(t *testing.T) {
+		for _, doc := range []string{"null", `[1]`, `"x"`, "123"} {
+			t.Setenv("AJENT_HOME", t.TempDir())
+			path := userPathFor(t)
+			writeConfig(t, path, doc)
+
+			s, warns, err := Load(Options{Workspace: t.TempDir()})
+			assert.Nil(t, s) // startup aborts instead of merging a stray word
+			assert.Empty(t, warns)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), path)
+			assert.Contains(t, err.Error(), "expected a JSON object")
+		}
+	})
+
+	t.Run("stray_document_names_the_line", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), "// tuned by hand\nnull")
+
+		_, _, err := Load(Options{Workspace: t.TempDir()})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), ":2:1: expected a JSON object at the top level, found null")
+	})
+
 	t.Run("type_error_warns", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)

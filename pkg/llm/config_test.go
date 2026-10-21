@@ -90,6 +90,31 @@ func TestLoadFile(t *testing.T) {
 		assert.Empty(t, warnings)
 	})
 
+	t.Run("blank_file_loads_as_absent", func(t *testing.T) {
+		for _, body := range []string{"", " \t\n ", "// providers come later\n"} {
+			path := filepath.Join(t.TempDir(), ModelsFileName)
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+			f, warnings, err := LoadFile(path)
+			require.NoError(t, err)
+			assert.Empty(t, f.Providers)
+			assert.Empty(t, warnings)
+		}
+	})
+
+	t.Run("stray_documents_name_the_file", func(t *testing.T) {
+		for _, body := range []string{"null", `[1]`, `"x"`} {
+			path := filepath.Join(t.TempDir(), ModelsFileName)
+			require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+
+			_, warnings, err := LoadFile(path)
+			assert.Empty(t, warnings) // startup aborts instead of loading an empty registry
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), path)
+			assert.Contains(t, err.Error(), "expected a JSON object")
+		}
+	})
+
 	t.Run("malformed_json_names_the_file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), ModelsFileName)
 		require.NoError(t, os.WriteFile(path, []byte(`{"providers":`), 0o600))
