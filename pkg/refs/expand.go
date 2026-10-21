@@ -126,7 +126,9 @@ func runOf(id string) int64 {
 // Expand plans every @ reference in text. Small text files plan a read pair
 // (deduped against the tracker and against the rest of the message), directories
 // an ls pair regardless of enabled state, and large/non-text files annotate in
-// place. Re-expanding an annotated ref replaces its measurement rather than
+// place. Classification is existence-first: a metacharacter name that resolves
+// is treated as a path, and only a written form naming nothing real expands as
+// a wildcard. Re-expanding an annotated ref replaces its measurement rather than
 // appending a second.
 func (x *Expander) Expand(text string) Result {
 	refs := Parse(text)
@@ -154,16 +156,17 @@ func (x *Expander) Expand(text string) Result {
 	out := text
 	for i := len(refs) - 1; i >= 0; i-- {
 		ref := refs[i]
-		// wildcard reference: list matching files via ls so the model sees which
-		// paths matched before choosing what to read.
-		if tools.HasGlob(ref.Path) {
-			if keep("ls:" + ref.Path) { // patterns never resolve, dedupe as written
-				plan = append(plan, lsCall(run, ref.Path, ""))
-			}
-			continue
-		}
 		path, full, m, err := x.measureRef(ref.Path)
 		if err != nil {
+			// nothing real at the written form: a metacharacter name is a wildcard
+			// reference, listed via ls so the model sees which paths matched before
+			// choosing what to read. Patterns never resolve, dedupe as written.
+			if tools.HasGlob(ref.Path) {
+				if keep("ls:" + ref.Path) {
+					plan = append(plan, lsCall(run, ref.Path, ""))
+				}
+				continue
+			}
 			notices = append(notices, err.Error())
 			continue
 		}

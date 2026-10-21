@@ -24,6 +24,15 @@ func TestParse(t *testing.T) {
 		{"dir_trailing_slash", "@dir/", []Ref{{Path: "dir/", Start: 0, End: 5}}},
 		{"after_paren", "see (@x.go)", []Ref{{Path: "x.go", Start: 5, End: 10}}},
 		{"after_bracket", "[@y.go]", []Ref{{Path: "y.go", Start: 1, End: 6}}},
+		{"bracketed_name_keeps_close", "@weird[1]", []Ref{
+			{Path: "weird[1]", Start: 0, End: 9},
+		}},
+		{"bracketed_file_ref", "see @a[1].txt now", []Ref{
+			{Path: "a[1].txt", Start: 4, End: 13},
+		}},
+		{"close_without_open_ends_token", "@f.go] rest", []Ref{
+			{Path: "f.go", Start: 0, End: 5},
+		}},
 		{"email_not_a_ref", "email@example.com", nil},
 		{"mid_word_not_ref", "a@b", nil},
 		{"trailing_punct_excluded", "@file,", []Ref{{Path: "file", Start: 0, End: 5}}},

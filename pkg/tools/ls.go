@@ -21,8 +21,8 @@ type lsParams struct {
 // on directories. Registered off by default: it exists for the sub-agent, which
 // has no shell.
 //
-// A path naming an existing directory is listed literally even when it
-// contains wildcards.
+// A path naming an existing entry is taken literally even when it contains
+// wildcards; only a missing path expands as a pattern.
 type lsTool struct {
 	policy    PathPolicy
 	tracker   *Tracker
@@ -38,9 +38,9 @@ func (t *lsTool) Label(agent.ToolCall) string {
 }
 
 func (t *lsTool) Description() string {
-	return "List directory contents, or files matching a wildcard pattern. A path naming an existing " +
-		"directory is listed literally even when it contains wildcards. Returns entries sorted " +
-		"alphabetically, with '/' suffix for directories."
+	return "List directory contents, or files matching a wildcard pattern. An existing " +
+		"path is taken literally rather than expanded, even one containing wildcards. Returns entries " +
+		"sorted alphabetically, with '/' suffix for directories."
 }
 func (t *lsTool) Schema() llm.ToolSchema { return llm.ToolSchema{Parameters: SchemaOf[lsParams]()} }
 func (t *lsTool) Mode() agent.ExecutionMode {
@@ -51,8 +51,8 @@ func (t *lsTool) Close() {}
 // selfBounding: ls bounds and spills its own results.
 func (*lsTool) selfBounding() {}
 
-// Execute lists one directory's entries, or when the path names no directory
-// and carries wildcards, the files the pattern matches. The complete listing
+// Execute lists one directory's entries, or when nothing exists at the path and
+// it carries wildcards, the files the pattern matches. The complete listing
 // spills to disk when the bound cuts it, so the model can page the file.
 func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	var p lsParams
@@ -64,12 +64,13 @@ func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Outpu
 		return agent.ErrorToolResult(err.Error()), nil
 	}
 
-	// literal directories win over glob expansion so real names like weird[1]
-	// cannot silently list a sibling's contents
-	if fi, statErr := os.Stat(full); statErr == nil && fi.IsDir() {
+	// an existing path wins over glob expansion so real names like weird[1]
+	// cannot silently list a sibling's contents; a file then fails in listDir
+	// exactly as a plain filename does
+	if _, statErr := os.Stat(full); statErr == nil {
 		return t.listDir(full, p.Limit), nil
 	}
-	// a wildcard pattern is not a real directory: list the files it matches
+	// nothing exists at the written form: a wildcard pattern lists its matches
 	if HasGlob(full) {
 		return t.listMatches(full, p.Limit), nil
 	}

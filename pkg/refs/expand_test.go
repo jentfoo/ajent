@@ -125,6 +125,50 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "ls *.txt")
 	})
 
+	// an existing bracketed directory resolves literally instead of listing what
+	// its name would match, and dedupes on a repeat like any dir listing
+	t.Run("metachar_dir_lists_literal", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "weird[1]"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "weird1.txt"), []byte("x\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("list @weird[1]")
+		assert.Equal(t, "list @weird[1]", res.Text)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "ls weird[1]")
+
+		// the listing landed and was observed: a repeat is deduped like any dir,
+		// never re-listed through the glob branch
+		assert.Empty(t, injected(t, x.Expand("list @weird[1] again")))
+	})
+
+	// an existing bracketed file reads literally; its name must not become a
+	// pattern that injects a sibling's listing or an ls error string
+	t.Run("metachar_file_reads_literal", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "weird[1].txt"), []byte("content\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "weird1.txt"), []byte("sibling\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @weird[1].txt")
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2) // a read pair, not an ls error result
+		assert.Contains(t, sink.starts, "read weird[1].txt")
+	})
+
+	// a metacharacter name matching nothing real still plans the pattern's ls
+	t.Run("metachar_pattern_still_lists", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "weird1.txt"), []byte("x\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @weird[2]")
+		assert.Empty(t, res.Notices) // the pattern warns through its ls result, not a notice
+		assert.Equal(t, []string{"ref-1-ls-weird[2]"}, toolCallIDs(injected(t, res)))
+		assert.Contains(t, sink.starts, "ls weird[2]")
+	})
+
 	t.Run("directory_injects_ls", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))

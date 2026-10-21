@@ -21,8 +21,9 @@ type Ref struct {
 // Parse returns every @path reference in text. @ matches only at a word
 // boundary (start of line, or after whitespace, an opener, a backtick or a
 // quote) so `email@example.com` is prose. The path token stops at whitespace or trailing
-// punctuation, and a trailing `(...)` measurement is absorbed into Note so
-// re-expansion replaces it.
+// punctuation, except that a `]` ends the token only when no `[` before it is
+// open, keeping bracketed names like weird[1] whole. A trailing `(...)`
+// measurement is absorbed into Note so re-expansion replaces it.
 func Parse(text string) []Ref {
 	var out []Ref
 	for i := 0; i < len(text); i++ {
@@ -39,7 +40,18 @@ func Parse(text string) []Ref {
 		start := i
 		pathStart := i + 1
 		j := pathStart
-		for j < len(text) && !isSpaceOrPunct(text[j]) {
+		// a ']' stays inside the token while an earlier '[' is open, so bracketed
+		// names survive; with none open it still ends one ([see @f.go])
+		var depth int // unmatched '[' seen so far in the token
+		for j < len(text) {
+			c := text[j]
+			if c == '[' {
+				depth++
+			} else if c == ']' && depth > 0 {
+				depth--
+			} else if isSpaceOrPunct(c) {
+				break
+			}
 			j++
 		}
 		path := text[pathStart:j]

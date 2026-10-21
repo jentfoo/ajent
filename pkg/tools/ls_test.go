@@ -137,8 +137,9 @@ func TestLs(t *testing.T) {
 		assert.Equal(t, []string{"weird1/"}, strings.Split(textOf(res), "\n"))
 	})
 
-	// only directories prefer literal: an existing metacharacter file keeps glob expansion
-	t.Run("literal_file_keeps_glob", func(t *testing.T) {
+	// an existing metacharacter file takes the plain-filename path: it errors
+	// without ever listing what its name would glob to
+	t.Run("metachar_file_never_lists_sibling", func(t *testing.T) {
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "weird[1].txt", "x")
 		mkfile(dir, "weird1.txt", "y")
@@ -146,7 +147,21 @@ func TestLs(t *testing.T) {
 		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
 			callWith([]byte(`{"path":"weird[1].txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
-		assert.Equal(t, []string{"weird1.txt"}, strings.Split(textOf(res), "\n"))
+		assert.True(t, res.IsError) // a file is not listable, but never via a sibling
+		assert.NotContains(t, textOf(res), "weird1.txt")
+	})
+
+	// with no sibling to glob onto the error still names the real path, not
+	// "nothing matches"
+	t.Run("metachar_file_without_sibling", func(t *testing.T) {
+		dir, policy := newSearchEnv(t)
+		mkfile(dir, "weird[1].txt", "x")
+
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{"path":"weird[1].txt"}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.True(t, res.IsError)
+		assert.Contains(t, textOf(res), "not a directory")
 	})
 
 	// a metacharacter directory observes the tracker like any literal listing
@@ -159,6 +174,19 @@ func TestLs(t *testing.T) {
 			callWith([]byte(`{"path":"weird[1]"}`)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.True(t, tracker.UnchangedDir(filepath.Join(dir, "weird[1]")))
+	})
+
+	// a session cwd whose own path carries metacharacters resolves to an
+	// absolute pattern shape, yet lists literally because it exists
+	t.Run("bracketed_cwd_lists_literal", func(t *testing.T) {
+		base := filepath.Join(t.TempDir(), "weird[1]")
+		mkfile(base, "inner.txt", "x")
+		policy := PathPolicy{Cwd: base}
+
+		res, err := (&lsTool{policy: policy, tracker: NewTracker()}).Execute(t.Context(),
+			callWith([]byte(`{}`)), agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		assert.Equal(t, []string{"inner.txt"}, strings.Split(textOf(res), "\n"))
 	})
 
 	t.Run("missing_dir_is_error", func(t *testing.T) {
