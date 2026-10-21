@@ -285,8 +285,9 @@ func (t *grepTool) goSearch(ctx context.Context, cwd string, p grepParams, mode 
 					m.hits = m.hits[:m.ends[n-1]] // keep context through the n-th match
 				}
 				for i, h := range m.hits {
-					// rg's text printer: "--" separates disjoint blocks and file changes
-					if printed && (i == 0 || h.line != prevLine+1) {
+					// rg's text printer: "--" separates disjoint blocks and file changes,
+					// but only when context lines are requested at all
+					if p.Context > 0 && printed && (i == 0 || h.line != prevLine+1) {
 						matches = append(matches, "--")
 					}
 					sep := ":" // match lines print path:line:text, context ones path-line-text
@@ -594,18 +595,20 @@ func splitCountLine(line string) (string, int, bool) {
 }
 
 // goGrep returns matched lines (with their real line numbers, context lines
-// included around each match) and the total match count, capped at limit.
-// ends[i] is the exclusive hits index where match i's context block ends, so a
-// caller can trim hits to the first k matches.
+// included around each match) and the total match count, capped at limit. A
+// matching line reached first as another match's context is still flagged a
+// match. ends[i] is the exclusive hits index where match i's context block
+// ends, so a caller can trim hits to the first k matches.
 func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grepHit, n int, ends []int) {
 	if content == "" {
 		return nil, 0, nil // an empty file has no lines, rg emits nothing for one
 	}
+	ctxLines = max(ctxLines, 0) // negative rides as none: the rg path only enables context past zero
 	lines := strings.Split(content, "\n")
 	if strings.HasSuffix(content, "\n") {
 		lines = lines[:len(lines)-1] // the split's trailing element is past EOF, not a line
 	}
-	emitted := map[int]bool{}
+	emitted := map[int]int{} // line index -> hits position it was emitted at
 	for i, line := range lines {
 		if limit > 0 && n >= limit {
 			break
@@ -616,10 +619,13 @@ func goGrep(content string, re *regexp.Regexp, ctxLines, limit int) (hits []grep
 		lo := max(0, i-ctxLines)
 		hi := min(len(lines)-1, i+ctxLines)
 		for j := lo; j <= hi; j++ {
-			if emitted[j] {
+			if at, ok := emitted[j]; ok {
+				if j == i { // rode along as earlier context first: promote to a match line
+					hits[at].match = true
+				}
 				continue
 			}
-			emitted[j] = true
+			emitted[j] = len(hits)
 			hits = append(hits, grepHit{line: j + 1, text: lines[j], match: j == i})
 		}
 		n++

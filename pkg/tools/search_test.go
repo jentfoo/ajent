@@ -848,17 +848,45 @@ func TestGrepEnginesShareOutputContract(t *testing.T) {
 	dir, policy := newSearchEnv(t)
 	mkfile(dir, "a.txt", "pad\n  match lead\npad\n") // leading whitespace kept raw
 	mkfile(dir, "b.txt", "crlf match\r\n")
-	mkfile(dir, "sub/c.txt", "hit\npad\npad\nhit\n") // two disjoint blocks
+	mkfile(dir, "sub/c.txt", "hit\np1\np2\np3\nhit\n")             // gap between blocks splits them
+	mkfile(dir, "adjacent.txt", "one\ntwo hit\nthree hit\nfour\n") // adjacent matches share a block
 	mkfile(dir, "skip.txt", "nothing here\n")
 
-	run := func(forceGo bool) string {
+	run := func(args string, forceGo bool) string {
 		res, err := (&grepTool{policy: policy, forceGo: forceGo}).Execute(t.Context(),
-			callWith([]byte(`{"pattern":"match|hit","context":1}`)), agent.NewOutput(agent.NopSink{}, "c"))
+			callWith([]byte(args)), agent.NewOutput(agent.NopSink{}, "c"))
 		require.NoError(t, err)
 		assert.False(t, res.IsError)
 		return textOf(res)
 	}
-	assert.Equal(t, grepBlocks(run(false)), grepBlocks(run(true)))
+
+	// context blocks separate disjoint hits and file changes on either engine
+	t.Run("context_blocks", func(t *testing.T) {
+		args := `{"pattern":"match|hit","context":1}`
+		assert.Equal(t, grepBlocks(run(args, false)), grepBlocks(run(args, true)))
+	})
+
+	// without context requested no separator prints at all: bare matches run
+	// together even across files. Line sets compare order-insensitively since rg
+	// walks files in parallel where no separators exist to block on.
+	t.Run("no_context_no_separators", func(t *testing.T) {
+		args := `{"pattern":"match|hit"}`
+		rgOut, goOut := run(args, false), run(args, true)
+		assert.NotContains(t, rgOut, "--")
+		assert.NotContains(t, goOut, "--")
+		assert.ElementsMatch(t,
+			strings.Split(strings.TrimSpace(rgOut), "\n"),
+			strings.Split(strings.TrimSpace(goOut), "\n"))
+	})
+
+	// every matching line stays a match line even when another match's context
+	// reached it first, on either engine
+	t.Run("adjacent_matches_stay_matches", func(t *testing.T) {
+		args := `{"pattern":"hit","glob":"adjacent.txt","context":1}`
+		want := "adjacent.txt-1-one\nadjacent.txt:2:two hit\nadjacent.txt:3:three hit\nadjacent.txt-4-four"
+		assert.Equal(t, want, run(args, false))
+		assert.Equal(t, want, run(args, true))
+	})
 }
 
 // grepBlocks splits content output into separator-delimited blocks, sorted so
@@ -867,6 +895,110 @@ func grepBlocks(out string) []string {
 	blocks := strings.Split(strings.TrimSpace(out), "\n--\n")
 	slices.Sort(blocks)
 	return blocks
+}
+
+func TestGoGrep(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		content  string
+		pattern  string
+		ctxLines int
+		limit    int
+		want     []grepHit
+		wantN    int
+		wantEnds []int
+	}{
+		{
+			name:    "empty content has no lines",
+			content: "",
+			pattern: ".",
+		},
+		{
+			name:    "no context bare matches",
+			content: "hit\npad\nhit\n",
+			pattern: "hit",
+			want: []grepHit{
+				{line: 1, text: "hit", match: true},
+				{line: 3, text: "hit", match: true},
+			},
+			wantN:    2,
+			wantEnds: []int{1, 2},
+		},
+		{
+			name:     "negative context rides as none",
+			content:  "hit\npad\nhit\n",
+			pattern:  "hit",
+			ctxLines: -1,
+			want: []grepHit{
+				{line: 1, text: "hit", match: true},
+				{line: 3, text: "hit", match: true},
+			},
+			wantN:    2,
+			wantEnds: []int{1, 2},
+		},
+		{
+			name:     "adjacent matches still flagged",
+			content:  "one\ntwo\nthree\nfour\n",
+			pattern:  "two|three",
+			ctxLines: 1,
+			want: []grepHit{
+				{line: 1, text: "one"},
+				{line: 2, text: "two", match: true},
+				{line: 3, text: "three", match: true}, // reached as context first
+				{line: 4, text: "four"},
+			},
+			wantN:    2,
+			wantEnds: []int{3, 4},
+		},
+		{
+			name:    "blank lines match anchors",
+			content: "\n\n",
+			pattern: "^$",
+			want: []grepHit{
+				{line: 1, text: "", match: true},
+				{line: 2, text: "", match: true},
+			},
+			wantN:    2,
+			wantEnds: []int{1, 2},
+		},
+		{
+			name:     "limit keeps last block context",
+			content:  "hit\nhit\nhit\n",
+			pattern:  "hit",
+			ctxLines: 1,
+			limit:    2,
+			want: []grepHit{
+				{line: 1, text: "hit", match: true},
+				{line: 2, text: "hit", match: true},
+				{line: 3, text: "hit"}, // trailing context past the budget
+			},
+			wantN:    2,
+			wantEnds: []int{2, 3},
+		},
+		{
+			name:    "final line without newline",
+			content: "hit\nlast",
+			pattern: "last",
+			want: []grepHit{
+				{line: 2, text: "last", match: true},
+			},
+			wantN:    1,
+			wantEnds: []int{1},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			re, err := regexp.Compile(tc.pattern)
+			require.NoError(t, err)
+
+			hits, n, ends := goGrep(tc.content, re, tc.ctxLines, tc.limit)
+			assert.Equal(t, tc.want, hits)
+			assert.Equal(t, tc.wantN, n)
+			assert.Equal(t, tc.wantEnds, ends)
+		})
+	}
 }
 
 func TestGrepSingleFileSearch(t *testing.T) {
