@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -123,12 +122,29 @@ func runOf(id string) int64 {
 	return n
 }
 
+// noteEdit says how one mention's written form lands in the rewritten text.
+type noteEdit uint8
+
+const (
+	noteKept      noteEdit = iota // the literal stands as written
+	noteAnnotated                 // replaced with @path (measurement)
+	noteStripped                  // any absorbed measurement dropped, path bare
+)
+
+// refEdit is one mention's planned text edit: its note fate plus the measured
+// shape an annotation shows.
+type refEdit struct {
+	note  noteEdit
+	shape tools.Measurement // read when note is noteAnnotated
+}
+
 // Expand plans every @ reference in text. Small text files plan a read pair
-// (deduped against the tracker and against the rest of the message), directories
-// an ls pair regardless of enabled state, and large/non-text files annotate in
-// place. Classification is existence-first: a metacharacter name that resolves
-// is treated as a path, and only a written form naming nothing real expands as
-// a wildcard. Re-expanding an annotated ref replaces its measurement rather than
+// (deduped against the tracker and against the rest of the message at its first
+// mention), directories an ls pair regardless of enabled state, and large or
+// non-text files annotate in place once per path however often it is named.
+// Classification is existence-first: a metacharacter name that resolves is
+// treated as a path, and only a written form naming nothing real expands as a
+// wildcard. Re-expanding an annotated ref replaces its measurement rather than
 // appending a second.
 func (x *Expander) Expand(text string) Result {
 	refs := Parse(text)
@@ -142,8 +158,9 @@ func (x *Expander) Expand(text string) Result {
 		spent   int
 	)
 	seen := make(map[string]struct{}, len(refs))
-	// one injection per path however often the message names it: a repeat would
-	// otherwise duplicate both the content and its call id
+	// one output per path however often the message names it: a repeat would
+	// otherwise duplicate content, call ids or notices. keep reports whether this
+	// is the first mention of key, and every emitting branch guards on it.
 	keep := func(key string) bool {
 		if _, dup := seen[key]; dup {
 			return false
@@ -151,11 +168,21 @@ func (x *Expander) Expand(text string) Result {
 		seen[key] = struct{}{}
 		return true
 	}
-	// splice back to front so earlier offsets stay valid, the plan reversed
-	// afterwards so references land in forward transcript order.
-	out := text
-	for i := len(refs) - 1; i >= 0; i-- {
-		ref := refs[i]
+	edits := make([]refEdit, len(refs))
+	// annotateFirst shows the measurement on ref i when it is this message's
+	// first mention of full and reports whether that was here. A repeat stays
+	// bare: its output already appears at the first mention.
+	annotateFirst := func(i int, full string, m tools.Measurement) bool {
+		if !keep(full) {
+			edits[i] = refEdit{note: noteStripped}
+			return false
+		}
+		edits[i] = refEdit{note: noteAnnotated, shape: m}
+		return true
+	}
+	// classified forward in document order, so dedupe keeps first-mention
+	// position and the plan lands in prose order.
+	for i, ref := range refs {
 		path, full, m, err := x.measureRef(ref.Path)
 		if err != nil {
 			// nothing real at the written form: a metacharacter name is a wildcard
@@ -167,10 +194,14 @@ func (x *Expander) Expand(text string) Result {
 				}
 				continue
 			}
-			notices = append(notices, err.Error())
+			// a repeat of a missing path would only repeat the warning
+			if keep("miss:" + ref.Path) {
+				notices = append(notices, err.Error())
+			}
 			continue
 		}
-		if m.Dir {
+		switch {
+		case m.Dir:
 			// skip a repeat listing whose output would be identical: the dir's
 			// entries were observed by an earlier @ or agent ls and are unchanged.
 			if x.tracker != nil && x.tracker.UnchangedDir(full) {
@@ -179,55 +210,74 @@ func (x *Expander) Expand(text string) Result {
 			if keep("ls:" + full) {
 				plan = append(plan, lsCall(run, path, full))
 			}
-			continue
-		}
-		if m.Kind == tools.KindImage {
+		case m.Kind == tools.KindImage:
 			// a vision model gets the picture itself through the read tool, a
 			// text-only one keeping today's annotation so the reference stays visible
 			if x.vision == nil || !x.vision() {
-				out = splice(out, ref, annotate(ref, m))
+				annotateFirst(i, full, m)
 				continue
 			}
-			out = stripNote(out, ref)
+			edits[i].note = noteStripped // content lands behind the message or already sits in context
 			if x.tracker != nil && x.tracker.Unchanged(full) {
 				continue
 			}
-			if keep(full) {
-				plan = append(plan, newInjection(run, "read", readKind, path, full, imageNominalBytes))
+			if !keep(full) {
+				continue
 			}
-			continue
+			// images reserve their nominal size against the same total cap text reads pay,
+			// so many distinct references cannot inject uncounted
+			if spent+imageNominalBytes > tools.RefTotalLimit().Bytes {
+				edits[i] = refEdit{note: noteAnnotated, shape: m}
+				notices = append(notices, "@"+ref.Path+" "+budgetRefusal)
+				continue
+			}
+			plan = append(plan, newInjection(run, "read", readKind, path, full, imageNominalBytes))
+			spent += imageNominalBytes
+		default:
+			if m.Kind != tools.KindText {
+				annotateFirst(i, full, m)
+				continue
+			}
+			// a shape too big on its own is annotated whatever else the message holds:
+			// the per-ref limit is about the file, not the budget. Lines and bytes each
+			// bind only when configured.
+			mtr := tools.RefInjectLimit()
+			if (mtr.Lines > 0 && m.Lines > mtr.Lines) || (mtr.Bytes > 0 && m.Bytes > int64(mtr.Bytes)) {
+				if annotateFirst(i, full, m) {
+					notices = append(notices, "@"+ref.Path+" too large; annotated")
+				}
+				continue
+			}
+			// dedupe before the total cap: an unchanged or repeat mention reserves
+			// nothing, so counting it is what falsely annotated repeats as too large
+			if x.tracker != nil && x.tracker.Unchanged(full) || !keep(full) {
+				edits[i].note = noteStripped // the literal stays bare
+				continue
+			}
+			if spent+int(m.Bytes) > tools.RefTotalLimit().Bytes {
+				edits[i] = refEdit{note: noteAnnotated, shape: m}
+				notices = append(notices, "@"+ref.Path+" "+budgetRefusal)
+				continue
+			}
+			// within cap: content is injected now, so an absorbed size claim from a
+			// prior larger measurement must not survive
+			edits[i].note = noteStripped
+			// the tool returns line-numbered text, so what lands is the file plus a
+			// prefix per line, not its raw size
+			plan = append(plan, newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))
+			spent += int(m.Bytes)
 		}
-		if m.Kind != tools.KindText {
-			out = splice(out, ref, annotate(ref, m))
-			continue
+	}
+	// splices go back to front so earlier offsets stay valid; the plan is already
+	// in document order from the forward pass.
+	out := text
+	for i := len(refs) - 1; i >= 0; i-- {
+		switch edits[i].note {
+		case noteAnnotated:
+			out = splice(out, refs[i], annotate(refs[i], edits[i].shape))
+		case noteStripped:
+			out = stripNote(out, refs[i])
 		}
-		// a shape too big on its own is annotated whatever else the message holds:
-		// the per-ref limit is about the file, not the budget. Lines and bytes each
-		// bind only when configured.
-		mtr := tools.RefInjectLimit()
-		if (mtr.Lines > 0 && m.Lines > mtr.Lines) || (mtr.Bytes > 0 && m.Bytes > int64(mtr.Bytes)) {
-			out = splice(out, ref, annotate(ref, m))
-			notices = append(notices, "@"+ref.Path+" too large; annotated")
-			continue
-		}
-		// dedupe before the total cap: an unchanged or repeat mention reserves
-		// nothing, so counting it is what falsely annotated repeats as too large
-		if x.tracker != nil && x.tracker.Unchanged(full) || !keep(full) {
-			out = stripNote(out, ref) // the literal stays bare
-			continue
-		}
-		if spent+int(m.Bytes) > tools.RefTotalLimit().Bytes {
-			out = splice(out, ref, annotate(ref, m))
-			notices = append(notices, "@"+ref.Path+" too large; annotated")
-			continue
-		}
-		// within cap: content is injected now, so an absorbed size claim from a
-		// prior larger measurement must not survive
-		out = stripNote(out, ref)
-		// the tool returns line-numbered text, so what lands is the file plus a
-		// prefix per line, not its raw size
-		plan = append(plan, newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))
-		spent += int(m.Bytes)
 	}
 	// sized here rather than per branch: an injection that forgot to add its own
 	// cost is exactly how ls came to reserve nothing at all. Each pair bills the
@@ -240,7 +290,6 @@ func (x *Expander) Expand(text string) Result {
 	}
 	res := Result{Text: out, Est: est, Notices: notices}
 	if len(plan) > 0 {
-		slices.Reverse(plan)
 		res.Run = func(ctx context.Context) []llm.Message {
 			msgs := make([]llm.Message, 0, 2*len(plan)) // a call + result per injection
 			for _, p := range plan {
@@ -282,6 +331,10 @@ const lsNominalBytes = 1024
 // measurement, since the fitted block's size is unknowable before the read.
 // 6144 bytes prices the pair near imageMaxTokens at the code byte ratio.
 const imageNominalBytes = 6144
+
+// budgetRefusal completes a declined read's notice: remaining budget rather
+// than file size is the reason, keeping it distinct from the "too large" one.
+const budgetRefusal = "exceeds the remaining reference budget; annotated"
 
 // measureRef resolves token to an absolute path and measures it. The returned
 // path is what expansion acts on, full its absolute resolution. A written form
@@ -337,9 +390,9 @@ func annotate(ref Ref, m tools.Measurement) string {
 	return "@" + ref.Path + " (" + measurementText(m) + ")"
 }
 
-// stripNote drops an absorbed size claim from a small text reference: its real
-// content comes from the read (now or earlier this session), so any prior
-// measurement is stale and must not survive.
+// stripNote drops an absorbed size claim from a mention whose output landed
+// elsewhere: injected or shown at the first mention, so any stale measurement
+// must not survive.
 func stripNote(out string, ref Ref) string {
 	if ref.Note == "" {
 		return out

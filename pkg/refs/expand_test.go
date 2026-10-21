@@ -454,6 +454,62 @@ func TestExpand(t *testing.T) {
 		assert.Nil(t, x.Expand("see @nope.go").Run)
 	})
 
+	// dedupe must not reorder: a repeat mention plans nothing, so its content
+	// lands where the user first named it, not at the last mention
+	t.Run("duplicate_keeps_first_position", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("hi\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @a.go then @sub then @a.go")
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
+	})
+
+	// relative, dot-slash and absolute spellings of one file share a resolved
+	// key, so the message plans one read at the first mention
+	t.Run("spelling_variants_dedupe", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @a.go and @./a.go or @" + filepath.Join(dir, "a.go"))
+		assert.Equal(t, []string{"ref-1-r-a.go"}, toolCallIDs(injected(t, res)))
+	})
+
+	// a repeated missing path warns once, not once per mention
+	t.Run("repeat_missing_warns_once", func(t *testing.T) {
+		dir := t.TempDir()
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @nope.go and @nope.go")
+		assert.Equal(t, "see @nope.go and @nope.go", res.Text)
+		require.Len(t, res.Notices, 1)
+	})
+
+	// a repeated non-text file shows its measurement at the first mention only
+	t.Run("repeat_binary_annotates_once", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "blob.bin"), []byte{0, 1, 2}, 0o600))
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @blob.bin and @blob.bin")
+		assert.Equal(t, 1, strings.Count(res.Text, "(binary,"), "no duplicate annotation")
+	})
+
+	// a file too large to inject still dedupes its per-file refusal: a repeated
+	// mention must not repeat the notice either
+	t.Run("repeat_oversized_notices_once", func(t *testing.T) {
+		dir := t.TempDir()
+		writeBigLines(t, dir, "big.go")
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @big.go and @big.go again")
+		assert.Contains(t, res.Text, "@big.go (")
+		assert.Contains(t, res.Text, "and @big.go again") // the repeat stays bare
+		require.Len(t, res.Notices, 1)
+	})
+
 	t.Run("same_path_twice_injects_once", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
@@ -664,8 +720,10 @@ func TestExpandTotalCap(t *testing.T) {
 		assert.Equal(t, []string{"ref-2-r-b.txt"}, toolCallIDs(injected(t, res)))
 	})
 
-	// distinct fresh files over the cap together still annotate the one that
-	// does not fit, so the cap keeps biting on genuinely new content
+	// distinct fresh files over the cap together still decline one read, so the
+	// cap keeps biting on genuinely new content. The cap fills in mention order,
+	// so the later file is the one that does not fit, and the refusal names the
+	// budget rather than the file: neither is too large alone.
 	t.Run("distinct_files_annotate_overflow", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSizedLines(t, dir, "a.txt", 100, 900)
@@ -673,11 +731,23 @@ func TestExpandTotalCap(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand("compare @a.txt with @b.txt")
-		assert.Contains(t, res.Text, "@a.txt (")
-		assert.NotContains(t, res.Text, "@b.txt (")
+		assert.NotContains(t, res.Text, "@a.txt (")
+		assert.Contains(t, res.Text, "@b.txt (")
 		require.Len(t, res.Notices, 1)
-		assert.Contains(t, res.Notices[0], "@a.txt too large; annotated")
-		assert.Equal(t, []string{"ref-1-r-b.txt"}, toolCallIDs(injected(t, res)))
+		assert.Contains(t, res.Notices[0], "@b.txt exceeds the remaining reference budget; annotated")
+		assert.Equal(t, []string{"ref-1-r-a.txt"}, toolCallIDs(injected(t, res)))
+	})
+
+	// a file over RefInject on its own is refused for its shape, wording distinct
+	// from the total-budget decline so neither reason masquerades as the other
+	t.Run("per_file_refusal_names_size", func(t *testing.T) {
+		dir := t.TempDir()
+		writeBigLines(t, dir, "big.go")
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @big.go")
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@big.go too large; annotated")
 	})
 }
 
@@ -826,5 +896,37 @@ func TestExpandImages(t *testing.T) {
 		assert.Equal(t, "look at @pic.png and @pic.png again", res.Text)
 		msgs := injected(t, res)
 		require.Len(t, msgs, 2) // one call + result pair
+	})
+
+	// a text-only model annotates once per path however often it is named
+	t.Run("repeat ref annotates once", func(t *testing.T) {
+		dir := t.TempDir()
+		writePNG(t, dir, "pic.png")
+		x, _ := newVisionExpander(t, dir, nil)
+
+		res := x.Expand("look at @pic.png and @pic.png again")
+		assert.Equal(t, 1, strings.Count(res.Text, "(image,"), "no duplicate annotation")
+	})
+
+	// image mentions pay their nominal size against the same aggregate cap as
+	// text reads, so enough distinct references decline instead of injecting
+	// without bound (the "over the cap" outcome recorded in command-design.md)
+	t.Run("image mentions pay the total cap", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"one.png", "two.png", "three.png"} {
+			writePNG(t, dir, name)
+		}
+		prev := tools.RefTotalLimit()
+		tools.ApplyLimits(tools.Limits{RefTotal: tools.Limit{Bytes: 2 * imageNominalBytes}})
+		t.Cleanup(func() { tools.ApplyLimits(tools.Limits{RefTotal: prev}) })
+
+		x, _ := newVisionExpander(t, dir, func() bool { return true })
+		res := x.Expand("look at @one.png @two.png and @three.png")
+
+		assert.Equal(t, []string{"ref-1-r-one.png", "ref-1-r-two.png"},
+			toolCallIDs(injected(t, res))) // the first two fit under the cap
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@three.png exceeds the remaining reference budget; annotated")
+		assert.Contains(t, res.Text, "@three.png (image,") // declined stays visible with its shape
 	})
 }
