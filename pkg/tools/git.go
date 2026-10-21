@@ -339,7 +339,7 @@ type gitDiffOut struct {
 	head    bytes.Buffer // kept prefix within the limit
 	spill   *spiller     // lazily created file holding the complete stream
 	w       *boundedWriter
-	notes   []string // deferred footer notes, order preserved
+	metas   []string // view notes joined past the bound, order preserved
 	shown   int      // blocks emitted
 	skipped int      // in-scope paths dropped once full
 }
@@ -354,18 +354,20 @@ func newGitDiffOut(sessionID, prefix string) *gitDiffOut {
 // Write appends raw text such as git_show's metadata header.
 func (d *gitDiffOut) Write(p []byte) (int, error) { return d.w.Write(p) }
 
-// Note defers one footer line.
-func (d *gitDiffOut) Note(s string) { d.notes = append(d.notes, s) }
+// Meta defers one view note (merge basis, untracked or skipped counts) past
+// the bound, like the truncation footer: the explanation survives even when
+// the content it describes did not.
+func (d *gitDiffOut) Meta(s string) { d.metas = append(d.metas, s) }
 
 // Full reports whether the result bound was reached: stop reading content for
 // paths that can no longer appear in the output.
 func (d *gitDiffOut) Full() bool { return d.w.Truncated() }
 
-// EmptyPatch reports a genuinely empty patch section: no block rendered, none
-// dropped to the bound, and no note naming hidden content. A full writer with
-// skipped paths means changes existed, only the budget did not.
+// EmptyPatch reports a genuinely empty patch section: no block rendered and
+// none dropped to the bound. A full writer with skipped paths means changes
+// existed, only the budget did not.
 func (d *gitDiffOut) EmptyPatch() bool {
-	return d.shown == 0 && d.skipped == 0 && len(d.notes) == 0
+	return d.shown == 0 && d.skipped == 0
 }
 
 // Block appends one changed path as a git-shaped block. Callers check Full
@@ -380,9 +382,9 @@ func (d *gitDiffOut) Block(from, to *gitSide) {
 	d.shown++
 }
 
-// Text flushes the stream and returns the model text: kept blocks or the
-// "(no changes)" stand-in, deferred notes, then a truncation footer describing
-// what was cut.
+// Text flushes the stream and returns the model text: kept blocks and notes
+// or the "(no changes)" stand-in, view notes, then a truncation footer
+// describing what was cut.
 func (d *gitDiffOut) Text(paging string) string {
 	d.w.Flush()
 	body := strings.TrimRight(d.head.String(), "\n")
@@ -390,10 +392,10 @@ func (d *gitDiffOut) Text(paging string) string {
 		body = "(no changes)"
 	}
 	if d.skipped > 0 {
-		d.Note(strutil.Plural(d.skipped, "more changed path") + " not shown")
+		d.Meta(strutil.Plural(d.skipped, "more changed path") + " not shown")
 	}
-	if len(d.notes) > 0 {
-		footer := strings.Join(d.notes, "\n")
+	if len(d.metas) > 0 {
+		footer := strings.Join(d.metas, "\n")
 		if body == "" {
 			body = footer
 		} else {
@@ -468,8 +470,8 @@ func detectGitRenames(changes object.Changes) (object.Changes, error) {
 // git-shaped per-file blocks into d, limited to file's path scope when
 // non-empty. Rename detection runs on the in-scope changes only, so a scoped
 // call never pays similarity reads for paths it will not render.
-// Notes name omitted content: submodules.
-func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d *gitDiffOut) error {
+// Gitlinks render per sub, git's --submodule forms.
+func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, sub submoduleRender, d *gitDiffOut) error {
 	changes, err := object.DiffTreeWithOptions(ctx, from, to, &object.DiffTreeOptions{})
 	if err != nil {
 		return err
@@ -494,7 +496,9 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d 
 		}
 		// Files() yields nils for gitlink sides, so modes come from the entries
 		if ch.From.TreeEntry.Mode == filemode.Submodule || ch.To.TreeEntry.Mode == filemode.Submodule {
-			d.Note("submodule " + changePath(ch) + " changed")
+			if err := renderTreeGitlink(ctx, d, sub, ch); err != nil {
+				return err
+			}
 			continue
 		}
 		fromFile, toFile, err := ch.Files()
@@ -514,11 +518,49 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, d 
 	return nil
 }
 
+// gitlinkRef carries one gitlink path's base-tree and index pointers, the
+// two snapshots a work-tree diff compares.
+type gitlinkRef struct {
+	base, idx plumbing.Hash
+}
+
+// renderTreeGitlink emits one tree-diff gitlink change: a pure pointer change
+// renders in the chosen style, while a file-to-gitlink mode flip keeps the
+// short form, the blob side's real content beside the synthesized one.
+func renderTreeGitlink(ctx context.Context, d *gitDiffOut, sub submoduleRender, ch *object.Change) error {
+	from, to := ch.From.TreeEntry, ch.To.TreeEntry
+	pure := (from.Mode == filemode.Submodule || from.Mode == filemode.Empty) &&
+		(to.Mode == filemode.Submodule || to.Mode == filemode.Empty)
+	if pure {
+		return renderGitlink(ctx, d, sub, changePath(ch), from.Hash, to.Hash)
+	}
+	fromFile, toFile, err := ch.Files()
+	if err != nil {
+		return err
+	}
+	fs, err := fileSide(fromFile)
+	if err != nil {
+		return err
+	}
+	ts, err := fileSide(toFile)
+	if err != nil {
+		return err
+	}
+	if from.Mode == filemode.Submodule {
+		fs = gitlinkSide(from.Name, from.Hash)
+	}
+	if to.Mode == filemode.Submodule {
+		ts = gitlinkSide(to.Name, to.Hash)
+	}
+	d.Block(fs, ts)
+	return nil
+}
+
 // gitDiffWorktreeText renders committed state at base against the files on
 // disk into d, like `git diff <ref>`: every difference since base, committed or
 // not, limited to file's path scope when non-empty. Notes name untracked files,
-// which git does not diff either, and submodule pointer changes.
-func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tree, file string, d *gitDiffOut) error {
+// which git does not diff either; gitlinks render per sub.
+func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tree, file string, sub submoduleRender, d *gitDiffOut) error {
 	w, err := gitWorktree(r)
 	if err != nil {
 		return err
@@ -531,10 +573,12 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 
 	keep := gitPathScope(file) // matches everything when file is empty
 	paths := make(map[string]struct{}, len(st))
+	baseLinks := make(map[string]plumbing.Hash)
 	// seedPaths adds a tree's in-scope paths; walk errors propagate so a
 	// broken tree never reads as absent files. Gitlinks reference commits, not
-	// blobs, so Files() skips them and a separate entry walk seeds them.
-	seedPaths := func(t *object.Tree) error {
+	// blobs, so Files() skips them and a separate entry walk seeds them, with
+	// their pointers recorded when links is non-nil.
+	seedPaths := func(t *object.Tree, links map[string]plumbing.Hash) error {
 		if err := t.Files().ForEach(func(f *object.File) error {
 			if keep(f.Name) {
 				paths[f.Name] = struct{}{}
@@ -553,27 +597,31 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 			if err != nil {
 				return err
 			}
-			if entry.Mode == filemode.Submodule && keep(name) {
-				paths[name] = struct{}{}
+			if entry.Mode != filemode.Submodule || !keep(name) {
+				continue
+			}
+			paths[name] = struct{}{}
+			if links != nil {
+				links[name] = entry.Hash
 			}
 		}
 	}
-	if err := seedPaths(base); err != nil {
+	if err := seedPaths(base, baseLinks); err != nil {
 		return err
 	}
 	// status entries are HEAD-relative: files committed since base but clean
 	// against HEAD appear in none, so seed HEAD's tree too. Identical trees
-	// share every entry, and the loop reads HEAD's side through headTree.
-	headTree := base
+	// share every entry; gitlinks there only widen path discovery.
 	head, err := gitCommit(r, "HEAD")
 	if err != nil && !errors.Is(err, errNoCommits) {
 		return err
 	}
 	if head != nil && head.TreeHash != base.Hash {
-		if headTree, err = gitTree(head); err != nil {
+		headTree, err := gitTree(head)
+		if err != nil {
 			return err
 		}
-		if err := seedPaths(headTree); err != nil {
+		if err := seedPaths(headTree, nil); err != nil {
 			return err
 		}
 	}
@@ -582,16 +630,71 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 			paths[path] = struct{}{}
 		}
 	}
+	idxLinks, err := indexGitlinks(r)
+	if err != nil {
+		return err
+	}
+	links := make(map[string]gitlinkRef, len(baseLinks)+len(idxLinks))
+	for p, h := range baseLinks {
+		links[p] = gitlinkRef{base: h}
+	}
+	for p, h := range idxLinks {
+		if !keep(p) {
+			continue
+		}
+		ref := links[p] // zero base when base lacks the link
+		ref.idx = h
+		links[p] = ref
+		paths[p] = struct{}{}
+	}
+	// checkouts hold the commit each index-tracked gitlink is checked out at,
+	// resolved through the nested repository so declared and undeclared
+	// submodules report alike: go-git's status only takes its submodule-aware
+	// path for ones declared in .gitmodules. Links gone from the index skip
+	// resolution: their checkouts are leftovers of a staged deletion.
+	checkouts := make(map[string]plumbing.Hash, len(links))
+	for p, ref := range links {
+		if ref.idx.IsZero() {
+			continue
+		}
+		if h := gitCheckoutHash(root, p); !h.IsZero() {
+			checkouts[p] = h
+		}
+	}
 
 	var untracked int
 	for _, path := range slices.Sorted(maps.Keys(paths)) {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// a gitlink path is never genuinely untracked, even when the index
+		// dropped it and status keys the leftover directory as one
+		if ref, ok := links[path]; ok {
+			if d.Full() {
+				d.skipped++
+				continue
+			}
+			// pointer moves render, never diff file content. The staged index
+			// pointer is the work-tree side, and a checkout's commit wins while
+			// the entry is still staged.
+			to := ref.idx
+			if h, checkedOut := checkouts[path]; checkedOut {
+				to = h
+			}
+			if ref.base != to {
+				if err := renderGitlink(ctx, d, sub, path, ref.base, to); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		fs := st[path]
 		// counted before the full check: status knows it cheaply, and the
 		// footer names untracked files even when rendering stopped early
 		if fs != nil && fs.Worktree == git.Untracked {
+			if beneathGitlink(checkouts, path) {
+				continue // contents of a checkout belong to its repository
+			}
 			untracked++
 			continue
 		}
@@ -603,66 +706,345 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 		if err != nil {
 			return err
 		}
-		// gitlinks carry no blob: pointer moves are named, never rendered
-		if from != nil && from.mode == filemode.Submodule {
-			hs, err := gitBlobSide(headTree, path)
-			if err != nil {
-				return err
-			}
-			if hs == nil || hs.mode != filemode.Submodule || hs.hash != from.hash || gitPointerMoved(fs) {
-				d.Note("submodule " + path + " changed")
-			}
-			continue
-		}
 		to, dir := gitDiskSide(root, path)
-		if dir {
-			hs, err := gitBlobSide(headTree, path)
-			if err != nil {
-				return err
-			}
-			// a directory at a tracked path means a submodule checkout when a
-			// tree knows a gitlink or the index staged one; otherwise the old
-			// file reads as deleted and the contents stay untracked
-			if (hs != nil && hs.mode == filemode.Submodule) ||
-				(fs != nil && (fs.Staging == git.Added || fs.Staging == git.Modified)) {
-				d.Note("submodule " + path + " changed")
-				continue
-			}
+		if dir { // a directory over a tracked file reads as its deletion
 			d.Block(from, nil)
 			continue
 		}
-		if from == nil {
-			hs, err := gitBlobSide(headTree, path)
-			if err != nil {
-				return err
-			}
-			// a gitlink added since base without a checkout still gets its note
-			if hs != nil && hs.mode == filemode.Submodule {
-				d.Note("submodule " + path + " changed")
-				continue
-			}
-			if to == nil {
-				continue // gone from both snapshots, nothing to show
-			}
+		if from == nil && to == nil {
+			continue // gone from both snapshots, nothing to show
 		}
 		d.Block(from, to)
 	}
 	if untracked > 0 {
-		d.Note(strutil.Plural(untracked, "untracked file") + " not shown")
+		d.Meta(strutil.Plural(untracked, "untracked file") + " not shown")
 	}
 	return nil
 }
 
-// gitPointerMoved reports a status entry that moves a submodule pointer the
-// trees already agree on: staged against HEAD, or checked out at another
-// commit. A deleted work-tree entry stays quiet, since an unchecked-out
-// submodule is not a pointer change.
-func gitPointerMoved(fs *git.FileStatus) bool {
-	if fs == nil {
-		return false
+// indexGitlinks returns the index's gitlink entries as path to commit.
+func indexGitlinks(r *git.Repository) (map[string]plumbing.Hash, error) {
+	idx, err := r.Storer.Index()
+	if err != nil {
+		return nil, err
 	}
-	return fs.Staging != git.Unmodified ||
-		(fs.Worktree != git.Unmodified && fs.Worktree != git.Deleted)
+	var links map[string]plumbing.Hash
+	for _, e := range idx.Entries {
+		if e.Mode != filemode.Submodule {
+			continue
+		}
+		if links == nil {
+			links = make(map[string]plumbing.Hash, 4)
+		}
+		links[e.Name] = e.Hash
+	}
+	return links, nil
+}
+
+// gitCheckoutRepo opens the repository checked out at a gitlink path in root's
+// work tree, when one is. Reads stay behind the same guard chain as the
+// parent's; missing, unreadable and nested-less directories all read as absent.
+func gitCheckoutRepo(root, path string) (*git.Repository, bool) {
+	if root == "" {
+		return nil, false
+	}
+	sub := filepath.Join(root, filepath.FromSlash(path))
+	if _, wt := findDotGit(sub); wt != sub { // the .git found must be path's own
+		return nil, false
+	}
+	r, err := openGitRepo(sub)
+	if err != nil {
+		return nil, false
+	}
+	return r, true
+}
+
+// gitCheckoutHash resolves the commit a gitlink at path is checked out at in
+// root's work tree, zero when no repository is checked out there.
+func gitCheckoutHash(root, path string) plumbing.Hash {
+	r, ok := gitCheckoutRepo(root, path)
+	if !ok {
+		return plumbing.ZeroHash
+	}
+	ref, err := r.Head()
+	if err != nil {
+		return plumbing.ZeroHash
+	}
+	return ref.Hash()
+}
+
+// renderChildDiff streams the child's own patch between two pointers, paths
+// prefixed by the submodule's, as git's --submodule=diff does. Nested gitlinks
+// render in the short form: git does not recurse.
+func renderChildDiff(ctx context.Context, d *gitDiffOut, r *git.Repository, path string, from, to plumbing.Hash) error {
+	fromTree := &object.Tree{}
+	if !from.IsZero() {
+		fc, err := r.CommitObject(from)
+		if err != nil {
+			return err
+		}
+		if fromTree, err = fc.Tree(); err != nil {
+			return err
+		}
+	}
+	toTree := &object.Tree{}
+	if !to.IsZero() {
+		tc, err := r.CommitObject(to)
+		if err != nil {
+			return err
+		}
+		if toTree, err = tc.Tree(); err != nil {
+			return err
+		}
+	}
+	changes, err := object.DiffTreeWithOptions(ctx, fromTree, toTree, &object.DiffTreeOptions{})
+	if err != nil {
+		return err
+	}
+	if changes, err = detectGitRenames(changes); err != nil {
+		return err
+	}
+	for _, ch := range changes {
+		if d.Full() {
+			d.skipped++
+			continue
+		}
+		fromFile, toFile, err := ch.Files()
+		if err != nil {
+			return err
+		}
+		from, err := fileSide(fromFile)
+		if err != nil {
+			return err
+		}
+		to, err := fileSide(toFile)
+		if err != nil {
+			return err
+		}
+		// Files() yields nils for gitlink sides, so those synthesize
+		if ch.From.TreeEntry.Mode == filemode.Submodule {
+			from = gitlinkSide(path+"/"+ch.From.Name, ch.From.TreeEntry.Hash)
+		} else if from != nil {
+			from.path = path + "/" + from.path
+		}
+		if ch.To.TreeEntry.Mode == filemode.Submodule {
+			to = gitlinkSide(path+"/"+ch.To.Name, ch.To.TreeEntry.Hash)
+		} else if to != nil {
+			to.path = path + "/" + to.path
+		}
+		d.Block(from, to)
+	}
+	return nil
+}
+
+// beneathGitlink reports whether path sits inside one of the checked-out
+// gitlinks: such contents belong to the nested repository, never this work
+// tree's untracked set.
+func beneathGitlink(checkouts map[string]plumbing.Hash, path string) bool {
+	for p := range checkouts {
+		if strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// submoduleStyle selects how git_diff and git_show render gitlink changes,
+// mirroring git's --submodule option.
+type submoduleStyle uint8
+
+const (
+	submoduleShort submoduleStyle = iota // Subproject commit hunks, git's default
+	submoduleLog                         // child commit subjects between the pointers
+	submoduleDiff                        // the child's own patch between the pointers
+)
+
+// parseSubmoduleStyle maps the model-facing submodule argument onto its style,
+// "" meaning git's default.
+func parseSubmoduleStyle(s string) (submoduleStyle, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", "short":
+		return submoduleShort, nil
+	case "log":
+		return submoduleLog, nil
+	case "diff":
+		return submoduleDiff, nil
+	default:
+		return 0, fmt.Errorf("submodule must be short, log or diff, got %q", s)
+	}
+}
+
+// submoduleRender carries one call's gitlink rendering style plus the work-tree
+// root the log and diff forms resolve nested checkouts through; an empty root
+// leaves them git's uninitialized fallback.
+type submoduleRender struct {
+	style submoduleStyle
+	root  string
+}
+
+// newSubmoduleRender builds the renderer for r, with no work tree to resolve
+// nested checkouts through when r is bare.
+func newSubmoduleRender(r *git.Repository, style submoduleStyle) submoduleRender {
+	sub := submoduleRender{style: style}
+	if w, err := r.Worktree(); err == nil {
+		sub.root = w.Filesystem.Root()
+	}
+	return sub
+}
+
+// gitlinkSide synthesizes one gitlink change side: git renders a pointer as a
+// one-line "Subproject commit" pseudo-blob, nil for an absent side.
+func gitlinkSide(path string, hash plumbing.Hash) *gitSide {
+	if hash.IsZero() {
+		return nil
+	}
+	data := "Subproject commit " + hash.String() + "\n"
+	return &gitSide{path: path, hash: hash, mode: filemode.Submodule, size: int64(len(data)), data: data}
+}
+
+// renderGitlink emits one pointer change in the chosen style, byte-faithful to
+// git's --submodule forms. A zero side is an add or a deletion; log and diff
+// fall back to git's uninitialized wording when no nested checkout resolves
+// the child commits.
+func renderGitlink(ctx context.Context, d *gitDiffOut, sub submoduleRender, path string, from, to plumbing.Hash) error {
+	if sub.style == submoduleShort {
+		d.Block(gitlinkSide(path, from), gitlinkSide(path, to))
+		return nil
+	}
+	d.shown++ // header and subjects render in place of a block
+	child, hasRepo := gitCheckoutRepo(sub.root, path)
+	var delta submoduleDelta
+	var capped, resolved bool
+	switch {
+	case !hasRepo:
+		// no checkout holds the child: git's uninitialized wording below
+	case from.IsZero() || to.IsZero():
+		resolved = true // an add or deletion holds no subjects to walk
+	default:
+		if wd, capHit, ok := walkSubmoduleDelta(child, from, to); ok {
+			delta, capped, resolved = wd, capHit, true
+		}
+	}
+	var b strings.Builder
+	switch {
+	case from.IsZero():
+		fmt.Fprintf(&b, "Submodule %s 0000000...%s (new submodule)\n", path, shortHash(to))
+	case to.IsZero():
+		fmt.Fprintf(&b, "Submodule %s %s...0000000 (submodule deleted)\n", path, shortHash(from))
+	case !resolved:
+		fmt.Fprintf(&b, "Submodule %s %s...%s (commits not present)\n", path, shortHash(from), shortHash(to))
+	case capped: // relation unknown: git's far-apart shape claims neither
+		fmt.Fprintf(&b, "Submodule %s %s...%s:\n", path, shortHash(from), shortHash(to))
+	case delta.rewind: // connected, moving backwards
+		fmt.Fprintf(&b, "Submodule %s %s..%s (rewind):\n", path, shortHash(from), shortHash(to))
+	case delta.fastForward: // connected, moving forwards: git still prints two dots
+		fmt.Fprintf(&b, "Submodule %s %s..%s:\n", path, shortHash(from), shortHash(to))
+	default: // diverged tips
+		fmt.Fprintf(&b, "Submodule %s %s...%s:\n", path, shortHash(from), shortHash(to))
+	}
+	if sub.style == submoduleLog {
+		// git's diff form prints the header alone
+		for _, c := range delta.newOnly {
+			b.WriteString("  > " + commitSubject(c) + "\n")
+		}
+		for _, c := range delta.oldOnly {
+			b.WriteString("  < " + commitSubject(c) + "\n")
+		}
+		if capped {
+			b.WriteString("  ... more commits not walked\n")
+		}
+	}
+	_, _ = d.w.Write([]byte(b.String()))
+	if sub.style == submoduleDiff && resolved {
+		return renderChildDiff(ctx, d, child, path, from, to)
+	}
+	return nil
+}
+
+// submoduleDelta holds the commits each side of a child pointer pair alone
+// holds, newest first, and how the pointers relate when the walk finished.
+type submoduleDelta struct {
+	newOnly, oldOnly []*object.Commit
+	fastForward      bool // the new pointer descends from the old one
+	rewind           bool // the old pointer descends from the new one
+}
+
+// gitSubmoduleWalkMax bounds the commit reads one pointer walk pays, so a
+// huge or hostile child history cannot turn a log-form header into a
+// full-history read on a slow filesystem.
+var gitSubmoduleWalkMax = 512
+
+// walkSubmoduleDelta walks both pointer histories in lockstep until the waves
+// meet at a common ancestor, collecting the commits each side alone holds and
+// how the pointers relate. Cost tracks the distance between the pointers, not
+// the child's history depth. capped reports the visit bound cutting the walk
+// short, which leaves the relation unknown and the listing without its tail.
+// A commit that fails to load reads as unresolved, never as absent history.
+func walkSubmoduleDelta(r *git.Repository, from, to plumbing.Hash) (d submoduleDelta, capped, ok bool) {
+	const (
+		sideFrom uint8 = 1
+		sideTo   uint8 = 2
+	)
+	fc, err := r.CommitObject(from)
+	if err != nil {
+		return submoduleDelta{}, false, false
+	}
+	tc, err := r.CommitObject(to)
+	if err != nil {
+		return submoduleDelta{}, false, false
+	}
+	type visit struct {
+		c    *object.Commit
+		side uint8
+	}
+	q := []visit{{fc, sideFrom}, {tc, sideTo}}
+	marks := make(map[plumbing.Hash]uint8, 64)
+	var visited int
+	for len(q) > 0 {
+		v := q[0]
+		q = q[1:]
+		h := v.c.ID()
+		if marks[h]&v.side != 0 {
+			continue // this side already walked the commit
+		}
+		marks[h] |= v.side
+		visited++
+		if visited > gitSubmoduleWalkMax {
+			capped = true
+			break
+		}
+		if marks[h] == sideFrom|sideTo {
+			continue // a common ancestor: everything past it is both sides'
+		}
+		if v.side == sideFrom {
+			d.oldOnly = append(d.oldOnly, v.c)
+		} else {
+			d.newOnly = append(d.newOnly, v.c)
+		}
+		for _, p := range v.c.ParentHashes {
+			pc, err := r.CommitObject(p)
+			if err != nil {
+				return submoduleDelta{}, false, false
+			}
+			q = append(q, visit{pc, v.side})
+		}
+	}
+	// a wave reaching the other tip names the relation; the other side may
+	// upgrade a listed commit to common afterwards, so filter at the end
+	both := sideFrom | sideTo
+	d.fastForward = !capped && marks[from] == both
+	d.rewind = !capped && marks[to] == both
+	newest := func(a, b *object.Commit) int { return b.Author.When.Compare(a.Author.When) }
+	single := func(list []*object.Commit, side uint8) []*object.Commit {
+		return bulk.SliceFilter(func(c *object.Commit) bool {
+			return marks[c.ID()] == side
+		}, list)
+	}
+	d.oldOnly = single(d.oldOnly, sideFrom)
+	d.newOnly = single(d.newOnly, sideTo)
+	slices.SortStableFunc(d.oldOnly, newest)
+	slices.SortStableFunc(d.newOnly, newest)
+	return d, capped, true
 }
 
 // changePath names a change's destination path, falling back to its source.
@@ -800,7 +1182,7 @@ func gitMode(m filemode.FileMode) string {
 // to its own, or the empty tree for a root commit, limited to file's scope. A
 // merge notes the first-parent basis, so the partial view is never mistaken for
 // the whole change.
-func gitCommitDiffText(ctx context.Context, c *object.Commit, file string, d *gitDiffOut) error {
+func gitCommitDiffText(ctx context.Context, c *object.Commit, file string, sub submoduleRender, d *gitDiffOut) error {
 	var parent *object.Commit
 	if c.NumParents() > 0 {
 		var err error
@@ -816,11 +1198,11 @@ func gitCommitDiffText(ctx context.Context, c *object.Commit, file string, d *gi
 	if err != nil {
 		return err
 	}
-	if err := gitDiffTreeText(ctx, fromTree, toTree, file, d); err != nil {
+	if err := gitDiffTreeText(ctx, fromTree, toTree, file, sub, d); err != nil {
 		return err
 	}
 	if c.NumParents() > 1 {
-		d.Note("merge commit; showing the diff against first parent " + shortHash(parent.ID()))
+		d.Meta("merge commit; showing the diff against first parent " + shortHash(parent.ID()))
 	}
 	return nil
 }
@@ -847,7 +1229,8 @@ func shortHash(h plumbing.Hash) string {
 // counts summary. Both-sides-unmodified entries (Preload artifacts) are
 // skipped. A directory whose contents are all untracked collapses to one
 // `?? dir/` line, and the untracked count follows the lines shown. tracked
-// names HEAD's files: status omits clean entries, so they must come separately.
+// names HEAD's paths, files and gitlinks: status omits clean entries, so they
+// must come separately.
 func gitStatusLines(st git.Status, tracked []string) (lines []string, staged, unstaged, untracked int) {
 	paths := slices.Sorted(maps.Keys(st))
 	type entry struct{ key, line string }
@@ -887,6 +1270,31 @@ func gitStatusLines(st git.Status, tracked []string) (lines []string, staged, un
 	return lines, staged, unstaged, untracked
 }
 
+// fixupGitlinkStatus corrects the submodule-blind entries go-git's status
+// produces when a checkout is not declared in .gitmodules: contents of a
+// gitlink still staged in the index are never loose untracked files, and a
+// checkout on disk is pointer state, not a work-tree deletion. idxLinks
+// carries the staged pointer each gitlink must match.
+func fixupGitlinkStatus(root string, st git.Status, idxLinks map[string]plumbing.Hash) {
+	for path, stagedHash := range idxLinks {
+		checkedOut := gitCheckoutHash(root, path)
+		if checkedOut.IsZero() {
+			continue // no checkout there: go-git's own view stands
+		}
+		maps.DeleteFunc(st, func(p string, _ *git.FileStatus) bool {
+			return p != path && strings.HasPrefix(p, path+"/")
+		})
+		if fs, ok := st[path]; ok && fs.Worktree == git.Deleted {
+			// the checkout exists: report its pointer, not a deletion
+			if checkedOut == stagedHash {
+				fs.Worktree = git.Unmodified
+			} else {
+				fs.Worktree = git.Modified
+			}
+		}
+	}
+}
+
 // collapseUntracked maps each untracked path to its outermost directory with
 // nothing blocked beneath it, or leaves the path alone when none exists, so a
 // fresh directory reads as one `?? dir/` line like git status.
@@ -921,28 +1329,41 @@ func collapseUntracked(blocked map[string]struct{}, untracked []string) []string
 	return out
 }
 
-// headTreePaths lists every path in HEAD's tree, empty before any commit.
-// Walk errors propagate so a broken tree never reads as absent files.
-func headTreePaths(r *git.Repository) ([]string, error) {
+// headTreePaths lists every path in HEAD's tree, files and gitlinks returned
+// separately, both empty before any commit. Walk errors propagate so a broken
+// tree never reads as absent files.
+func headTreePaths(r *git.Repository) (files, gitlinks []string, err error) {
 	c, err := gitCommit(r, "HEAD")
 	if err != nil {
 		if errors.Is(err, errNoCommits) {
-			return nil, nil
+			return nil, nil, nil
 		}
-		return nil, err
+		return nil, nil, err
 	}
 	t, err := c.Tree()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var names []string
 	if err := t.Files().ForEach(func(f *object.File) error {
-		names = append(names, f.Name)
+		files = append(files, f.Name)
 		return nil
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return names, nil
+	tw := object.NewTreeWalker(t, true, nil)
+	defer tw.Close()
+	for {
+		name, entry, err := tw.Next()
+		if errors.Is(err, io.EOF) {
+			return files, gitlinks, nil
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if entry.Mode == filemode.Submodule {
+			gitlinks = append(gitlinks, name)
+		}
+	}
 }
 
 // gitStatusText renders the full git_status output for r.
@@ -955,11 +1376,16 @@ func gitStatusText(r *git.Repository) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tracked, err := headTreePaths(r)
+	files, gitlinks, err := headTreePaths(r)
 	if err != nil {
 		return "", err
 	}
-	lines, staged, unstaged, untracked := gitStatusLines(st, tracked)
+	idxLinks, err := indexGitlinks(r)
+	if err != nil {
+		return "", err
+	}
+	fixupGitlinkStatus(w.Filesystem.Root(), st, idxLinks)
+	lines, staged, unstaged, untracked := gitStatusLines(st, append(files, gitlinks...))
 
 	var b strings.Builder
 	b.WriteString(gitHeadLine(r) + "\n")

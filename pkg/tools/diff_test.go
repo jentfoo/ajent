@@ -8,6 +8,7 @@ import (
 	"time"
 
 	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -275,12 +276,15 @@ func TestGitDiff(t *testing.T) {
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.pre+`","to":"`+g.base+`"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "diff --git a/sub b/sub")
+		assert.Contains(t, out, "new file mode 160000")
+		assert.Contains(t, out, "+Subproject commit "+g.child1)
 
 		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.bump+`","to":"`+g.pre+`"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "deleted file mode 160000")
+		assert.Contains(t, out, "-Subproject commit "+g.child2)
 	})
 
 	t.Run("submodule_scope_filters_note", func(t *testing.T) {
@@ -288,12 +292,12 @@ func TestGitDiff(t *testing.T) {
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.pre+`","to":"`+g.bump+`","file":"sub"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
 
 		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.pre+`","to":"`+g.bump+`","file":"a.txt"}`)
 		assert.False(t, isErr)
-		assert.NotContains(t, out, "submodule")
+		assert.NotContains(t, out, "Subproject")
 		assert.Contains(t, out, "(no changes)")
 	})
 
@@ -303,7 +307,10 @@ func TestGitDiff(t *testing.T) {
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.base+`","to":"worktree"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "index "+shortHash(plumbing.NewHash(g.child1))+".."+
+			shortHash(plumbing.NewHash(g.child2))+" 160000")
+		assert.Contains(t, out, "-Subproject commit "+g.child1)
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
 	})
 
 	// an unchecked-out pointer identical at base and HEAD is no change
@@ -320,16 +327,86 @@ func TestGitDiff(t *testing.T) {
 		g.point(t, g.child1) // index back at child1 while HEAD holds child2
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "-Subproject commit "+g.child2)
+		assert.Contains(t, out, "+Subproject commit "+g.child1)
 	})
 
-	// a gitlink added since base with no checkout on disk still gets its note
+	// a gitlink added since base with no checkout on disk still renders
 	t.Run("worktree_names_submodule_added", func(t *testing.T) {
 		g := newSubmoduleRepo(t)
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
 			`{"from":"`+g.pre+`","to":"worktree"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "new file mode 160000")
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
+	})
+
+	// index-only staging with no checkout and no .gitmodules: status reads
+	// add-then-delete, which netted to nothing before the index pointer counted
+	t.Run("worktree_names_staged_add_no_checkout", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		g.stageGitlink(t, "fresh", g.child2)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
+		assert.NotContains(t, out, "(no changes)")
+	})
+
+	// a real on-disk checkout with .gitmodules: the moved pointer renders the
+	// checkout's commit, where go-git's status path agrees with git
+	t.Run("worktree_names_moved_checkout", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "index "+shortHash(plumbing.NewHash(g.second))+".."+
+			shortHash(plumbing.NewHash(g.first))+" 160000")
+		assert.Contains(t, out, "-Subproject commit "+g.second)
+		assert.Contains(t, out, "+Subproject commit "+g.first)
+	})
+
+	// .gitmodules gone from the work tree: go-git's status turns blind, the
+	// checkout-resolved pointer still renders the move and the contents never
+	// count as untracked files
+	t.Run("worktree_undeclared_checkout", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		require.NoError(t, os.Remove(filepath.Join(g.dir, ".gitmodules")))
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "+Subproject commit "+g.first)
+		assert.Contains(t, out, "deleted file mode 100644") // the .gitmodules deletion
+		assert.NotContains(t, out, "untracked file")
+	})
+
+	// dirty contents move no pointer: named only by the committed commit,
+	// matching the pointer-only comparison (git would suffix -dirty)
+	t.Run("worktree_dirty_contents_silent", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		require.NoError(t, os0Write(filepath.Join(g.dir, "sub"), "lib.txt", "dirty\n"))
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.NotContains(t, out, "Subproject")
+		assert.Contains(t, out, "(no changes)")
+	})
+
+	// git rm --cached with the checkout still present: git reads the staged
+	// deletion even though the directory remains, and so must the tool
+	t.Run("worktree_staged_deletion_renders", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		gitRun(t, g.dir, "rm", "-q", "--cached", "sub")
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "diff --git a/sub b/sub")
+		assert.Contains(t, out, "deleted file mode 160000")
+		assert.Contains(t, out, "-Subproject commit "+g.second)
+
+		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(g.second))+"...0000000 (submodule deleted)")
 	})
 
 	// a directory replacing a tracked file renders the deletion; its contents
@@ -364,4 +441,133 @@ func TestGitDiffWideBoundTruncates(t *testing.T) {
 	assert.Contains(t, out, "truncated:")
 	assert.Contains(t, out, "1 more changed path not shown") // rendering stopped at the bound
 	assert.NotContains(t, out, "+content of x2.txt")
+}
+
+// TestGitDiffSubmoduleBlocksBounded runs in the sequential phase with the
+// narrowed limit: Subproject hunks are ordinary blocks, so many submodule
+// changes must spill and truncate like any other content.
+func TestGitDiffSubmoduleBlocksBounded(t *testing.T) {
+	applyTestLimits(t, Limits{Git: Limit{Lines: 3}})
+
+	dir, from, to := newSubmoduleSweepRepo(t, 6)
+	out, isErr := runGitTool(t, &gitDiffTool{policy: PathPolicy{Cwd: dir}},
+		`{"from":"`+from+`","to":"`+to+`"}`)
+	assert.False(t, isErr)
+	assert.Contains(t, out, "diff --git a/sub0 b/sub0") // one hunk fills the bound
+	assert.NotContains(t, out, "a/sub1 b/sub1")
+	assert.Contains(t, out, "5 more changed paths not shown")
+	assert.Contains(t, out, "truncated:")
+	assert.Contains(t, out, "full output in @") // the spill holds every hunk
+}
+
+// TestGitDiffSubmoduleStyles covers git's --submodule rendering forms and
+// their fallbacks, resolved through a real checkout.
+func TestGitDiffSubmoduleStyles(t *testing.T) {
+	t.Parallel()
+
+	t.Run("bad_value_rejected", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"submodule":"bogus"}`)
+		assert.True(t, isErr)
+		assert.Contains(t, out, "submodule must be short, log or diff")
+	})
+
+	// no checkout to resolve child commits: git's uninitialized wording
+	t.Run("log_without_checkout_falls_back", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.base+`","to":"`+g.bump+`","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(g.child1))+"..."+shortHash(plumbing.NewHash(g.child2))+
+			" (commits not present)")
+	})
+
+	t.Run("log_add_new_submodule", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"`+g.base+`","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub 0000000..."+
+			shortHash(plumbing.NewHash(g.second))+" (new submodule)")
+	})
+
+	// moving back to the child's first commit is a rewind, listed with "<"
+	t.Run("log_rewind_subjects", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(g.second))+".."+shortHash(plumbing.NewHash(g.first))+
+			" (rewind):")
+		assert.Contains(t, out, "  < child two")
+		assert.NotContains(t, out, "  > ")
+	})
+
+	// a new child commit staged into the index is a forward move, listed ">"
+	t.Run("log_forward_subjects", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		sub := filepath.Join(g.dir, "sub")
+		gitRun(t, sub, "-c", "user.email=t@t", "-c", "user.name=t",
+			"commit", "-qm", "child three", "--allow-empty")
+		gitRun(t, g.dir, "add", "sub")
+		cr, err := git.PlainOpen(sub)
+		require.NoError(t, err)
+		ref, err := cr.Head()
+		require.NoError(t, err)
+
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"log"}`)
+		assert.False(t, isErr)
+		// a fast-forward still prints git's two dots, no marker
+		assert.Contains(t, out, "Submodule sub "+shortHash(plumbing.NewHash(g.second))+
+			".."+shortHash(ref.Hash())+":")
+		assert.Contains(t, out, "  > child three")
+	})
+
+	t.Run("diff_form_renders_child_patch", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"diff"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(g.second))+".."+shortHash(plumbing.NewHash(g.first))+
+			" (rewind):")
+		assert.Contains(t, out, "diff --git a/sub/lib.txt b/sub/lib.txt")
+		assert.Contains(t, out, "-two")
+		assert.Contains(t, out, "+one")
+	})
+
+	t.Run("diff_add_whole_child", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.pre+`","to":"`+g.base+`","submodule":"diff"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "(new submodule)")
+		assert.Contains(t, out, "diff --git a/sub/lib.txt b/sub/lib.txt")
+		assert.Contains(t, out, "+two")
+	})
+}
+
+// TestGitDiffSubmoduleWalkCap narrows the pointer-walk bound, so it runs in
+// the sequential phase rather than parallel with the style readers: a capped
+// walk must claim no relation it did not finish exploring, and the listing
+// must say it stopped.
+func TestGitDiffSubmoduleWalkCap(t *testing.T) {
+	orig := gitSubmoduleWalkMax
+	t.Cleanup(func() { gitSubmoduleWalkMax = orig })
+	gitSubmoduleWalkMax = 2
+
+	g := newCheckoutRepo(t)
+	g.checkout(t, g.first) // second..first meets after three visits
+	out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+		`{"to":"worktree","submodule":"log"}`)
+	assert.False(t, isErr)
+	assert.Contains(t, out, "Submodule sub "+
+		shortHash(plumbing.NewHash(g.second))+"..."+shortHash(plumbing.NewHash(g.first))+":")
+	assert.Contains(t, out, "more commits not walked")
+	assert.NotContains(t, out, "(rewind)")
 }

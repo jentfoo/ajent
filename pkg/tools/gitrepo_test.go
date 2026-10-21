@@ -2,7 +2,9 @@ package tools
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,6 +85,29 @@ func newGitRepo(t *testing.T) *gitRepo {
 	return &gitRepo{dir: dir, a: a, b: b, m: m}
 }
 
+// childRepo supplies a two-commit child repository, the commits a submodule
+// pointer moves between.
+func childRepo(t *testing.T) (dir, first, second string) {
+	t.Helper()
+
+	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	dir = t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	head := func(content string) string {
+		t.Helper()
+		require.NoError(t, os0Write(dir, "lib.txt", content))
+		_, err = w.Add(".")
+		require.NoError(t, err)
+		h, err := w.Commit("child "+content, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		return h.String()
+	}
+	return dir, head("one\n"), head("two\n")
+}
+
 // submoduleRepo is a parent repo whose "sub" path is a gitlink into a child
 // repository, set through the index alone: no checkout and no .gitmodules, so
 // the pointer is the only submodule state that exists.
@@ -91,7 +116,7 @@ func newGitRepo(t *testing.T) *gitRepo {
 type submoduleRepo struct {
 	dir             string
 	pre, base, bump string // parent commits around the pointer moves
-	child1          string // child commit the base pointer names
+	child1, child2  string // child commits the pointer moves between
 }
 
 // newSubmoduleRepo builds the fixture in temp directories.
@@ -99,24 +124,7 @@ func newSubmoduleRepo(t *testing.T) *submoduleRepo {
 	t.Helper()
 
 	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
-
-	// child repo supplies the two commits the pointer moves between
-	child := t.TempDir()
-	cr, err := git.PlainInit(child, false)
-	require.NoError(t, err)
-	cw, err := cr.Worktree()
-	require.NoError(t, err)
-	childHead := func(content string) string {
-		t.Helper()
-		require.NoError(t, os0Write(child, "lib.txt", content))
-		_, err = cw.Add(".")
-		require.NoError(t, err)
-		h, err := cw.Commit("child "+content, &git.CommitOptions{Author: gitAuthor(when)})
-		require.NoError(t, err)
-		return h.String()
-	}
-	child1 := childHead("one\n")
-	child2 := childHead("two\n")
+	_, child1, child2 := childRepo(t)
 
 	dir := t.TempDir()
 	r, err := git.PlainInit(dir, false)
@@ -157,7 +165,7 @@ func newSubmoduleRepo(t *testing.T) *submoduleRepo {
 	base := parentCommit("add submodule")
 	setGitlink(child2)
 	bump := parentCommit("bump submodule")
-	return &submoduleRepo{dir: dir, pre: pre, base: base, bump: bump, child1: child1}
+	return &submoduleRepo{dir: dir, pre: pre, base: base, bump: bump, child1: child1, child2: child2}
 }
 
 // point restages the gitlink at hash without committing, an uncommitted
@@ -176,8 +184,127 @@ func (g *submoduleRepo) point(t *testing.T, hash string) {
 	require.NoError(t, r.Storer.SetIndex(idx))
 }
 
+// stageGitlink index-stages a new gitlink at path with no checkout and no
+// .gitmodules, the shape a manual `update-index --add --cacheinfo` produces.
+func (g *submoduleRepo) stageGitlink(t *testing.T, path, hash string) {
+	t.Helper()
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+	idx, err := r.Storer.Index()
+	require.NoError(t, err)
+	idx.Entries = append(idx.Entries, &index.Entry{
+		Name: path, Hash: plumbing.NewHash(hash), Mode: filemode.Submodule,
+	})
+	require.NoError(t, r.Storer.SetIndex(idx))
+}
+
 // policy returns a PathPolicy rooted at the repo.
 func (g *submoduleRepo) policy() PathPolicy {
+	return PathPolicy{Cwd: g.dir}
+}
+
+// newSubmoduleSweepRepo commits n gitlinks at one child commit, then moves
+// every pointer to another. The from..to diff names n submodule changes and
+// nothing else.
+func newSubmoduleSweepRepo(t *testing.T, n int) (dir, from, to string) {
+	t.Helper()
+
+	_, child1, child2 := childRepo(t)
+	dir = t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	when := time.Date(2026, 9, 1, 13, 0, 0, 0, time.UTC)
+	sweep := func(hash string) {
+		t.Helper()
+		idx, err := r.Storer.Index()
+		require.NoError(t, err)
+		byName := make(map[string]*index.Entry, len(idx.Entries))
+		for _, e := range idx.Entries {
+			byName[e.Name] = e
+		}
+		for i := range n {
+			name := "sub" + strconv.Itoa(i)
+			if e, ok := byName[name]; ok {
+				e.Hash = plumbing.NewHash(hash)
+				continue
+			}
+			idx.Entries = append(idx.Entries, &index.Entry{
+				Name: name, Hash: plumbing.NewHash(hash), Mode: filemode.Submodule,
+			})
+		}
+		require.NoError(t, r.Storer.SetIndex(idx))
+	}
+	commit := func(msg string) string {
+		t.Helper()
+		h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		when = when.Add(time.Minute)
+		return h.String()
+	}
+
+	require.NoError(t, os0Write(dir, "a.txt", "one\n"))
+	_, err = w.Add(".")
+	require.NoError(t, err)
+	sweep(child1)
+	from = commit("sweep base")
+	sweep(child2)
+	to = commit("sweep bump")
+	return dir, from, to
+}
+
+// checkoutRepo is a parent whose "sub" path is a real submodule checkout:
+// .gitmodules committed, an initialized entry in .git/config and a clone on
+// disk. Built with system git, since go-git cannot materialise submodules.
+//
+//	pre (a.txt) --- base (sub @ second)
+type checkoutRepo struct {
+	dir           string
+	pre, base     string // parent commits before and with the submodule
+	first, second string // child commits the checkout can move between
+}
+
+// newCheckoutRepo builds the fixture in temp directories.
+func newCheckoutRepo(t *testing.T) *checkoutRepo {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	child, first, second := childRepo(t)
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os0Write(dir, "a.txt", "one\n"))
+	_, err = w.Add(".")
+	require.NoError(t, err)
+	when := time.Date(2026, 9, 1, 13, 0, 0, 0, time.UTC)
+	commit := func(msg string) string {
+		t.Helper()
+		h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		when = when.Add(time.Minute)
+		return h.String()
+	}
+	pre := commit("before submodule")
+	gitRun(t, dir, "-c", "protocol.file.allow=always", "-c", "user.email=t@t", "-c", "user.name=t",
+		"submodule", "add", "-q", child, "sub")
+	_, err = w.Add(".") // stage .gitmodules beside the gitlink submodule add staged
+	require.NoError(t, err)
+	return &checkoutRepo{dir: dir, pre: pre, base: commit("submodule checkout"), first: first, second: second}
+}
+
+// checkout moves the submodule's checkout to hash.
+func (g *checkoutRepo) checkout(t *testing.T, hash string) {
+	t.Helper()
+	gitRun(t, filepath.Join(g.dir, "sub"), "checkout", "-q", hash)
+}
+
+// policy returns a PathPolicy rooted at the repo.
+func (g *checkoutRepo) policy() PathPolicy {
 	return PathPolicy{Cwd: g.dir}
 }
 

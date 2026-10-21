@@ -600,10 +600,17 @@ error rather than silently emitting something git-shaped but wrong. go-git's dif
 has known edge cases. A `git_diff` that cannot faithfully represent a rename,
 binary delta or octopus merge says so and offers what it can (e.g. "N files
 changed, binary deltas omitted") instead of emitting a misleading unified diff.
-Submodule pointer changes are named in a note, never rendered: gitlinks
-reference commits, not blobs. Rename detection cannot carry them because the
-change sides skip gitlink entries, so the tree entries themselves carry the
-mode.
+Submodule pointer changes render in git's `--submodule` forms: the default
+`short` renders a pointer move as a "Subproject commit" hunk, byte-identical
+to git's own output and bounded like any other block. A `submodule` argument
+on git_diff and git_show selects the `log` form, the child's commit subjects
+between the pointers, or the `diff` form, the child's own patch with paths
+prefixed by the submodule's. Both read the child through its checkout and
+fall back to git's uninitialized wording when no checkout holds the objects.
+The forms relate the two pointers with a bounded two-sided walk that ends
+where the histories meet, so the read cost tracks the distance between the
+pointers rather than the child's history depth. Rename detection cannot carry gitlinks because the change sides skip their
+entries, so the tree entries themselves carry the mode.
 Unified hunks are rendered by the same go-udiff engine the `edit` tool's change
 preview uses (`unidiff.go`), not go-git's encoder, so both surfaces produce one
 diff dialect. go-git supplies the object model (trees, changes and rename
@@ -635,9 +642,12 @@ reads stay proportional to what will be rendered.
 
 git_show and git_diff stream per-file blocks through the shared bound machinery
 instead of building the whole patch in memory: once the result bound is reached
-rendering stops and remaining in-scope paths are counted into the footer. One
-side's content is capped at a blob ceiling, with text past it withheld behind an
-explicit note rather than hunks over a truncated view.
+rendering stops and remaining in-scope paths are counted into the footer. Notes
+that explain the view (merge basis, untracked and skipped counts) are the only
+lines past the bound, riding with the truncation footer, since a summary must
+survive the cut it describes. One side's content is capped at a blob ceiling,
+with text past it withheld behind an explicit note rather than hunks over a
+truncated view.
 
 #### Package shape and conventions
 
@@ -736,9 +746,21 @@ diffs **everything since the base**, committed and uncommitted together, as `git
 <ref>` does. Candidate paths are the union of the base tree, HEAD's tree and the
 status entries: status alone is HEAD-relative and would miss files committed since
 the base but clean against HEAD. Untracked files are named in a trailing note,
-never diffed, matching git. Submodule pointer changes are named the same way,
-while a pointer identical to the base stays silent. `worktree` is only valid
-as `to` (it is the newer state), so `from: "worktree"` is a usage error.
+never diffed, matching git. Submodule pointer changes render in the forms above,
+while a pointer identical to the base stays silent. The work-tree side of a
+gitlink is the commit its checkout holds, read from the nested repository
+rather than `.gitmodules`, so declared and undeclared submodules report alike
+(go-git's status only handles declared ones). When nothing is checked out the
+staged index pointer stands in, which reports a staged-only addition that
+git's own `diff HEAD` nets away to empty. A gitlink dropped from the index
+reads as a deletion even with the checkout still on disk, matching git.
+Contents inside a checked-out gitlink never count as untracked files, since
+they belong to the nested repository, and dirty contents stay quiet: the
+engine compares commits, not the child's work tree, so git's `m`/`-dirty`
+content state is not visible. `git_status` shares these checkout rules, so an
+undeclared checkout reports its pointer or nothing instead of a deletion plus
+a spurious `?? sub/` row. `worktree` is only valid as `to` (it is the newer
+state), so `from: "worktree"` is a usage error.
 
 #### Prompt surface
 

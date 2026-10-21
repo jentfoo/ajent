@@ -16,10 +16,11 @@ const gitWorktreeRef = "worktree"
 
 // gitDiffParams is the model-facing parameter block for git_diff.
 type gitDiffParams struct {
-	From string `json:"from,omitempty" desc:"base commit-ish, or an \"a..b\" range shorthand for from+to; default HEAD"`
-	To   string `json:"to,omitempty" desc:"target commit-ish, or \"worktree\" for uncommitted changes; empty means the change from introduces"`
-	File string `json:"file,omitempty" desc:"limit to changes under this file or directory, repo-relative"`
-	Path string `json:"path,omitempty" desc:"path inside the repository; default the session cwd"`
+	From      string `json:"from,omitempty" desc:"base commit-ish, or an \"a..b\" range shorthand for from+to; default HEAD"`
+	To        string `json:"to,omitempty" desc:"target commit-ish, or \"worktree\" for uncommitted changes; empty means the change from introduces"`
+	File      string `json:"file,omitempty" desc:"limit to changes under this file or directory, repo-relative"`
+	Submodule string `json:"submodule,omitempty" desc:"how submodule pointer changes render: \"short\" Subproject hunks (default), \"log\" child commit subjects, or \"diff\" the child's own patch"`
+	Path      string `json:"path,omitempty" desc:"path inside the repository; default the session cwd"`
 }
 
 // gitDiffTool renders diffs between refs, of a single commit, or against the
@@ -39,7 +40,7 @@ func (t *gitDiffTool) Label(agent.ToolCall) string {
 }
 
 func (t *gitDiffTool) Description() string {
-	return "Diff the repository containing path: from a commit-ish to another (from+to), the patch one commit introduces (one of from/to), or committed state against the working tree (to \"worktree\" for uncommitted changes). Optional file limits the diff to one path or directory prefix. Read-only: the repository is parsed in process and nothing from it is executed. Binary deltas and untracked files are named, never rendered; uncommitted renames appear as separate delete and add."
+	return "Diff the repository containing path: from a commit-ish to another (from+to), the patch one commit introduces (one of from/to), or committed state against the working tree (to \"worktree\" for uncommitted changes). Optional file limits the diff to one path or directory prefix, and submodule picks git's --submodule rendering for pointer changes (short Subproject hunks by default, log or diff forms). Read-only: the repository is parsed in process and nothing from it is executed. Binary deltas and untracked files are named, never rendered; uncommitted renames appear as separate delete and add."
 }
 
 func (t *gitDiffTool) Schema() llm.ToolSchema {
@@ -64,6 +65,10 @@ func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	if p.From == gitWorktreeRef {
 		return agent.ErrorToolResult(ToolGitDiff + ": from must be a commit-ish; put \"worktree\" in to"), nil
 	}
+	style, err := parseSubmoduleStyle(p.Submodule)
+	if err != nil {
+		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	}
 	root, err := t.policy.Resolve(argPath(p.Path))
 	if err != nil {
 		return agent.ErrorToolResult(err.Error()), nil
@@ -75,7 +80,7 @@ func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 
 	d := newGitDiffOut(t.sessionID, ToolGitDiff)
 	defer func() { _ = d.close() }()
-	if err := gitDiffText(ctx, r, p.From, p.To, normalizeGitPathspec(p.File), d); err != nil {
+	if err := gitDiffText(ctx, r, p.From, p.To, normalizeGitPathspec(p.File), newSubmoduleRender(r, style), d); err != nil {
 		return agent.ErrorToolResult(ToolGitDiff + ": " + err.Error()), nil
 	}
 	text := d.Text("narrow with file or a smaller range")
@@ -101,7 +106,7 @@ func splitGitRange(rev string) (from, to string, err error) {
 
 // gitDiffText resolves the requested range and renders its unified patch into
 // d, limited to file's path scope when non-empty.
-func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, d *gitDiffOut) error {
+func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, sub submoduleRender, d *gitDiffOut) error {
 	if to == "" { // accept git's "a..b" range shorthand in from
 		var err error
 		if from, to, err = splitGitRange(from); err != nil {
@@ -118,7 +123,7 @@ func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, 
 		if err != nil {
 			return err
 		}
-		return gitDiffWorktreeText(ctx, r, baseTree, file, d)
+		return gitDiffWorktreeText(ctx, r, baseTree, file, sub, d)
 	case from != "" && to != "":
 		fromC, err := gitCommit(r, from)
 		if err != nil {
@@ -136,7 +141,7 @@ func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, 
 		if err != nil {
 			return err
 		}
-		return gitDiffTreeText(ctx, fromTree, toTree, file, d)
+		return gitDiffTreeText(ctx, fromTree, toTree, file, sub, d)
 	case from != "" || to != "":
 		rev := from // exactly one side names the commit to show
 		if rev == "" {
@@ -146,12 +151,12 @@ func gitDiffText(ctx context.Context, r *git.Repository, from, to, file string, 
 		if err != nil {
 			return err
 		}
-		return gitCommitDiffText(ctx, c, file, d)
+		return gitCommitDiffText(ctx, c, file, sub, d)
 	default:
 		head, err := gitCommit(r, "HEAD")
 		if err != nil {
 			return err
 		}
-		return gitCommitDiffText(ctx, head, file, d)
+		return gitCommitDiffText(ctx, head, file, sub, d)
 	}
 }

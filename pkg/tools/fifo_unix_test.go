@@ -289,7 +289,7 @@ func TestGitDiffWorktreeFifo(t *testing.T) {
 	fifoFence(t, func() {
 		d := newGitDiffOut("fifo-test", "git_diff")
 		defer func() { _ = d.close() }()
-		require.NoError(t, gitDiffText(t.Context(), r, "", "worktree", "", d))
+		require.NoError(t, gitDiffText(t.Context(), r, "", "worktree", "", submoduleRender{}, d))
 		out := d.Text("")
 		assert.Contains(t, out, "diff --git a/pipe.txt b/pipe.txt")
 		assert.Contains(t, out, "deleted file mode")

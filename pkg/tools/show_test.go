@@ -3,19 +3,22 @@ package tools
 import (
 	"testing"
 
+	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGitShow(t *testing.T) {
 	t.Parallel()
 
-	t.Run("submodule_pointer_bump_named", func(t *testing.T) {
+	t.Run("submodule_pointer_bump_renders", func(t *testing.T) {
 		g := newSubmoduleRepo(t)
 		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.bump+`"}`)
 		assert.False(t, isErr)
-		assert.Contains(t, out, "submodule sub changed")
+		assert.Contains(t, out, "index "+shortHash(plumbing.NewHash(g.child1))+".."+
+			shortHash(plumbing.NewHash(g.child2))+" 160000")
+		assert.Contains(t, out, "-Subproject commit "+g.child1)
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
 		assert.NotContains(t, out, "(no changes)")
-		assert.NotContains(t, out, "diff --git") // no phantom block for a gitlink
 	})
 
 	t.Run("metadata_plus_patch", func(t *testing.T) {

@@ -440,6 +440,9 @@ func TestGrepFallbackCapNotes(t *testing.T) {
 	// followed the fill, so a cap note would send the model chasing matches that
 	// do not exist (an explicit limit stays silent by its own rule either way)
 	t.Run("exact_fill_silent", func(t *testing.T) {
+		if !rgOnPath() { // proven withholding is an rg-stream property; the fallback stays conservative
+			t.Skip("ripgrep not on PATH")
+		}
 		dir, policy := newSearchEnv(t)
 		mkfile(dir, "a.txt", "hit one\nmiss\nhit two\n")
 		mkfile(dir, "b.txt", "hit three\n")

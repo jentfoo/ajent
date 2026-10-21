@@ -109,9 +109,22 @@ func TestHeadTreePaths(t *testing.T) {
 	r, err := git.PlainOpen(g.dir)
 	require.NoError(t, err)
 
-	names, err := headTreePaths(r)
+	files, gitlinks, err := headTreePaths(r)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"a.txt", "bin.dat", "dir/nested.txt"}, names)
+	assert.Equal(t, []string{"a.txt", "bin.dat", "dir/nested.txt"}, files)
+	assert.Empty(t, gitlinks)
+
+	// the tree walker must find gitlinks Files() skips, so the tracked set
+	// covers submodule paths too
+	t.Run("gitlinks_listed", func(t *testing.T) {
+		s := newSubmoduleRepo(t)
+		sr, err := git.PlainOpen(s.dir)
+		require.NoError(t, err)
+		files, gitlinks, err := headTreePaths(sr)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a.txt"}, files)
+		assert.Equal(t, []string{"sub"}, gitlinks)
+	})
 
 	// a lost blob must fail the walk: swallowing it narrows the tracked set,
 	// so an untracked file under dir/ collapses into `?? dir/`
@@ -125,7 +138,7 @@ func TestHeadTreePaths(t *testing.T) {
 		h := e.Hash.String()
 		require.NoError(t, os.Remove(filepath.Join(g.dir, ".git", "objects", h[:2], h[2:])))
 
-		_, err = headTreePaths(r)
+		_, _, err = headTreePaths(r)
 		assert.ErrorIs(t, err, plumbing.ErrObjectNotFound)
 	})
 
@@ -391,6 +404,83 @@ func TestCommitSubject(t *testing.T) {
 	assert.Equal(t, "subject", commitSubject(c))
 }
 
+// TestGitStatusSubmoduleCheckout covers the shapes a real on-disk checkout
+// takes, where go-git's status is only submodule-aware while .gitmodules sits
+// in the work tree.
+func TestGitStatusSubmoduleCheckout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("clean_after_commit", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "(clean)")
+	})
+
+	t.Run("moved_checkout_reports_modified", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, " M sub")
+		assert.Contains(t, out, "1 unstaged")
+	})
+
+	// contents dirt alone moves no pointer, so nothing reports; git would show
+	// a lowercase "m" here, a content state the pointer-only engine cannot see
+	t.Run("dirty_contents_stay_quiet", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		require.NoError(t, os0Write(filepath.Join(g.dir, "sub"), "lib.txt", "dirty\n"))
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "(clean)")
+	})
+
+	// the undeclared shape go-git gets wrong: a checkout without .gitmodules
+	// must not read as deleted with its contents loose untracked files
+	t.Run("undeclared_checkout_not_untracked", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		require.NoError(t, os.Remove(filepath.Join(g.dir, ".gitmodules")))
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, " D .gitmodules")
+		assert.NotContains(t, out, " D sub")
+		assert.NotContains(t, out, "?? sub")
+		assert.Contains(t, out, "1 unstaged") // only the .gitmodules deletion counts
+	})
+
+	t.Run("undeclared_moved_still_modified", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		g.checkout(t, g.first)
+		require.NoError(t, os.Remove(filepath.Join(g.dir, ".gitmodules")))
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, " M sub")
+		assert.Contains(t, out, " D .gitmodules")
+		assert.NotContains(t, out, "?? sub")
+	})
+}
+
+func TestGitCheckoutHash(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves_checked_out_commit", func(t *testing.T) {
+		g := newCheckoutRepo(t)
+		assert.Equal(t, plumbing.NewHash(g.second), gitCheckoutHash(g.dir, "sub"))
+	})
+
+	t.Run("plain_directory_is_zero", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		require.NoError(t, os.MkdirAll(filepath.Join(g.dir, "sub"), 0o755))
+		assert.True(t, gitCheckoutHash(g.dir, "sub").IsZero())
+	})
+
+	t.Run("missing_path_is_zero", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		assert.True(t, gitCheckoutHash(g.dir, "sub").IsZero())
+	})
+}
+
 func TestGitPathScope(t *testing.T) {
 	t.Parallel()
 
@@ -429,15 +519,15 @@ func TestGitDiffOut(t *testing.T) {
 		assert.Equal(t, "(no changes)", d.Text(""))
 	})
 
-	t.Run("notes_follow_blocks", func(t *testing.T) {
+	t.Run("metas_follow_blocks", func(t *testing.T) {
 		d := newGitDiffOut("", ToolGitDiff)
-		defer func() { _ = d.close() }()
-		d.Note("submodule sub changed")
+		t.Cleanup(func() { _ = d.close() })
+		d.Meta("1 untracked file not shown")
 		d.Block(nil, &gitSide{path: "new.txt", mode: filemode.Regular, data: "x\n"})
 		text := d.Text("")
 		assert.Contains(t, text, "diff --git a/new.txt b/new.txt")
 		assert.Contains(t, text, "+x")
-		assert.Contains(t, text, "submodule sub changed")
+		assert.Contains(t, text, "1 untracked file not shown")
 	})
 
 	t.Run("truncation_spills_and_counts_skipped", func(t *testing.T) {
