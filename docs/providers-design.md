@@ -862,6 +862,13 @@ payloads line up would leak one test's needs into unrelated tests.
   only one direction leaves a silent collision where one block's end event
   replaces the other's, losing tool arguments or text with no error. The
   counter lives on `compatState` and is handed to the tool accumulator.
+- **Compat wire-index reuse forks or fails, never merges.** Some proxies
+  restart `tool_calls` numbering at 0 within one response, and merging would
+  concatenate two argument payloads into invalid JSON, silently losing the
+  second call. A `finish_reason` is therefore a close boundary (invariant 6),
+  ending open regions and streamed calls together. An arrival on a used index
+  then either carries a differing id or name and opens its own block, or fails
+  that one call with `ErrReusedToolIndex` (invariant 7).
 - **`<think>` extraction must withhold a partial tag.** Emitting `"<"` as text
   and correcting later is visible corruption. The splitter holds back the
   longest suffix that could still become the tag. At stream end that withheld

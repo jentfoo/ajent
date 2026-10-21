@@ -542,6 +542,13 @@ func (s *compatStream) decodeDelta(c compatChoi) []Event {
 	}
 	if c.FinishReason != "" {
 		st.stop = stopReasonFrom(c.FinishReason)
+		if st.tools != nil {
+			// the finish reason ends generation, so the streamed calls are complete:
+			// a proxy restarting index numbering later in the same response must not
+			// merge into them. Open regions close with the calls, keeping block order
+			// aligned with the stream. n is always 1, so the whole stream closes here.
+			events = append(events, s.closeBlocks()...)
+		}
 	}
 	return events
 }
@@ -626,6 +633,24 @@ func deltaReasonText(d compatDelta) (text, field string) {
 	}
 }
 
+// closeBlocks drains the open thinking and text regions, then the tool calls,
+// in stream order. Idempotent per block, so the finish reason boundary and the
+// terminal drain may both call it.
+func (s *compatStream) closeBlocks() []Event {
+	st := s.st
+	var events []Event
+	if st.thinkIdx >= 0 {
+		events = append(events, s.endThinking())
+	}
+	if st.textIdx >= 0 {
+		events = append(events, s.endText())
+	}
+	if st.tools != nil {
+		events = append(events, st.tools.Close()...)
+	}
+	return events
+}
+
 // finish drains the accumulators and emits the terminal events.
 func (s *compatStream) finish(cause error) []Event {
 	if s.done {
@@ -641,15 +666,7 @@ func (s *compatStream) finish(cause error) []Event {
 		text, thinking := st.split.Flush()
 		events = append(events, s.emitContent(thinking, text)...)
 	}
-	if st.thinkIdx >= 0 {
-		events = append(events, s.endThinking())
-	}
-	if st.textIdx >= 0 {
-		events = append(events, s.endText())
-	}
-	if st.tools != nil {
-		events = append(events, st.tools.Close()...)
-	}
+	events = append(events, s.closeBlocks()...)
 
 	stop := st.stop
 	var streamErr error

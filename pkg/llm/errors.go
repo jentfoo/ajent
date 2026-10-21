@@ -18,6 +18,10 @@ var (
 	// ErrMalformedToolArgs is reported on a tool call whose accumulated
 	// arguments are not valid JSON. It fails the call, not the turn.
 	ErrMalformedToolArgs = errors.New("llm: malformed tool arguments")
+	// ErrReusedToolIndex is reported on a tool call whose wire index was reused
+	// after an earlier call on it closed, with no id or name to attribute the
+	// new fragments by. It fails the call, not the turn.
+	ErrReusedToolIndex = errors.New("llm: tool call index reused")
 	// ErrStreamTruncated is returned when a stream ended without a finish
 	// reason, so a caller can classify it as retryable.
 	ErrStreamTruncated = errors.New("llm: stream ended without finish_reason")

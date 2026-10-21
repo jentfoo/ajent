@@ -329,6 +329,61 @@ func TestCompatProviderStream(t *testing.T) {
 		require.Len(t, acc.Message().Content, 2) // both calls reach the agent for dispatch
 	})
 
+	t.Run("tool_index_restart_keeps_both_calls", func(t *testing.T) {
+		// a proxy emitting one batch of calls, then a fresh sequential batch
+		// restarting at index 0 within the same response
+		srv, _ := sseServer(t, "compat/tool_index_restart.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		msg, _, err := Accumulate(s)
+		require.NoError(t, err)
+		require.Len(t, msg.Content, 2)
+		first := msg.Content[0].(ToolCallBlock)
+		second := msg.Content[1].(ToolCallBlock)
+		assert.Equal(t, "call_1", first.ID)
+		assert.JSONEq(t, `{"path":"a.go"}`, string(first.Input))
+		assert.Equal(t, "call_2", second.ID)
+		assert.JSONEq(t, `{"path":"b.go"}`, string(second.Input))
+	})
+
+	t.Run("unnamed_reuse_fails_that_call_not_the_turn", func(t *testing.T) {
+		// fragments arriving on the reused index with no id or name cannot be
+		// attributed: the closed call stays intact and the stray call fails by name
+		srv, _ := sseServer(t, "compat/tool_index_restart_unnamed.sse")
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = s.Close() })
+
+		var acc Accumulator
+		var events []Event
+		for ev, ok := s.Next(); ok; ev, ok = s.Next() {
+			acc.Add(ev)
+			events = append(events, ev)
+		}
+		require.NoError(t, s.Err()) // the failure is recorded, not a stream error
+		assert.NoError(t, acc.Err())
+
+		ends := bulk.SliceFilter(func(ev Event) bool { return ev.Type == EventToolCallEnd }, events)
+		require.Len(t, ends, 2)
+		require.NoError(t, ends[0].Err) // the first call was never merged into
+		assert.JSONEq(t, `{"path":"a.go"}`, string(ends[0].Block.(ToolCallBlock).Input))
+		require.ErrorIs(t, ends[1].Err, ErrReusedToolIndex)
+		assert.Contains(t, ends[1].Err.Error(), `{"pa`) // the evidence is named
+
+		done := events[len(events)-1]
+		assert.Equal(t, EventDone, done.Type)
+		assert.Equal(t, StopToolUse, done.StopReason)
+
+		msg := acc.Message()
+		require.Len(t, msg.Content, 2) // both reach the agent for dispatch
+	})
+
 	t.Run("stop_reason_tool_use", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/parallel_tools.sse")
 		p := newCompatTestProvider(t, srv.URL)

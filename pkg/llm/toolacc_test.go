@@ -70,6 +70,57 @@ func TestToolAccumulatorDelta(t *testing.T) {
 		assert.Equal(t, 1, region)
 		assert.Equal(t, 2, second[0].Index)
 	})
+
+	t.Run("repeated_identity_does_not_fork", func(t *testing.T) {
+		// providers repeat the id and name on every chunk of one call
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", `{"a":`)
+		got := a.Delta(0, "c1", "read", "1}")
+
+		assert.Equal(t, EventToolCallDelta, got[0].Type)
+		ends := a.Close()
+		require.Len(t, ends, 1)
+		assert.JSONEq(t, `{"a":1}`, string(ends[0].Block.(ToolCallBlock).Input))
+	})
+
+	t.Run("late_id_or_name_does_not_fork", func(t *testing.T) {
+		// a value arriving where none was recorded belongs to the open call
+		a := newToolAccumulator(&blockCounter{})
+		first := a.Delta(0, "", "read", "")
+		require.Len(t, first, 1) // announced by its name alone
+		assert.Empty(t, a.Delta(0, "c1", "", ""))
+
+		ends := a.Close()
+		require.Len(t, ends, 1)
+		assert.Equal(t, "c1", ends[0].ToolCallID)
+	})
+
+	t.Run("fresh_id_on_used_index_forks", func(t *testing.T) {
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", `{"a":1}`)
+
+		got := a.Delta(0, "c2", "read", `{"b":2}`)
+		require.Len(t, got, 3)
+		assert.Equal(t, EventToolCallEnd, got[0].Type) // the first call ended
+		assert.Equal(t, "c1", got[0].ToolCallID)
+		block, ok := got[0].Block.(ToolCallBlock)
+		require.True(t, ok)
+		assert.JSONEq(t, `{"a":1}`, string(block.Input))
+		assert.Equal(t, EventToolCallStart, got[1].Type) // a distinct second block
+		assert.Equal(t, "c2", got[1].ToolCallID)
+		assert.NotEqual(t, got[0].Index, got[1].Index)
+		assert.Equal(t, EventToolCallDelta, got[2].Type)
+	})
+
+	t.Run("fresh_name_on_used_index_forks", func(t *testing.T) {
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", "{}")
+
+		got := a.Delta(0, "c2", "write", "{}")
+		require.Len(t, got, 3)
+		assert.Equal(t, "read", got[0].ToolName)
+		assert.Equal(t, "write", got[1].ToolName)
+	})
 }
 
 func TestToolAccumulatorClose(t *testing.T) {
@@ -157,6 +208,65 @@ func TestToolAccumulatorClose(t *testing.T) {
 
 	t.Run("no_calls", func(t *testing.T) {
 		assert.Empty(t, newToolAccumulator(&blockCounter{}).Close())
+	})
+
+	t.Run("unattributed_reuse_fails_the_call_not_the_turn", func(t *testing.T) {
+		// fragments arriving on an index whose call already closed, carrying no
+		// id or name, cannot be attributed: the end event names it and fails only
+		// that call rather than merging into the closed one
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", `{"a":1}`)
+		require.Len(t, a.Close(), 1)
+		assert.Empty(t, a.Delta(0, "", "", `{"b":2}`)) // unnamed, nothing to announce
+
+		ends := a.Close()
+		require.Len(t, ends, 1)
+		assert.Equal(t, EventToolCallEnd, ends[0].Type)
+		require.ErrorIs(t, ends[0].Err, ErrReusedToolIndex)
+		block, ok := ends[0].Block.(ToolCallBlock)
+		require.True(t, ok)
+		assert.Equal(t, `{"b":2}`, string(block.Input)) // the evidence rides along
+	})
+
+	t.Run("matching_identity_after_close_stays_unattributed", func(t *testing.T) {
+		// the same id and name cannot distinguish a restart from a stray late
+		// fragment, so the reuse still fails visibly
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", "{}")
+		require.Len(t, a.Close(), 1)
+		a.Delta(0, "c1", "read", `{"b":2}`)
+
+		ends := a.Close()
+		require.Len(t, ends, 1)
+		assert.ErrorIs(t, ends[0].Err, ErrReusedToolIndex)
+	})
+
+	t.Run("empty_entry_after_close_is_ignored", func(t *testing.T) {
+		// a phantom empty entry carries nothing to attribute or fail on
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", "{}")
+		require.Len(t, a.Close(), 1)
+
+		assert.Empty(t, a.Delta(0, "", "", ""))
+		assert.Empty(t, a.Close())
+	})
+
+	t.Run("fresh_identity_claims_fragments_buffered_after_close", func(t *testing.T) {
+		// the id rides a later chunk: once it differs from the closed call's, the
+		// fragments belong to the new call it names, and nothing fails
+		a := newToolAccumulator(&blockCounter{})
+		a.Delta(0, "c1", "read", "{}")
+		require.Len(t, a.Close(), 1)
+		claimed := a.Delta(0, "", "read", `{"b":`) // name matches: ambiguous
+		require.NotEmpty(t, claimed)               // announced as a probable new call
+		got := a.Delta(0, "c2", "", `2}`)
+		require.Len(t, got, 1)
+		assert.Equal(t, "c2", got[0].ToolCallID)
+
+		ends := a.Close()
+		require.Len(t, ends, 1)
+		require.NoError(t, ends[0].Err)
+		assert.JSONEq(t, `{"b":2}`, string(ends[0].Block.(ToolCallBlock).Input))
 	})
 }
 
