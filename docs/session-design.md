@@ -427,10 +427,17 @@ labelling another model.
 
 A one-shot run (`-p`) records its turn like any other, which is what makes
 `ajent -p "…"` and a follow-up `ajent -p "…" --continue` share one transcript.
-`--continue` and `--resume <id>` both compose with `-p`, but a bare `--resume` does
-not, because its picker needs a terminal, and the combination is a usage error
-rather than a hang. The same holds for a piped invocation without `-p`: the pipe
-becomes the prompt and the run goes headless, where no picker can open. A bare
+Startup routing weighs each prompt source in precedence order before it may
+refuse: the `-p` flag first, then positional arguments (`ajent "why did this
+fail"`), then piped stdin. A terminal pair still opens the TUI with any
+positional arguments seeded in as its first prompt. Without one, an explicit
+prompt runs headless like the flag and stdin beside it is never drained.
+Explicit but blank input (`-p "   "`, an all-blank pipe) refuses there as usage
+instead of spending a turn on whitespace. `--continue` and `--resume <id>` both
+compose with `-p`, but a bare `--resume` does not, because its picker needs a
+terminal, and the combination is a usage error rather than a hang. The same
+holds for a piped invocation without `-p`: the pipe becomes the prompt and the
+run goes headless, where no picker can open. A bare
 `--resume` there refuses with a usage error (exit code 1) instead of silently
 opening a fresh transcript beside the one it meant to resume. An empty workspace
 still starts one, matching the picker's own empty-list rule, since there is

@@ -515,10 +515,11 @@ Off-by-default extras for no-shell agents.
   the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
   `filepath.Glob`), sorted alphabetically with `/` suffix on directories. A path
-  naming an existing directory is listed literally even when it carries glob
+  that exists on disk wins over glob expansion even when it carries glob
   metacharacters (`weird[1]`), so real names cannot silently list a sibling's
-  contents. Any other request expands as a pattern, and a glob with no matches
-  is an error so it is never mistaken for an empty listing.
+  contents, and an existing file errors exactly as a plain filename does. Only
+  a missing path expands as a pattern, and a glob with no matches is an error so
+  it is never mistaken for an empty listing.
 
 Like `read`, each sets `ToolResult.Display` to the same text as its
 model-visible `Content`, so history renders it through the shared output-head

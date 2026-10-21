@@ -474,12 +474,15 @@ re-expansion idempotent.
 `@` matches only at a word boundary (start of line, or after whitespace, `(`,
 `[`, a backtick or a quote) so `email@example.com` is prose. The path token
 stops at whitespace or trailing punctuation, though a final `.` and `:` stay
-inside the token because dotted names and `x:y` need them. Whether they ended
-a sentence is decided at expand time. The annotation shape is matched
-strictly: a trailing `(...)` is absorbed only when it contains a digit or a
-known kind word (`binary`, `image`, `special`, `dir`, `lines`) and is made of
-the allowed tokens (digits, `b`/`kb`/`mb`, the kind words), so ordinary
-parenthetical prose after a path is never eaten.
+inside the token because dotted names and `x:y` need them. A closing `]`
+stays in the token when it closes an earlier `[` there, keeping bracketed
+names like `weird[1]` whole, and ends the path otherwise so prose brackets
+(`[see @f.go]`) still terminate. Whether they ended a sentence is decided at
+expand time. The annotation
+shape is matched strictly: a trailing `(...)` is absorbed only when it contains
+a digit or a known kind word (`binary`, `image`, `special`, `dir`, `lines`) and
+is made of the allowed tokens (digits, `b`/`kb`/`mb`, the kind words), so
+ordinary parenthetical prose after a path is never eaten.
 
 ### Expand (`refs/expand.go`)
 
@@ -489,35 +492,48 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 
 | Case | Outcome |
 |---|---|
-| wildcard pattern (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read; the pattern stays literal in prose |
+| wildcard pattern naming nothing on disk (contains `*`, `?` or `[`) | `ls` pair planned via `Registry.Lookup`, listing the matching files so the model sees which paths matched before choosing what to read, while the pattern stays literal in prose |
 | missing (retried once without a trailing `.` or `:`, see below) | literal, warning notice naming the written token |
-| directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state); skipped when the tracker's listing is unchanged (`UnchangedDir`) |
+| directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state), skipped when the tracker's listing is unchanged (`UnchangedDir`) |
 | already read whole and unchanged (`Tracker.Unchanged`) | nothing planned, literal |
-| a path the same message already named | planned once; the repeat stays literal |
+| a path the same message already named | planned once at its first mention, later mentions stay literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
-| image on a vision model | `read` pair planned, so the image arrives through the ordinary read path |
-| image without vision, special (pipe/device/socket), large, binary, or over the cap | annotation replaced in place, cap trim adds a notice |
+| image on a vision model | `read` pair planned like any file, paying its nominal size into the same `RefTotal` cap |
+| over `RefInject`, or a non-injectable kind (image without vision, special, binary) | annotation replaced in place, with a too-large notice only when the file itself is oversized |
+| over the remaining `RefTotal` budget | annotation replaced in place, with a notice naming the remaining reference budget |
 
 Resolution is existence-aware about sentence punctuation: because Parse keeps
 a trailing `.` or `:` inside the token, a written form that names nothing real
 is retried without it. The trimmed reading wins only by existing, so `./x`,
 dotted names and `x:y` resolve exactly as written. Prose, notices and
 annotations keep the written token while read/ls receive the trimmed path.
+Classification is existence-first for metacharacters too: an existing name like
+`@weird[1]` resolves as a path (directory → `ls`, file → `read`) and never
+drops into the pattern row, matching how `ls` itself prefers a literal match.
+Only a form that names nothing expands as a glob, so such a reference takes the
+unchanged-directory dedupe instead of re-listing on every repeat. Mixed
+literal-plus-wildcard patterns (`a[1]/*.go`) stay whole-pattern globs:
+per-component resolution would change results for patterns that already match.
 
 The executed plan runs in document order, so injected reads appear in the same
-order as the prose that named them.
+order as the prose that named them. A repeated path plans at its **first**
+mention and keeps that position.
 
 Because planning no longer reads, the tracker cannot dedupe within one expansion
 (nothing has been observed yet), so **the plan dedupes by resolved path itself**
-and `Run` re-checks `Unchanged` per injection before executing it. Dedupe runs
-before the `RefTotal` budget, so the cap counts only newly planned reads: an
-unchanged or repeat mention reserves nothing and is never annotated by the
-total cap (only by the per-file `RefInject` limit, which is about the file's
-shape, not the budget). The first guard
-keeps one message from naming a path twice (which would duplicate its content
-*and* its call id), and the second keeps a joined batch from re-reading what an earlier
-item in the same batch just read. `Run` also stops on a cancelled context rather
-than appending error pairs for the rest of the batch.
+and `Run` re-checks `Unchanged` per injection before executing it. Every output
+a mention can produce guards on that same dedupe (read, listing, annotation,
+refusal, missing-path warning), so a repeat emits nothing anywhere: no
+duplicated content or call id, no second measurement or notice either. The
+first guard keeps one message from naming a path twice, the second keeps a
+joined batch from re-reading what an earlier item in the same batch just read.
+`Run` also stops on a cancelled context rather than appending error pairs for
+the rest of the batch.
+
+The `RefTotal` budget counts only newly planned reads, so an unchanged or repeat
+mention reserves nothing and is never refused by it. Image mentions pay their
+nominal size into the same budget, which makes "over the cap" reachable for a
+prompt naming many distinct images.
 
 ### Reads land behind the message
 
