@@ -1079,9 +1079,11 @@ func heldTurnAgent(t *testing.T) (*agent.Agent, *agent.State, func(), func()) {
 		select {
 		case <-bp.onCreate:
 		case <-time.After(5 * time.Second):
-			t.Fatal("the held turn never started")
+			// start may run off the test goroutine (a switch hook), so no Fatal here
+			t.Error("the held turn never started")
+			return
 		}
-		require.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
+		assert.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
 	}
 	release := func() {
 		if !began.Load() {
@@ -1103,10 +1105,6 @@ func holdTurn(t *testing.T) (*agent.Agent, *agent.State, func()) {
 	return ag, st, release
 }
 
-// TestSwitchStateRefusedMidTurn covers a switch racing a turn: the refusal must
-// leave the writer head, switch callbacks and live state all untouched, where
-// the old code panicked on a nil ledger after moving the head. A later switch
-// still lands once the turn ends, as the guard's contract implies.
 func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1155,9 +1153,6 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head())
 }
 
-// TestRestoreForkModelRefusedMidTurn covers the post-switch model restore racing
-// a turn: the refusal reports rather than panicking, leaving the model alone,
-// and a later restore still lands once the turn ends.
 func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1186,8 +1181,6 @@ func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	assert.Equal(t, "b", st.Model.ID)
 }
 
-// TestLiveModelRefusedMidTurn covers the pre-switch capture racing a turn: ok
-// reads false and the zero model is never mistaken for a captured one.
 func TestLiveModelRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1201,8 +1194,6 @@ func TestLiveModelRefusedMidTurn(t *testing.T) {
 	assert.Zero(t, m)
 }
 
-// TestRewindCaptureRefusedMidTurn covers the rewind picker racing a turn: the
-// refusal returns before the head moves, with nothing redrawn.
 func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -1243,9 +1234,6 @@ func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	assert.True(t, strings.HasSuffix(out(), before)) // the screen never redrew
 }
 
-// TestRewindRefusedAfterSwitch covers the unguarded window between the rewind's
-// head move and its model restore: a turn landing there leaves the move applied,
-// names the model that was not kept, skips the redraw, and a later rewind lands.
 func TestRewindRefusedAfterSwitch(t *testing.T) {
 	t.Parallel()
 

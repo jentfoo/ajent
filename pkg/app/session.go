@@ -739,7 +739,7 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	// a turn claiming the loop here runs against the switched state, so the redraw
 	// below would wipe its live output: leave the screen to it
 	if err := r.restoreForkModel(ui, ag, reg, saveModel); err != nil {
-		// the model is never forced through the refusal, the notice names it
+		// never force the saved model onto a running turn, name what was not kept instead
 		ui.Notify(fmt.Sprintf(
 			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
 			saveModel.Key()), tui.LevelWarn)

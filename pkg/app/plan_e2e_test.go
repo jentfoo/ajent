@@ -70,9 +70,6 @@ type planHarness struct {
 	notices  []string
 }
 
-// TestForkToRefusedMidTurn covers a workflow fork racing a turn: the refusal
-// returns before the head moves or the model change is recorded, where the old
-// code panicked on a nil ledger after moving the head.
 func TestForkToRefusedMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -107,9 +104,6 @@ func TestForkToRefusedMidTurn(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 }
 
-// TestForkToRefusedAfterSwitch covers the unguarded window between a fork's
-// head move and its model restore: the new root still gains its model_change as
-// its first entry, so a resume resolves the branch's model.
 func TestForkToRefusedAfterSwitch(t *testing.T) {
 	t.Parallel()
 
