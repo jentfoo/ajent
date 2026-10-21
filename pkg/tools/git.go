@@ -464,6 +464,15 @@ func detectGitRenames(changes object.Changes) (object.Changes, error) {
 	return paired, nil
 }
 
+// pairedTreeChanges diffs two trees and pairs renames on content alone.
+func pairedTreeChanges(ctx context.Context, from, to *object.Tree) (object.Changes, error) {
+	raw, err := object.DiffTreeWithOptions(ctx, from, to, &object.DiffTreeOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return detectGitRenames(raw)
+}
+
 // gitDiffTreeText renders the rename-aware unified patch between two trees as
 // git-shaped per-file blocks into d, limited to file's path scope when
 // non-empty. Rename detection runs on the in-scope changes only, so a scoped
@@ -778,11 +787,8 @@ func renderChildDiff(ctx context.Context, d *gitDiffOut, r *git.Repository, path
 			return err
 		}
 	}
-	changes, err := object.DiffTreeWithOptions(ctx, fromTree, toTree, &object.DiffTreeOptions{})
+	changes, err := pairedTreeChanges(ctx, fromTree, toTree)
 	if err != nil {
-		return err
-	}
-	if changes, err = detectGitRenames(changes); err != nil {
 		return err
 	}
 	for _, ch := range changes {

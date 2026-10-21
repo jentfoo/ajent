@@ -58,6 +58,53 @@ func TestGitLog(t *testing.T) {
 		assert.NotContains(t, out, "edit moved")
 	})
 
+	// pairing follows content alone (tools-design.md), so a rename that also
+	// changed mode keeps one change and the walk continues under the old name
+	t.Run("follows_rename_through_chmod", func(t *testing.T) {
+		t.Parallel()
+		g, _ := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"new.sh"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "rename script")
+		assert.Contains(t, out, "add script") // pre-rename history reached
+		assert.Contains(t, out, "renames followed: old.sh -> new.sh")
+	})
+
+	// edited blobs pair by similarity instead of the exact-hash match above,
+	// with modes normalised first so a chmod keeps one change
+	t.Run("follows_edited_rename_through_chmod", func(t *testing.T) {
+		t.Parallel()
+		g, _ := renameChmodRepo(t, 0o644, "echo hi\nmore\n", 0o755)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"new.sh"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "add script")
+		assert.Contains(t, out, "renames followed: old.sh -> new.sh")
+	})
+
+	t.Run("old_name_passes_rename_chmod", func(t *testing.T) {
+		t.Parallel()
+		g, _ := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
+		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"old.sh"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "rename script") // the rename-away no longer ends history
+		assert.Contains(t, out, "add script")
+	})
+
+	// both readers see one rename at the same commit, so log may never claim
+	// creation where show describes a rename
+	t.Run("readers_agree_on_rename_chmod", func(t *testing.T) {
+		t.Parallel()
+		g, h := renameChmodRepo(t, 0o644, "echo hi\nmore\n", 0o755)
+		showOut, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+h+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, showOut, "rename from old.sh")
+
+		logOut, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"new.sh"}`)
+		assert.False(t, isErr)
+		assert.NotContains(t, logOut, "no commits touch")
+		assert.Contains(t, logOut, "add script")
+	})
+
 	t.Run("follow_limit_reports_more", func(t *testing.T) {
 		t.Parallel()
 		g := newLinearRepo(t)

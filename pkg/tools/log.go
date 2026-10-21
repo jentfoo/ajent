@@ -224,7 +224,11 @@ func followTouch(ctx context.Context, c *object.Commit, file string) (touched bo
 	if err != nil {
 		return false, "", false, err
 	}
-	changes, err := object.DiffTreeWithOptions(ctx, fromTree, toTree, object.DefaultDiffTreeOptions)
+	// pairing spans every change in the commit, no scope filter first: an old
+	// name outside the scope must still pair onto the tracked path. go-git's
+	// mode gate would otherwise end this walk at a rename+chmod with a false
+	// birth or deletion.
+	changes, err := pairedTreeChanges(ctx, fromTree, toTree)
 	if err != nil {
 		return false, "", false, err
 	}
