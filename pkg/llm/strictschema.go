@@ -152,11 +152,14 @@ func strictAnthropicNode(s map[string]any) bool {
 		}
 	}
 
-	// bulk.MapKeysSlice returns nil for an empty map, which marshals as null
+	// nil for an empty map marshals as null. Sort for deterministic bytes and
+	// parity with how json.Marshal orders property keys, keeping strict tool
+	// schemas cache-stable across requests
 	required := bulk.MapKeysSlice(props)
 	if required == nil {
 		required = []string{}
 	}
+	slices.Sort(required)
 	s[strictKeyRequired] = required
 	s[strictKeyAdditional] = false
 	return true

@@ -30,7 +30,7 @@ func TestMakeStrictAnthropicSchema(t *testing.T) {
 		in := rewrittenOK(t, `{"type":"object",`+
 			`"properties":{"a":{"type":"string"},"b":{"type":"integer"}},"required":["a"]}`)
 		props := in["properties"].(map[string]any)
-		assert.ElementsMatch(t, []any{"a", "b"}, in["required"])
+		assert.Equal(t, []any{"a", "b"}, in["required"]) // sorted, not input order
 		// the optional property becomes a null union so required stays total
 		anyOf := props["b"].(map[string]any)["anyOf"].([]any)
 		assert.Len(t, anyOf, 2)
@@ -168,7 +168,7 @@ func TestMakeStrictAnthropicSchema(t *testing.T) {
 			`{"a":{"type":"string"},"b":{"type":["integer","null"]}},`+
 			`"required":null}`)
 		props := in["properties"].(map[string]any)
-		assert.ElementsMatch(t, []any{"a", "b"}, in["required"])
+		assert.Equal(t, []any{"a", "b"}, in["required"])
 		assert.Len(t, props["a"].(map[string]any)["anyOf"].([]any), 2)
 		assert.NotContains(t, props["b"], "anyOf")
 	})
@@ -186,5 +186,23 @@ func TestMakeStrictAnthropicSchema(t *testing.T) {
 		_, ok := makeStrictAnthropicSchema(json.RawMessage(`{"type":"object",` +
 			`"properties":{"a":{"type":"string"}},"required":true}`))
 		assert.False(t, ok)
+	})
+
+	t.Run("required_sorted_bytes_stable", func(t *testing.T) {
+		// required comes from Go map iteration, so each call can reshuffle it.
+		// Sorted output keeps the tools block byte-identical so the cache holds
+		raw := json.RawMessage(`{"type":"object","properties":{` +
+			`"zebra":{"type":"string"},"alpha":{"type":"string"},` +
+			`"mid":{"type":["integer","null"]}}}`)
+		first, ok := makeStrictAnthropicSchema(raw)
+		require.True(t, ok)
+		for range 50 {
+			out, ok := makeStrictAnthropicSchema(raw)
+			require.True(t, ok)
+			require.Equal(t, string(first), string(out))
+		}
+		var m map[string]any
+		require.NoError(t, json.Unmarshal(first, &m))
+		assert.Equal(t, []any{"alpha", "mid", "zebra"}, m["required"])
 	})
 }
