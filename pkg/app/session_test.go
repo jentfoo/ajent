@@ -730,6 +730,19 @@ func writeFutureSession(t *testing.T, store *session.Store, ws, name string) {
 	require.NoError(t, os.WriteFile(p, []byte(line+"\n"), 0o600))
 }
 
+// writeLostIdentity plants a transcript whose session entry cannot decode into
+// SessionData, what a torn or hand-edited identity line leaves behind.
+func writeLostIdentity(t *testing.T, store *session.Store, ws string) string {
+	t.Helper()
+
+	dir, err := store.Dir(ws)
+	require.NoError(t, err)
+	line := fmt.Sprintf(`{"id":"lost-root","type":"session","ts":%d,"data":"gone"}`, time.Now().Add(time.Hour).UnixMilli())
+	p := filepath.Join(dir, "2099-01-01T00-00-02Z-lost.jsonl")
+	require.NoError(t, os.WriteFile(p, []byte(line+"\n"), 0o600))
+	return p
+}
+
 func TestOpenSessionContinueSkipsNewer(t *testing.T) {
 	t.Parallel()
 
@@ -791,6 +804,52 @@ func TestCheckSessionTargetRefusesNewer(t *testing.T) {
 	require.ErrorContains(t, err, "newer session format")
 	_, err = CheckSessionTarget(ResumeSessionName, "FUTURE-WORK")
 	assert.ErrorContains(t, err, "newer session format")
+}
+
+// a damaged transcript never lists, so its full path is the only handle: resume
+// refuses it with the removal hint while a readable file opens by its path too
+func TestOpenSessionDamagedTranscript(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+	lost := writeLostIdentity(t, store, ws)
+
+	_, _, _, err := openSession(store, ResumeID, ws, lost, "", nil, session.Info{})
+	require.ErrorContains(t, err, "--delete") // refused with the way out
+
+	// a healthy transcript resolves through the same path fallback and opens
+	healthy, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = healthy.Close() })
+	w, _, _, err := openSession(store, ResumeID, ws, healthy.Path(), "", nil, session.Info{})
+	require.NoError(t, err)
+	assert.Equal(t, healthy.Path(), w.Path())
+}
+
+// --continue over a listing that is empty only because the directory's remaining
+// transcripts are damaged starts fresh, loudly about what it left behind
+func TestOpenSessionContinueOverDamaged(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	store := session.StoreAt(filepath.Join(ws, "root"))
+	lost := writeLostIdentity(t, store, ws)
+
+	w, _, note, err := openSession(store, ResumeContinue, ws, "", "", nil, session.Info{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	assert.NotEqual(t, lost, w.Path()) // fresh transcript, not a silent loss
+	assert.Contains(t, note, lost)     // naming the file it cannot resume
+}
+
+func TestCheckSessionTargetRefusesDamaged(t *testing.T) {
+	// not parallel: t.Chdir and AJENT_HOME pin process state
+	store, ws := deleteWorkspace(t)
+	lost := writeLostIdentity(t, store, ws)
+
+	_, err := CheckSessionTarget(ResumeID, lost)
+	require.ErrorContains(t, err, "--delete")
 }
 
 func TestCheckSessionTargetErrorMapping(t *testing.T) {

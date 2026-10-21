@@ -12,14 +12,15 @@ import (
 )
 
 // DeleteSession removes the one session target names, resolved the way --resume
-// resolves it: an exact name, a full id, or a unique id prefix. A newer-format
-// session is removable too: deletion needs no decode, and it is the escape
-// hatch that frees a name a blocked transcript would otherwise hold forever.
+// resolves it: an exact name, a full id or unique prefix, or a filesystem path
+// onto the workspace's session directory. A newer-format session is removable
+// too: deletion needs no decode, and it is the escape hatch that frees a name a
+// blocked transcript would otherwise hold forever. The same path handle removes
+// a damaged transcript whose identity cannot decode, which resolution reaches
+// by nothing else.
 func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 	info, err := store.Find(cwd, target)
-	if errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("no session matches %q", target)
-	} else if err != nil {
+	if err != nil { // the not-found wording (with any damaged hint) passes through verbatim
 		return err
 	}
 	if err := store.Remove(info.Path); err != nil {
@@ -27,6 +28,11 @@ func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 	}
 	if info.Blocked {
 		_, _ = fmt.Fprintf(out, "Deleted session %s (newer session format).\n", info.Label())
+		return nil
+	}
+	if info.Damaged {
+		// no identity to label it with: the path is both the handle and the receipt
+		_, _ = fmt.Fprintf(out, "Deleted damaged transcript %s.\n", info.Path)
 		return nil
 	}
 	_, _ = fmt.Fprintf(out, "Deleted session %s (%s).\n", info.Label(), describeInfo(info))

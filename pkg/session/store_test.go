@@ -504,15 +504,23 @@ func TestReadInfo(t *testing.T) {
 		assert.Equal(t, 1, info.Messages) // only kickoff sits on the new root's branch
 	})
 
-	// a file that parses but holds no session entry (zero bytes from a crash
-	// between create and first write, or hand-made lines) is not a session, so
-	// readInfo returns zero Info and no listing surface shows a rootless row
-	t.Run("no_session_entry_dropped", func(t *testing.T) {
+	// a zero-byte .jsonl (crash between create and first write) is not a session:
+	// readInfo returns zero Info so no listing surface shows an id-less row
+	t.Run("empty_file_dropped", func(t *testing.T) {
 		dir := t.TempDir()
-
 		empty := filepath.Join(dir, "2026-01-01T00-00-00Z-0.jsonl")
 		require.NoError(t, os.WriteFile(empty, nil, 0o600))
 
+		info, ok := readInfo(empty)
+		assert.False(t, ok)
+		assert.Zero(t, info)
+	})
+
+	// entries without a decodable identity are real work this build cannot
+	// classify: they mark the file damaged rather than vanishing, so Find reaches
+	// it by path and --delete can remove it deliberately
+	t.Run("entries_without_identity_damaged", func(t *testing.T) {
+		dir := t.TempDir()
 		data, derr := json.Marshal(MessageData{Message: llm.Text(llm.RoleUser, "stray")})
 		require.NoError(t, derr)
 		line, lerr := json.Marshal(Entry{ID: "handmade", Type: TypeMessage, TS: 1_700_000_000_000, Data: data})
@@ -520,11 +528,27 @@ func TestReadInfo(t *testing.T) {
 		stray := filepath.Join(dir, "2026-01-01T00-00-01Z-1.jsonl")
 		require.NoError(t, os.WriteFile(stray, append(line, '\n'), 0o600))
 
-		for _, p := range []string{empty, stray} {
-			info, ok := readInfo(p)
-			assert.False(t, ok)
-			assert.Zero(t, info)
-		}
+		info, ok := readInfo(stray)
+		require.True(t, ok)
+
+		assert.True(t, info.Damaged)
+		assert.Equal(t, stray, info.Path)
+		assert.Empty(t, info.ID) // identity fields stay empty
+	})
+
+	// a torn identity line is dropped by Read with a warning, so hiding requires
+	// every session line to fail: one bad entry never hides the file
+	t.Run("torn_identity_line_damaged", func(t *testing.T) {
+		dir := t.TempDir()
+		p := filepath.Join(dir, "2026-01-01T00-00-02Z-2.jsonl")
+		writeLines(t, p, []string{
+			`{"id":"lost","type":"session","ts":1700000000000`, // torn mid-write, newline intact
+			`{"id":"m1","parentId":"lost","type":"notice","ts":1700000000001,"data":{"message":"kept"}}`,
+		})
+
+		info, ok := readInfo(p)
+		require.True(t, ok)
+		assert.True(t, info.Damaged)
 	})
 }
 
@@ -853,6 +877,181 @@ func TestStoreNewerFormat(t *testing.T) {
 
 		_, staterr := os.Stat(blocked.Path)
 		require.NoError(t, staterr) // and the file survived untouched
+	})
+}
+
+// writeDamaged plants a transcript whose session entry cannot decode into
+// SessionData, with an optional later rename via a session_name entry: what a
+// torn or hand-edited identity line leaves behind. It returns the Info listing
+// would hide.
+func writeDamaged(t *testing.T, s *Store, ws, name string) Info {
+	t.Helper()
+
+	dir, err := s.Dir(ws)
+	require.NoError(t, err)
+	ts := time.Now().Add(time.Hour).UnixMilli()
+	lines := []string{fmt.Sprintf(`{"id":"lost-root","type":"session","ts":%d,"data":"gone"}`, ts)}
+	if name != "" {
+		lines = append(lines, fmt.Sprintf(`{"id":"lost-name","type":"session_name","ts":%d,"data":{"name":%q}}`, ts, name))
+	}
+	p := filepath.Join(dir, "2099-01-01T00-00-01Z-lost.jsonl")
+	writeLines(t, p, lines)
+
+	var info Info
+	info.Path = p
+	info.Damaged = true
+	info.Name = name
+	return info
+}
+
+func TestStoreDamaged(t *testing.T) {
+	t.Run("read_info_marks_damaged", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		want := writeDamaged(t, s, t.TempDir(), "")
+
+		info, ok := readInfo(want.Path)
+		require.True(t, ok)
+
+		assert.True(t, info.Damaged)
+		assert.Equal(t, want.Path, info.Path)
+		assert.Empty(t, info.ID) // identity fields stay empty: nothing decodes
+		assert.True(t, info.Started.IsZero())
+		assert.Zero(t, info.Messages) // branch-derived fields stay unset too
+	})
+
+	t.Run("list_hides_the_row", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "")
+		readable := writeAt(t, s, ws, time.UnixMilli(1_900_000_000_000).UTC(), SessionData{Version: sessionVersion}, "readable")
+
+		list, err := s.List(ws)
+		require.NoError(t, err)
+		require.Len(t, list, 1) // hidden rather than presented as an id-less row
+		assert.Equal(t, readable.Path(), list[0].Path)
+
+		_, serr := os.Stat(damaged.Path)
+		require.NoError(t, serr) // and the file survived untouched
+	})
+
+	t.Run("find_resolves_by_path", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "fix-parser")
+
+		for _, target := range []string{damaged.Path, filepath.Base(damaged.Path)} { // full path, basename
+			info, ferr := s.Find(ws, target)
+			require.NoError(t, ferr)
+
+			assert.True(t, info.Damaged)
+			assert.Equal(t, damaged.Path, info.Path)
+			assert.Equal(t, "fix-parser", info.Name) // a rename entry still identifies the file
+		}
+	})
+
+	// the rename is not a listed row to match, so a name for a damaged transcript
+	// still misses; the miss then names the file instead of reading as absence
+	t.Run("name_still_misses_loudly", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "fix-parser")
+
+		_, ferr := s.Find(ws, "fix-parser")
+		require.ErrorIs(t, ferr, ErrNotFound)
+		assert.Contains(t, ferr.Error(), damaged.Path)
+	})
+
+	t.Run("miss_error_names_it", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "")
+
+		_, ferr := s.Find(ws, "no-such-target")
+		require.ErrorIs(t, ferr, ErrNotFound)
+		assert.Contains(t, ferr.Error(), `no session matches "no-such-target"`)
+		assert.Contains(t, ferr.Error(), damaged.Path)
+	})
+
+	t.Run("path_outside_dir_refused", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws, other := t.TempDir(), t.TempDir()
+		writeDamaged(t, s, ws, "")
+		lost := writeDamaged(t, s, other, "")
+
+		info, ferr := s.Find(other, lost.Path) // its own workspace resolves it
+		require.NoError(t, ferr)
+		assert.True(t, info.Damaged)
+
+		wsDir, derr := s.Dir(ws)
+		require.NoError(t, derr)
+		rel, rerr := filepath.Rel(wsDir, lost.Path) // a ../ escape across workspaces
+		require.NoError(t, rerr)
+		_, ferr = s.Find(ws, rel)
+		assert.ErrorIs(t, ferr, ErrNotFound)
+	})
+
+	t.Run("stale_never_sweeps", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "") // unnamed and old enough: sweep bait
+
+		cutoff := time.Now().UTC().Add(time.Hour)
+		stale, err := s.Stale(ws, cutoff)
+		require.NoError(t, err)
+		assert.Empty(t, stale) // automatic deletion stays out of scope for these
+
+		_, serr := os.Stat(damaged.Path)
+		require.NoError(t, serr)
+	})
+}
+
+func TestStoreFindByPath(t *testing.T) {
+	t.Run("healthy_resolves", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		id := w.Head()
+		require.NoError(t, w.Close())
+
+		info, ferr := s.Find(ws, w.Path()) // a full path stands in for the id
+		require.NoError(t, ferr)
+
+		assert.Equal(t, id, info.ID)
+		assert.False(t, info.Damaged)
+	})
+
+	// path resolution is uniform: a newer-format transcript resolves Blocked by
+	// path exactly as its listed row does
+	t.Run("newer_format_resolves_blocked", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		blocked := writeNewer(t, s, ws, "")
+
+		info, ferr := s.Find(ws, blocked.Path)
+		require.NoError(t, ferr)
+
+		assert.True(t, info.Blocked)
+	})
+
+	t.Run("sidecars_unaddressable", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		for _, p := range []string{headPath(w.Path()), tornPath(w.Path())} {
+			_, ferr := s.Find(ws, p) // only .jsonl transcripts resolve by path
+			assert.ErrorIs(t, ferr, ErrNotFound)
+		}
+	})
+
+	t.Run("missing_file_not_found", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+
+		_, ferr := s.Find(t.TempDir(), filepath.Join(s.root, "nowhere", "gone.jsonl"))
+		assert.ErrorIs(t, ferr, ErrNotFound)
 	})
 }
 

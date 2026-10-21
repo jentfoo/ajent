@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -100,6 +101,35 @@ func TestDeleteSession(t *testing.T) {
 		require.NoError(t, err)
 		assert.Empty(t, list)
 		assert.Contains(t, buf.String(), "newer session format")
+	})
+
+	// a damaged transcript lists nowhere, so its full path is the only handle:
+	// deletion must work through it and say what was removed
+	t.Run("deletes_damaged_by_path", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		damaged := writeDamaged(t, store, ws, "")
+
+		var buf bytes.Buffer
+		require.NoError(t, DeleteSession(&buf, store, ws, damaged.Path))
+
+		list, err := store.List(ws)
+		require.NoError(t, err)
+		assert.Empty(t, list)
+		_, serr := os.Stat(damaged.Path)
+		assert.True(t, os.IsNotExist(serr)) // the file itself is gone
+		assert.Contains(t, buf.String(), "damaged transcript")
+	})
+
+	// an unknown target must not read as an empty store when damaged transcripts
+	// hide beside it: the miss names them so they stay removable
+	t.Run("unknown_target_names_the_damage", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		damaged := writeDamaged(t, store, ws, "")
+
+		var buf bytes.Buffer
+		err := DeleteSession(&buf, store, ws, "no-such-session")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), damaged.Path)
 	})
 }
 

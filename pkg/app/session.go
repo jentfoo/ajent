@@ -131,6 +131,14 @@ func refuseNewer(info session.Info) error {
 	return fmt.Errorf("session %s uses a newer session format; update ajent to resume it", info.Label())
 }
 
+// refuseDamaged explains why a path-resolved transcript with entries but no
+// decodable identity cannot open: the rebuild has nothing to classify, so
+// deliberate removal is its way out.
+func refuseDamaged(info session.Info) error {
+	return fmt.Errorf("transcript %s holds entries this build cannot identify as a session; delete it with --delete %s",
+		info.Path, info.Path)
+}
+
 // skipNewerNote describes the newer-format sessions --continue skipped to reach
 // what it resumed (or fresh), so the fallback reads as explained rather than
 // vanishing history.
@@ -145,8 +153,8 @@ func skipNewerNote(skipped int, newest session.Info) string {
 // opens, so an id or name fails fast rather than silently starting fresh. It
 // returns the resolution for the open to adopt as a locator; a zero Info
 // resolves nothing. A target blocked behind a newer format refuses with the
-// version hint; only a true miss reads as "no session matches", while
-// ambiguity and listing failures pass through verbatim.
+// version hint and a damaged one with its removal hint; Find's own wording (a
+// miss names any damaged transcripts beside it) passes through verbatim.
 func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 	switch mode {
 	case ResumeID, ResumeSessionName:
@@ -168,12 +176,12 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 		return info, nil
 	}
 	info, ferr := store.Find(cwd, target)
-	if errors.Is(ferr, session.ErrNotFound) {
-		return session.Info{}, fmt.Errorf("no session matches %q", target)
-	} else if ferr != nil { // ambiguity and listing failures pass through verbatim, as --delete does
+	if ferr != nil { // ambiguity, listing failures and the miss wording all pass through verbatim
 		return session.Info{}, ferr
 	} else if info.Blocked {
 		return session.Info{}, refuseNewer(info)
+	} else if info.Damaged {
+		return session.Info{}, refuseDamaged(info)
 	}
 	return info, nil
 }
@@ -226,7 +234,15 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		if lerr != nil {
 			return nil, snapshot{}, "", lerr
 		} else if len(list) == 0 {
-			return fresh("") // nothing saved yet, start one
+			w, _, _, ferr := fresh("")
+			// an empty listing can still hide transcripts this build cannot identify;
+			// the note keeps them from reading as absent. Best effort: a scan failure
+			// never blocks starting fresh.
+			var note string
+			if infos, derr := store.Damaged(cwd); derr == nil && len(infos) > 0 {
+				note = "no resumable session remains, but " + session.DescribeDamaged(infos)
+			}
+			return w, snapshot{}, note, ferr
 		}
 		// resume the newest session this build can open: a newer-format one is
 		// skipped loudly instead of quietly misrouting work into an older one.
@@ -253,6 +269,8 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 			return nil, snapshot{}, "", ferr
 		} else if info.Blocked { // refused here so Open never touches a newer transcript
 			return nil, snapshot{}, "", refuseNewer(info)
+		} else if info.Damaged { // identity-less entries give the rebuild nothing to restore
+			return nil, snapshot{}, "", refuseDamaged(info)
 		}
 		w, snap, err := openSnapshot(info.Path) // resume that exact transcript's leaf
 		return w, snap, "", err
@@ -318,10 +336,11 @@ func openSnapshot(path string) (*session.Writer, snapshot, error) {
 }
 
 // preAdoptable reports whether pre may serve as the open's locator: resolved,
-// unblocked, and inside the workspace's live session directory (the demo build
-// redirects the config home after the check, so a foreign path is dropped).
+// openable here (not blocked or damaged), and inside the workspace's live
+// session directory (the demo build redirects the config home after the check,
+// so a foreign path is dropped).
 func preAdoptable(store *session.Store, cwd string, pre session.Info) bool {
-	if pre.Path == "" || pre.Blocked {
+	if pre.Path == "" || pre.Blocked || pre.Damaged {
 		return false
 	}
 	dir, err := store.Dir(cwd)
