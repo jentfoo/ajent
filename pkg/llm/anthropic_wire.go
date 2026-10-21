@@ -1,6 +1,9 @@
 package llm
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 const (
 	antTypeText       = "text"
@@ -191,9 +194,9 @@ type antModels struct {
 	} `json:"data"`
 }
 
-// antStopReason maps a Messages API stop reason.
+// antStopReason maps a Messages API stop reason, matching spelling case-insensitively.
 func antStopReason(s string) StopReason {
-	switch s {
+	switch strings.ToLower(s) {
 	case "end_turn", "stop_sequence", "refusal":
 		return StopEndTurn
 	case "tool_use", "pause_turn":

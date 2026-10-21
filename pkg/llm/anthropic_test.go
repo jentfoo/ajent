@@ -1363,6 +1363,10 @@ func TestAntStopReason(t *testing.T) {
 		{"pause_turn", "pause_turn", StopToolUse},
 		{"max_tokens", fieldMaxTokens, StopMaxTokens},
 		{"context_exceeded_is_incomplete", "model_context_window_exceeded", StopIncomplete},
+		{"mixed_case_end_turn", "END_TURN", StopEndTurn},
+		{"mixed_case_tool_use", "Tool_Use", StopToolUse},
+		{"mixed_case_max_tokens", "MAX_TOKENS", StopMaxTokens},
+		{"mixed_case_context_exceeded", "Model_Context_Window_Exceeded", StopIncomplete},
 		{"empty_is_unknown", "", StopUnknown},
 		{"unknown_defaults_end_turn", "some_future_reason", StopEndTurn},
 	}
@@ -1409,6 +1413,22 @@ func TestAnthropicProviderStreamTruncation(t *testing.T) {
 		require.ErrorIs(t, err, ErrStreamTruncated) // a message_delta stop_reason is not a terminal frame
 		assert.Equal(t, StopError, stop)
 	})
+}
+
+func TestAnthropicProviderStopIncomplete(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := sseServer(t, "anthropic/context_window_exceeded.sse")
+	p := newAnthropicTestProvider(t, srv.URL)
+
+	s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
+	require.NoError(t, err)
+	events := collect(t, s)
+
+	assert.Equal(t, "partial", textOf(events)) // the partial is still delivered
+	done := events[len(events)-1]
+	require.Equal(t, EventDone, done.Type)
+	assert.Equal(t, StopIncomplete, done.StopReason) // a window cut-off is not a natural turn end
 }
 
 func TestAnthropicStreamFinish(t *testing.T) {

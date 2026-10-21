@@ -513,6 +513,12 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		_, err := collectStop(t, "compat/no_finish_text.sse", caps)
 		assert.ErrorContains(t, err, "stream ended without finish_reason")
 	})
+
+	t.Run("content_filter_stops_incomplete", func(t *testing.T) {
+		stop, err := collectStop(t, "compat/content_filter.sse", flavorDefaults[FlavorLMStudio].caps)
+		require.NoError(t, err)
+		assert.Equal(t, StopIncomplete, stop)
+	})
 }
 
 func TestStopReasonFrom(t *testing.T) {
@@ -530,6 +536,10 @@ func TestStopReasonFrom(t *testing.T) {
 		{"length", "length", StopMaxTokens},
 		{"max_tokens_field", fieldMaxTokens, StopMaxTokens},
 		{"content_filter_is_incomplete", "content_filter", StopIncomplete},
+		{"mixed_case_stop", "STOP", StopEndTurn},
+		{"mixed_case_tool_calls", "Tool_Calls", StopToolUse},
+		{"mixed_case_length", "Length", StopMaxTokens},
+		{"mixed_case_content_filter", "Content_Filter", StopIncomplete},
 		{"empty_is_unknown", "", StopUnknown},
 		{"unknown_defaults_end_turn", "some_future_reason", StopEndTurn},
 	}

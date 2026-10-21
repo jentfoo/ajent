@@ -1,0 +1,9 @@
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"role":"assistant"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{"content":"partial"}}]}
+
+data: {"id":"c1","model":"m1","choices":[{"index":0,"delta":{},"finish_reason":"content_filter"}]}
+
+data: {"id":"c1","model":"m1","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":1}}
+
+data: [DONE]

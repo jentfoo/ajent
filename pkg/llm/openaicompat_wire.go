@@ -3,6 +3,7 @@ package llm
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -256,9 +257,10 @@ func (e *compatErrObj) codeString() string {
 	}
 }
 
-// stopReasonFrom maps a chat-completions finish_reason.
+// stopReasonFrom maps a chat-completions finish_reason, matching spelling
+// case-insensitively.
 func stopReasonFrom(s string) StopReason {
-	switch s {
+	switch strings.ToLower(s) {
 	case "stop", "end_turn":
 		return StopEndTurn
 	case "tool_calls", "function_call":
