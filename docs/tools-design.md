@@ -601,6 +601,18 @@ error rather than silently emitting something git-shaped but wrong. go-git's dif
 has known edge cases. A `git_diff` that cannot faithfully represent a rename,
 binary delta or octopus merge says so and offers what it can (e.g. "N files
 changed, binary deltas omitted") instead of emitting a misleading unified diff.
+
+Enumerating tracked paths, git_status's tracked set and the worktree diff's
+seed walk alike, reads tree entries by name only. go-git's walkers fetch a
+blob per path, which hard-errors blob-filtered clones and adds an object read
+per path on every call, and they report a failed subtree fetch as
+end-of-iteration, silently truncating the listing. The readers walk trees
+themselves so every subtree failure surfaces, all-or-error, since the output
+shape has no seam for partial results. Walked names are compared as strings
+and never reach the filesystem, so entries go-git refuses to materialise
+still list the way git lists them. Content reads stay strict, so a blob a
+rendering needs but cannot read is an error, never a phantom add or deletion.
+
 Submodule pointer changes render in git's `--submodule` forms: the default
 `short` renders a pointer move as a "Subproject commit" hunk, byte-identical
 to git's own output and bounded like any other block. A `submodule` argument

@@ -22,6 +22,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/cache"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/go-git/go-git/v5/storage/filesystem"
 	"github.com/go-git/go-git/v5/storage/filesystem/dotgit"
 
@@ -254,9 +255,6 @@ func gitBlobSide(t *object.Tree, path string) (*gitSide, error) {
 	}
 	f, err := t.TreeEntryFile(e)
 	if err != nil {
-		if errors.Is(err, plumbing.ErrObjectNotFound) {
-			return nil, nil
-		}
 		return nil, err
 	}
 	return fileSide(f)
@@ -574,37 +572,20 @@ func gitDiffWorktreeText(ctx context.Context, r *git.Repository, base *object.Tr
 	keep := gitPathScope(file) // matches everything when file is empty
 	paths := make(map[string]struct{}, len(st))
 	baseLinks := make(map[string]plumbing.Hash)
-	// seedPaths adds a tree's in-scope paths; walk errors propagate so a
-	// broken tree never reads as absent files. Gitlinks reference commits, not
-	// blobs, so Files() skips them and a separate entry walk seeds them, with
-	// their pointers recorded when links is non-nil.
+	// seedPaths adds a tree's in-scope paths, erroring on a broken tree so it
+	// never reads as absent files. Gitlinks reference commits, not blobs, so
+	// their pointers are recorded when links is non-nil.
 	seedPaths := func(t *object.Tree, links map[string]plumbing.Hash) error {
-		if err := t.Files().ForEach(func(f *object.File) error {
-			if keep(f.Name) {
-				paths[f.Name] = struct{}{}
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
-		tw := object.NewTreeWalker(t, true, nil)
-		defer tw.Close()
-		for {
-			name, entry, err := tw.Next()
-			if errors.Is(err, io.EOF) {
+		return walkTreePaths(r.Storer, t, func(path string, e object.TreeEntry) error {
+			if !keep(path) {
 				return nil
 			}
-			if err != nil {
-				return err
+			paths[path] = struct{}{}
+			if e.Mode == filemode.Submodule && links != nil {
+				links[path] = e.Hash
 			}
-			if entry.Mode != filemode.Submodule || !keep(name) {
-				continue
-			}
-			paths[name] = struct{}{}
-			if links != nil {
-				links[name] = entry.Hash
-			}
-		}
+			return nil
+		})
 	}
 	if err := seedPaths(base, baseLinks); err != nil {
 		return err
@@ -1329,9 +1310,51 @@ func collapseUntracked(blocked map[string]struct{}, untracked []string) []string
 	return out
 }
 
+// gitTreeMaxDepth bounds subtree recursion the way go-git's own walker does,
+// so hostile tree data cannot nest without end.
+const gitTreeMaxDepth = 1024
+
+// walkTreePaths calls fn with every non-directory entry under t as a full
+// repo path, fetching each subtree through s. go-git's walkers fetch a blob
+// per path and read a failed subtree fetch as end-of-iteration, which breaks
+// blob-filtered clones and silently truncates listings. Entry names arrive
+// raw from tree data: names go-git rejects as unsafe to materialise are
+// legal in git, and these names are only compared, never handed to the
+// filesystem.
+func walkTreePaths(s storer.EncodedObjectStorer, t *object.Tree, fn func(path string, e object.TreeEntry) error) error {
+	var walk func(t *object.Tree, prefix string, depth int) error
+	walk = func(t *object.Tree, prefix string, depth int) error {
+		if depth > gitTreeMaxDepth {
+			return fmt.Errorf("%w at %d levels", object.ErrMaxTreeDepth, gitTreeMaxDepth)
+		}
+		for i := range t.Entries {
+			e := t.Entries[i]
+			name := e.Name
+			if prefix != "" {
+				name = prefix + "/" + e.Name
+			}
+			if e.Mode != filemode.Dir {
+				if err := fn(name, e); err != nil {
+					return err
+				}
+				continue
+			}
+			sub, err := object.GetTree(s, e.Hash)
+			if err != nil {
+				return fmt.Errorf("subtree %s: %w", name, err)
+			}
+			if err := walk(sub, name, depth+1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return walk(t, "", 0)
+}
+
 // headTreePaths lists every path in HEAD's tree, files and gitlinks returned
-// separately, both empty before any commit. Walk errors propagate so a broken
-// tree never reads as absent files.
+// separately, both empty before any commit. A broken tree errors rather than
+// reading as absent files.
 func headTreePaths(r *git.Repository) (files, gitlinks []string, err error) {
 	c, err := gitCommit(r, "HEAD")
 	if err != nil {
@@ -1344,26 +1367,18 @@ func headTreePaths(r *git.Repository) (files, gitlinks []string, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := t.Files().ForEach(func(f *object.File) error {
-		files = append(files, f.Name)
+	err = walkTreePaths(r.Storer, t, func(path string, e object.TreeEntry) error {
+		if e.Mode == filemode.Submodule {
+			gitlinks = append(gitlinks, path)
+			return nil
+		}
+		files = append(files, path)
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, nil, err
 	}
-	tw := object.NewTreeWalker(t, true, nil)
-	defer tw.Close()
-	for {
-		name, entry, err := tw.Next()
-		if errors.Is(err, io.EOF) {
-			return files, gitlinks, nil
-		}
-		if err != nil {
-			return nil, nil, err
-		}
-		if entry.Mode == filemode.Submodule {
-			gitlinks = append(gitlinks, name)
-		}
-	}
+	return files, gitlinks, nil
 }
 
 // gitStatusText renders the full git_status output for r.

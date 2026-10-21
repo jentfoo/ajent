@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
 	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -78,8 +79,7 @@ func TestGitToolsCorruptTreeErrors(t *testing.T) {
 	require.NoError(t, err)
 	c, err := r.CommitObject(plumbing.NewHash(g.b))
 	require.NoError(t, err)
-	h := c.TreeHash.String()
-	require.NoError(t, os.Remove(filepath.Join(g.dir, ".git", "objects", h[:2], h[2:])))
+	removeLoose(t, g.dir, c.TreeHash.String())
 
 	t.Run("show", func(t *testing.T) {
 		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.b+`"}`)
@@ -99,15 +99,43 @@ func TestGitToolsCorruptTreeErrors(t *testing.T) {
 	})
 }
 
+// TestGitStatusPartialClone runs git_status against a real blob-filtered
+// clone: trees are present and blobs fetch on demand, so enumerating tracked
+// paths must read names only. The sparse checkout keeps dir/nested.txt's blob
+// remote, the shape git_status would hard-error on while materialising blobs.
+func TestGitStatusPartialClone(t *testing.T) {
+	t.Parallel()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+
+	g, _ := nestedGitRepo(t)
+	gitRun(t, g.dir, "config", "uploadpack.allowFilter", "true")
+	work := filepath.Join(t.TempDir(), "work")
+	gitRun(t, t.TempDir(), "clone", "-q", "--filter=blob:none", "--no-checkout",
+		"file://"+g.dir, work)
+	gitRun(t, work, "sparse-checkout", "init", "--cone")
+	gitRun(t, work, "checkout", "-q", "master")
+	// go-git cannot read the worktree-config extension sparse checkout writes.
+	// Its settings already applied to the checkout, nothing needs them anymore
+	_ = exec.CommandContext(t.Context(), "git", "-C", work,
+		"config", "--unset", "extensions.worktreeConfig").Run()
+	_ = os.Remove(filepath.Join(work, ".git", "config.worktree"))
+
+	wr, err := git.PlainOpen(work)
+	require.NoError(t, err)
+	_, err = wr.BlobObject(headTreeEntry(t, wr, "dir/nested.txt"))
+	require.ErrorIs(t, err, plumbing.ErrObjectNotFound) // the blob stayed remote
+
+	out, isErr := runGitTool(t, &gitStatusTool{policy: PathPolicy{Cwd: work}}, `{}`)
+	assert.False(t, isErr)
+	assert.Contains(t, out, "(clean)")
+}
+
 func TestHeadTreePaths(t *testing.T) {
 	t.Parallel()
 
-	g := newGitRepo(t)
-	g.write(t, "dir/nested.txt", "nested\n")
-	g.commitAll(t, "add nested")
-
-	r, err := git.PlainOpen(g.dir)
-	require.NoError(t, err)
+	_, r := nestedGitRepo(t)
 
 	files, gitlinks, err := headTreePaths(r)
 	require.NoError(t, err)
@@ -126,28 +154,182 @@ func TestHeadTreePaths(t *testing.T) {
 		assert.Equal(t, []string{"sub"}, gitlinks)
 	})
 
-	// a lost blob must fail the walk: swallowing it narrows the tracked set,
-	// so an untracked file under dir/ collapses into `?? dir/`
-	t.Run("missing_blob_errors", func(t *testing.T) {
+	// every breakage case damages its own repo, so no case depends on another's
+	t.Run("missing_blob_still_listed", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
+		removeLoose(t, g.dir, headTreeEntry(t, r, "dir/nested.txt").String())
+
+		// names come from trees: a missing blob narrows nothing, the way git
+		// answers from trees on a blob-filtered clone
+		files, _, err := headTreePaths(r)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"a.txt", "bin.dat", "dir/nested.txt"}, files)
+	})
+
+	t.Run("missing_subtree_errors", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
+		removeLoose(t, g.dir, headTreeEntry(t, r, "dir").String())
+
+		_, _, err := headTreePaths(r)
+		assert.ErrorIs(t, err, plumbing.ErrObjectNotFound)
+	})
+
+	t.Run("missing_head_tree_errors", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
 		c, err := gitCommit(r, "")
 		require.NoError(t, err)
-		tree, err := c.Tree()
-		require.NoError(t, err)
-		e, err := tree.FindEntry("dir/nested.txt")
-		require.NoError(t, err)
-		h := e.Hash.String()
-		require.NoError(t, os.Remove(filepath.Join(g.dir, ".git", "objects", h[:2], h[2:])))
+		removeLoose(t, g.dir, c.TreeHash.String())
 
 		_, _, err = headTreePaths(r)
 		assert.ErrorIs(t, err, plumbing.ErrObjectNotFound)
 	})
+}
 
-	t.Run("status_reports_breakage", func(t *testing.T) {
-		g.write(t, "dir/new.txt", "u\n")
+// TestWalkTreePaths exercises the names-only entry walk directly, including
+// the shapes the repository fixtures cannot hold.
+func TestWalkTreePaths(t *testing.T) {
+	t.Parallel()
+
+	// craftTree stores one tree in the fixture's object store and returns it
+	craftTree := func(t *testing.T, r *git.Repository, entries []object.TreeEntry) *object.Tree {
+		t.Helper()
+		crafted := &object.Tree{Entries: entries}
+		obj := &plumbing.MemoryObject{}
+		require.NoError(t, crafted.Encode(obj))
+		h, err := r.Storer.SetEncodedObject(obj)
+		require.NoError(t, err)
+		tree, err := object.GetTree(r.Storer, h)
+		require.NoError(t, err)
+		return tree
+	}
+	collect := func(s storer.EncodedObjectStorer, t *object.Tree) (names []string, err error) {
+		err = walkTreePaths(s, t, func(path string, _ object.TreeEntry) error {
+			names = append(names, path)
+			return nil
+		})
+		return names, err
+	}
+
+	t.Run("raw_names_and_no_blob_reads", func(t *testing.T) {
+		g := newGitRepo(t)
+		r, err := git.PlainOpen(g.dir)
+		require.NoError(t, err)
+		// a name go-git's walkers reject but git accepts, over a hash naming
+		// no object at all: enumeration must read names only
+		tree := craftTree(t, r, []object.TreeEntry{{
+			Name: "bad\x01.txt", Mode: filemode.Regular, Hash: plumbing.ZeroHash,
+		}})
+
+		names, err := collect(r.Storer, tree)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"bad\x01.txt"}, names)
+	})
+
+	t.Run("nested_paths_carry_prefix", func(t *testing.T) {
+		g := newGitRepo(t)
+		r, err := git.PlainOpen(g.dir)
+		require.NoError(t, err)
+		leaf := craftTree(t, r, []object.TreeEntry{{
+			Name: "nested.txt", Mode: filemode.Regular, Hash: plumbing.ZeroHash,
+		}})
+		root := craftTree(t, r, []object.TreeEntry{{
+			Name: "dir", Mode: filemode.Dir, Hash: leaf.Hash,
+		}})
+
+		names, err := collect(r.Storer, root)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"dir/nested.txt"}, names)
+	})
+
+	t.Run("missing_subtree_errors", func(t *testing.T) {
+		g := newGitRepo(t)
+		r, err := git.PlainOpen(g.dir)
+		require.NoError(t, err)
+		tree := craftTree(t, r, []object.TreeEntry{{
+			Name: "gone", Mode: filemode.Dir, Hash: plumbing.ZeroHash,
+		}})
+
+		_, err = collect(r.Storer, tree)
+		assert.ErrorIs(t, err, plumbing.ErrObjectNotFound)
+	})
+
+	t.Run("runaway_nesting_capped", func(t *testing.T) {
+		// a storer answering every hash with one self-nesting tree, hostile
+		// store data no content-addressed repository can really hold
+		obj := &plumbing.MemoryObject{}
+		require.NoError(t, (&object.Tree{Entries: []object.TreeEntry{{
+			Name: "loop", Mode: filemode.Dir, Hash: plumbing.ZeroHash,
+		}}}).Encode(obj))
+		s := loopStorer{obj: obj}
+		tree, err := object.GetTree(s, plumbing.ZeroHash)
+		require.NoError(t, err)
+
+		_, err = collect(s, tree)
+		assert.ErrorIs(t, err, object.ErrMaxTreeDepth)
+	})
+}
+
+// loopStorer answers every object request with one fixed self-nesting tree.
+type loopStorer struct {
+	storer.EncodedObjectStorer
+	obj plumbing.EncodedObject
+}
+
+func (s loopStorer) EncodedObject(plumbing.ObjectType, plumbing.Hash) (plumbing.EncodedObject, error) {
+	return s.obj, nil
+}
+
+// TestGitStatusCorruptObjects covers git_status against a damaged object
+// store: structural loss is loud, a missing blob narrows nothing.
+func TestGitStatusCorruptObjects(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing_head_tree_errors", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
+		c, err := gitCommit(r, "")
+		require.NoError(t, err)
+		removeLoose(t, g.dir, c.TreeHash.String())
+
 		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
 		assert.True(t, isErr)
-		assert.NotContains(t, out, "?? dir/")
+		assert.NotContains(t, out, "(clean)")
 	})
+
+	t.Run("missing_subtree_errors_loud", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
+		removeLoose(t, g.dir, headTreeEntry(t, r, "dir").String())
+		g.write(t, "dir/new.txt", "u\n")
+
+		// a truncated tracked set would collapse dir/ into one ?? row
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.True(t, isErr)
+		assert.NotContains(t, strings.Split(out, "\n"), "?? dir/")
+	})
+
+	t.Run("missing_blob_keeps_tracked_set", func(t *testing.T) {
+		g, r := nestedGitRepo(t)
+		removeLoose(t, g.dir, headTreeEntry(t, r, "dir/nested.txt").String())
+		g.write(t, "dir/new.txt", "u\n")
+
+		out, isErr := runGitTool(t, &gitStatusTool{policy: g.policy()}, `{}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "?? dir/new.txt")
+		assert.NotContains(t, strings.Split(out, "\n"), "?? dir/")
+	})
+}
+
+// TestGitDiffWorktreeMissingBlob covers the content side: rendering a changed
+// path needs its base blob, and a missing one is a loud error, never a
+// phantom new-file block.
+func TestGitDiffWorktreeMissingBlob(t *testing.T) {
+	t.Parallel()
+
+	g, r := nestedGitRepo(t)
+	removeLoose(t, g.dir, headTreeEntry(t, r, "dir/nested.txt").String())
+	g.write(t, "dir/nested.txt", "changed\n")
+
+	_, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()}, `{"to":"worktree"}`)
+	assert.True(t, isErr)
 }
 
 func TestGitToolsBareRepo(t *testing.T) {

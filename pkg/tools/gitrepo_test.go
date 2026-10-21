@@ -359,6 +359,38 @@ func (g *gitRepo) stage(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// headTreeEntry resolves one HEAD-tree entry's hash, for object surgery in
+// tests. A directory name resolves to its subtree object's hash.
+func headTreeEntry(t *testing.T, r *git.Repository, name string) plumbing.Hash {
+	t.Helper()
+	c, err := gitCommit(r, "")
+	require.NoError(t, err)
+	tree, err := c.Tree()
+	require.NoError(t, err)
+	e, err := tree.FindEntry(name)
+	require.NoError(t, err)
+	return e.Hash
+}
+
+// removeLoose deletes one loose object file, damaging the repository the way
+// a corrupt object store would.
+func removeLoose(t *testing.T, dir, hash string) {
+	t.Helper()
+	require.NoError(t, os.Remove(filepath.Join(dir, ".git", "objects", hash[:2], hash[2:])))
+}
+
+// nestedGitRepo commits dir/nested.txt on top of the base fixture, the
+// subtree shape the corrupt-object tests damage.
+func nestedGitRepo(t *testing.T) (*gitRepo, *git.Repository) {
+	t.Helper()
+	g := newGitRepo(t)
+	g.write(t, "dir/nested.txt", "nested\n")
+	g.commitAll(t, "add nested")
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+	return g, r
+}
+
 // os0Write writes name under dir, creating parent directories.
 func os0Write(dir, name, content string) error {
 	p := filepath.Join(dir, name)
