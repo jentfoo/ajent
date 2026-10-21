@@ -15,7 +15,7 @@ import (
 func tokensFor(branch []session.Entry, cd session.CompactionData, model llm.Model, retain llm.RetainPolicy, base int, resolve func(string) (llm.Model, error)) int {
 	msgs, warns := session.ContextMessages(branch, cd, resolve)
 	if msgs == nil && len(warns) > 0 {
-		return math.MaxInt // an unlocatable cut saves nothing
+		return math.MaxInt // assembly warned and produced nothing: no plan saves that
 	}
 	return base + tokens.EstimateFor(model, retain, msgs)
 }

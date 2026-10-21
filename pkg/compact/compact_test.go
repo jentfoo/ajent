@@ -265,15 +265,22 @@ func TestCompactRecompaction(t *testing.T) {
 		assert.NotEmpty(t, res.Summary)
 	})
 
-	t.Run("missing_prior_cut_is_error", func(t *testing.T) {
-		// a corrupt or rewound transcript whose newest compaction names a kept entry
-		// the branch does not hold: fail rather than measure against the raw branch
+	// a kept entry lost to corruption degrades like an undecodable payload: the pass
+	// rebuilds the checkpoint over the unreduced branch instead of failing, and the
+	// damage rides Result.Warnings
+	t.Run("missing_prior_cut_recomputes", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 		branch = append(branch, compactEntry("comp", "a checkpoint", "gone"))
 
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
-		require.Error(t, err)
-		assert.Nil(t, res)
+		require.NoError(t, err)
+		require.NotNil(t, res)
+		require.Len(t, res.Warnings, 1)
+		assert.Contains(t, res.Warnings[0], "prior compaction's kept entry is missing")
+
+		// the zero plan measures the raw branch, matching what a rebuild assembles
+		raw := tokensFor(branch, session.CompactionData{}, model, llm.RetainNone, 0, noResolve)
+		assert.Equal(t, raw, res.Before)
 	})
 
 	// a payload that decodes half-way must not leave its surviving cut bound on
@@ -308,6 +315,42 @@ func TestCompactRecompaction(t *testing.T) {
 		res, err := Compact(t.Context(), branch, model, run, Options{VerbatimTokens: 1})
 		require.NoError(t, err)
 		assert.Nil(t, res)
+	})
+
+	// a decline records nothing and carries no result, so prior damage detected on
+	// the way there must fail the run instead of hiding behind "nothing to compact"
+	t.Run("decline_reports_corrupt_prior", func(t *testing.T) {
+		branch := toolBranch(t, 2, 20) // declines on its own: nothing worth folding
+		// "before" as a string populates summary and cut, then fails on the int
+		branch = append(branch, session.Entry{ID: "comp", Type: session.TypeCompaction,
+			Data: []byte(`{"summary":"a checkpoint","firstKeptEntryId":"a2","before":"x"}`)})
+
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("x")), Options{})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.Contains(t, err.Error(), "invalid prior compaction entry")
+	})
+
+	t.Run("decline_reports_missing_prior_cut", func(t *testing.T) {
+		branch := toolBranch(t, 2, 20)
+		branch = append(branch, compactEntry("comp", "a checkpoint", "gone"))
+
+		res, err := Compact(t.Context(), branch, model, summaryRun(sectionedGoal("x")), Options{})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.Contains(t, err.Error(), "kept entry is missing from the branch")
+	})
+
+	// the same holds after a summariser spend, where an unprofitable plan declines
+	t.Run("unprofitable_run_reports_damage", func(t *testing.T) {
+		branch := toolBranch(t, 4, 400)
+		branch = append(branch, compactEntry("comp", "a checkpoint", "gone"))
+		huge := strings.Repeat("summary prose ", 4000)
+
+		res, err := Compact(t.Context(), branch, model, summaryRun(huge), Options{VerbatimTokens: 1})
+		require.Error(t, err)
+		assert.Nil(t, res)
+		assert.Contains(t, err.Error(), "kept entry is missing from the branch")
 	})
 
 	t.Run("budget_carries_the_prior_checkpoint", func(t *testing.T) {

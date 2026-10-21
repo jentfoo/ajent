@@ -28,11 +28,11 @@ func State(branch []Entry, resolve func(key string) (llm.Model, error)) (agent.S
 	warns = append(warns, mwarns...)
 	st.Messages = msgs
 
-	// a compaction rewrites what the branch sends, so the prompt sizes recorded
-	// against its surviving messages describe a request that no longer exists. When
-	// one applies the context terms are measured from the assembled messages instead
-	// (below) and recorded usage counts only toward spend.
-	rewritten := cd.rewritesHistory()
+	// a compaction rewrites what the branch sends, so recorded prompt sizes describe
+	// requests that no longer exist: measure context from the assembled messages instead,
+	// counting recorded usage toward spend only. A corrupt entry joins it because its
+	// zero-plan rebuild can hold rows recorded under an older checkpoint's cut.
+	rewritten := cerr != nil || cd.rewritesHistory()
 
 	for i := range branch {
 		e := branch[i]

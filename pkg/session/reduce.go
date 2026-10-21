@@ -45,8 +45,11 @@ func ContextMessages(branch []Entry, cd CompactionData, resolve func(string) (ll
 
 	keep := CutIndex(branch, cd)
 	if keep < 0 {
-		warns = append(warns, "compaction first-kept entry not found")
-		return nil, warns // a cut that cannot be located keeps nothing safe
+		// corruption-only: branching keeps a compaction's cut target on the branch.
+		// Degrade to no checkpoint like an undecodable payload does, so one damaged
+		// line falls back to the pre-checkpoint state instead of emptying context
+		warns = append(warns, "compaction first-kept entry not found, rebuilding without the checkpoint")
+		cd, keep = CompactionData{}, 0
 	}
 
 	var msgs []llm.Message // the cut keeps only the recent band, a small tail of the branch

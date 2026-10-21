@@ -154,11 +154,20 @@ func TestContextMessages(t *testing.T) {
 		require.Len(t, msgs, 1)
 	})
 
-	t.Run("missing_first_kept_warns", func(t *testing.T) {
-		branch := []Entry{pickMsg("m1", "", llm.Text(llm.RoleUser, "only"))}
-		msgs, warns := ContextMessages(branch, CompactionData{FirstKeptEntryID: "ghost"}, noResolve)
+	t.Run("missing_cut_full_branch", func(t *testing.T) {
+		// a cut naming an entry the branch lost is corruption-only. The checkpoint
+		// degrades whole rather than emptying context or half-applying its plan
+		branch := []Entry{
+			pickMsg("m1", "", llm.Text(llm.RoleUser, "one")),
+			toolResultEntry("m2", "m1", "c1", "old failed output", true),
+			pickMsg("m3", "m2", llm.Text(llm.RoleUser, "two")),
+		}
+		cd := CompactionData{Summary: "s", FirstKeptEntryID: "ghost",
+			Reduce: &Reduce{Stubs: []Stub{{CallID: "c1", Text: "[dropped]"}}}}
+		msgs, warns := ContextMessages(branch, cd, noResolve)
 		assert.NotEmpty(t, warns)
-		assert.Empty(t, msgs)
+		require.Len(t, msgs, 3)                                       // every recorded message
+		assert.Equal(t, "old failed output", toolResultText(msgs[1])) // the plan fell with its cut
 	})
 
 	t.Run("elides_by_limit", func(t *testing.T) {

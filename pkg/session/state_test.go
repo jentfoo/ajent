@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -163,6 +164,53 @@ func TestStateCorruptCompactionWarns(t *testing.T) {
 		require.Len(t, warns, 1)
 		assert.Contains(t, warns[0], "invalid compaction entry")
 		require.Len(t, st.Messages, 2) // no summary, both prompts whole
+	})
+
+	// a decodable checkpoint whose cut target the branch lost degrades to the full
+	// pre-checkpoint context, never to an empty one
+	t.Run("missing_cut_keeps_every_message", func(t *testing.T) {
+		branch := []Entry{
+			msgWithID("m1", llm.Text(llm.RoleUser, "first")),
+			msgWithID("m2", llm.Text(llm.RoleAssistant, "second")),
+			{ID: "comp", Type: TypeCompaction,
+				Data: compactData(`{"summary":"s","firstKeptEntryId":"ghost"}`)},
+		}
+		st, warns := State(branch, resolveModel)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "first-kept entry not found")
+		require.Len(t, st.Messages, 2) // summary dropped with the cut
+		assert.Equal(t, "first", textOf(st.Messages[0]))
+	})
+}
+
+func TestStateCorruptCompactionLedger(t *testing.T) {
+	t.Parallel()
+
+	// rows recorded after an older compaction's cut describe the compacted requests
+	// the live session sent, while a corrupt newest checkpoint rebuilds the whole
+	// branch. Replaying them under-reports until the next response, so the degraded
+	// rebuild measures its context from the assembled messages instead.
+	t.Run("degraded_checkpoint_remeasures", func(t *testing.T) {
+		branch := []Entry{
+			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
+			msgUsage("m2", llm.Text(llm.RoleAssistant, strings.Repeat("history ", 8000)),
+				llm.Usage{Input: 50000, Output: 400}),
+			{ID: "c1", Type: TypeCompaction, Data: compactData(`{"summary":"s","firstKeptEntryId":"u1"}`)},
+			msgUsage("u1", llm.Text(llm.RoleUser, "kept ask"), llm.Usage{}),
+			msgUsage("a2", llm.Text(llm.RoleAssistant, "compact-sized reply"), llm.Usage{Input: 6000, Output: 100}),
+			corruptCompaction(),
+		}
+		st, warns := State(branch, resolveModel)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], "invalid compaction entry")
+		require.Len(t, st.Messages, 4) // zero plan: the whole branch
+
+		cs := st.Tokens.Context()
+		assert.Greater(t, cs.Used, 6100) // not a2's compacted-size row
+		assert.True(t, cs.Estimated)     // re-measured, so the bar wears its ~
+
+		total := st.Tokens.Total()
+		assert.Equal(t, 56500, total.Input+total.Output) // spend counts every turn regardless
 	})
 }
 

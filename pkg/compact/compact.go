@@ -50,13 +50,14 @@ type RunPrompt func(ctx context.Context, run llm.Request) (string, error)
 // ready to record on the branch as a compaction entry. Result.Before and
 // Result.After estimate next-request input tokens without and with that
 // recording, so their difference is what the caller saves. A nil result means
-// nothing worth doing changed.
+// nothing worth doing changed. With a damaged prior checkpoint a decline is an
+// error instead, since a nil result carries no warning.
 func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run RunPrompt, opts Options) (*Result, error) {
 	minSteps, verbatimTokens := resolveVerbatim(model, opts)
 
 	// the baseline is the effective current context, not the raw branch: a prior
-	// compaction already folded part of it away. An undecodable prior is the zero
-	// plan, so this pass recomputes cumulatively from the unreduced branch.
+	// compaction already folded part of it away. A damaged one degrades below to the
+	// zero plan, so this pass recomputes cumulatively from the unreduced branch.
 	prior, priorIdx, has, perr := session.NewestCompaction(branch)
 	if has {
 		// resolve a summary-only prior to an explicit FirstKeptEntryID so carrying it
@@ -69,9 +70,25 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 			}
 		}
 	}
+	// Damage in the newest checkpoint degrades this pass to a recompute over the
+	// unreduced branch, matching the rebuild's own fallback for that entry, and must
+	// be reported wherever the pass ends.
+	var priorDamage string
+	if perr != nil {
+		priorDamage = "invalid prior compaction entry: " + perr.Error()
+	}
 	priorCut := session.CutIndex(branch, prior)
-	if priorCut < 0 { // a missing cut means the effective context is unrecoverable
-		return nil, errors.New("compact: prior compaction's kept entry is missing from the branch")
+	if priorCut < 0 { // corruption-only, and the cut target is gone: degrade as rebuild does
+		priorDamage = "prior compaction's kept entry is missing from the branch"
+		prior, priorCut = session.CompactionData{}, 0
+	}
+	// a decline records nothing and a nil result carries no warning, so known damage
+	// fails the run rather than hiding behind "nothing to compact"
+	decline := func() (*Result, error) {
+		if priorDamage != "" {
+			return nil, errors.New("compact: " + priorDamage)
+		}
+		return nil, nil
 	}
 
 	view := newBranchView(branch) // one decode/token cache shared by every stage
@@ -80,7 +97,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	view.setRetain(llm.ResolveRetain(opts.Retain, model.Caps))
 	band, ok := view.chooseCut(priorCut, minSteps, verbatimTokens)
 	if !ok || view.spanTokens(priorCut, band) < minSpanTokens {
-		return nil, nil
+		return decline()
 	}
 	var firstKept string
 	if band >= 0 && band < len(branch) && branch[band].Type == session.TypeMessage {
@@ -107,9 +124,9 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 		// notice needs, claiming stub work here would describe context that never changed
 		Reduce: session.Reduce{Stats: session.Stats{Summarized: nsum}},
 	}
-	if perr != nil {
+	if priorDamage != "" {
 		// Before names the unreduced branch, larger than the last run left it
-		res.Warnings = append(res.Warnings, "invalid prior compaction entry: "+perr.Error())
+		res.Warnings = append(res.Warnings, priorDamage)
 	}
 	// a defective checkpoint still records; the warning only makes the defect visible
 	if miss := missingSections(summary); len(miss) > 0 {
@@ -120,7 +137,7 @@ func Compact(ctx context.Context, branch []session.Entry, model llm.Model, run R
 	if res.After < res.Before { // the plan must measurably shrink the next request
 		return res, nil
 	}
-	return nil, nil // nothing saved, or it would grow context
+	return decline() // nothing saved, or it would grow context
 }
 
 // resolveVerbatim returns the band bounds: opts' overrides when set, else two
