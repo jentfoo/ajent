@@ -3,10 +3,9 @@ package version
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -21,21 +20,18 @@ const (
 	// UpdateCacheFileName holds the latest-tag and last-notice state under ~/.ajent/cache.
 	UpdateCacheFileName = "remote-version.json"
 
-	// remoteVersionTTL reuses a fetched tag within this window before asking GitHub again.
+	// remoteVersionTTL reuses a fetched tag within this window before asking the
+	// module proxy again.
 	remoteVersionTTL = 12 * time.Hour
 	// noticeInterval is the minimum gap between update notices for one install.
 	noticeInterval = 2 * time.Hour
 
-	// tagsPerPage requests GitHub's maximum page size so most repos need one request.
-	tagsPerPage = 100
-	// maxTagPages bounds pagination; past it the check may miss an update, which is
-	// its accepted failure direction.
-	maxTagPages = 3
-
 	fetchTimeout = 5 * time.Second
+	// latestBodyLimit caps reading the @latest response, which stays tiny in practice.
+	latestBodyLimit = 64 << 10
 )
 
-var githubTagsURL = "https://api.github.com/repos/jentfoo/ajent/tags"
+var proxyLatestURL = "https://proxy.golang.org/github.com/jentfoo/ajent/@latest"
 
 // UpdateCache is ~/.ajent/cache/remote-version.json.
 type UpdateCache struct {
@@ -47,7 +43,7 @@ type UpdateCache struct {
 // UpdateCheckOptions injects the seams CheckUpdateNotice needs to be tested.
 type UpdateCheckOptions struct {
 	Now   func() time.Time                          // defaults to time.Now
-	Fetch func(ctx context.Context) (string, error) // latest remote tag, nil uses GitHub API
+	Fetch func(ctx context.Context) (string, error) // latest remote tag, nil uses module proxy
 }
 
 // checkTimeout bounds the whole startup notice lookup, and the fetch inside it is
@@ -138,69 +134,36 @@ func saveUpdateCache(path string, c UpdateCache) error {
 	return config.WriteFileAtomic(path, data, config.SecretPerm)
 }
 
-type ghTag struct {
-	Name string `json:"name"`
+// proxyInfo is one @latest payload from a Go module proxy.
+type proxyInfo struct {
+	Version string `json:"version"`
 }
 
-// fetchLatestVersion returns the highest clean vX.Y.Z tag from GitHub.
+// fetchLatestVersion returns the latest clean vX.Y.Z tag known to the Go module proxy.
 func fetchLatestVersion(ctx context.Context) (string, error) {
-	// one budget spans every page so total fetch cost stays bounded
 	cctx, cancel := context.WithTimeout(ctx, fetchTimeout)
 	defer cancel()
 	client := httputil.New(httputil.Options{})
-	u, err := url.Parse(githubTagsURL)
-	if err != nil {
-		return "", fmt.Errorf("tags url: %w", err)
-	}
-	q := u.Query()
-	q.Set("per_page", strconv.Itoa(tagsPerPage))
-
-	var max semver
-	var found bool
-	for page := 1; page <= maxTagPages; page++ {
-		q.Set("page", strconv.Itoa(page))
-		u.RawQuery = q.Encode()
-		tags, err := fetchTagsPage(cctx, client, u.String())
-		if err != nil {
-			return "", err
-		}
-		for _, t := range tags {
-			v, vok := parseVersion(t.Name)
-			if !vok {
-				continue
-			}
-			if !found || max.less(v) {
-				max, found = v, true
-			}
-		}
-		if len(tags) < tagsPerPage {
-			break // short page: no further pages exist
-		}
-	}
-	if !found {
-		return "", errors.New("no clean vX.Y.Z tags returned")
-	}
-	return max.String(), nil
-}
-
-// fetchTagsPage decodes one page of repository tags.
-func fetchTagsPage(ctx context.Context, client *http.Client, pageURL string) ([]ghTag, error) {
-	resp, err := httputil.Do(ctx, client, httputil.Request{
+	resp, err := httputil.Do(cctx, client, httputil.Request{
 		Method:    http.MethodGet,
-		URL:       pageURL,
+		URL:       proxyLatestURL,
 		Name:      "update-check",
 		UserAgent: UserAgent(),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("github get: %w", err)
+		return "", fmt.Errorf("proxy get: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	var tags []ghTag
-	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+	var info proxyInfo
+	if err := json.NewDecoder(io.LimitReader(resp.Body, latestBodyLimit)).Decode(&info); err != nil {
+		return "", fmt.Errorf("decode: %w", err)
 	}
-	return tags, nil
+	v, ok := parseVersion(info.Version) // reject pre-release or non-tag responses
+	if !ok {
+		return "", fmt.Errorf("proxy reported unexpected version %q", info.Version)
+	}
+	return v.String(), nil
 }
 
 // cleanTag matches a strict release tag with no pre-release suffix.
