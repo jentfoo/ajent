@@ -23,35 +23,31 @@ var (
 )
 
 // buildFakeServer retains the shared fakeserver binary for the calling test's
-// lifetime, compiling it once per run from ./testdata/fakeserver with the same
-// module so mcp-go wire types match what our client expects. Cleanup runs after
-// the test's own (LIFO), so spawned servers are gone before the last holder
-// removes the directory.
+// lifetime, compiled once per run from ./testdata/fakeserver with the same
+// module so mcp-go wire types match our client. The lock spans the whole build:
+// parallel first-callers wait and reuse rather than leak copies; t.Fatalf under
+// it is safe because Goexit runs the deferred Unlock. Cleanup runs after each
+// test's own (LIFO): spawned servers exit before dir removal.
 func buildFakeServer(t *testing.T) string {
 	t.Helper()
 
 	fakeMu.Lock()
+	defer fakeMu.Unlock()
+
 	if fakePath == "" {
-		fakeMu.Unlock() // released before the build: t.Fatalf Goexits under no lock
 		dir, err := os.MkdirTemp("", "ajent-mcp-fake-")
 		if err != nil {
 			t.Fatalf("temp dir for fakeserver: %v", err)
 		}
 		out := filepath.Join(dir, "fakeserver")
-		// a parallel test's retain while this build runs simply waits on the lock and
-		// then reuses the result; the mutex makes the first-caller-wins race-free
 		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "./testdata/fakeserver")
 		if b, err := cmd.CombinedOutput(); err != nil {
+			_ = os.RemoveAll(dir)
 			t.Fatalf("build fakeserver: %v\n%s", err, b)
 		}
-		fakeMu.Lock()
-		if fakePath == "" {
-			fakePath = out
-		}
+		fakePath = out
 	}
 	fakeUsers++
-	path := fakePath
-	fakeMu.Unlock()
 
 	t.Cleanup(func() {
 		fakeMu.Lock()
@@ -62,7 +58,7 @@ func buildFakeServer(t *testing.T) string {
 			fakePath = ""
 		}
 	})
-	return path
+	return fakePath
 }
 
 // hostOf strips the scheme and path from a base URL, returning just "host:port".

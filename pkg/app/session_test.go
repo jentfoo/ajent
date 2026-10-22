@@ -1274,15 +1274,16 @@ func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	before := out()
 
 	ag, _, start, release := heldTurnAgent(t)
+	start() // claim the loop first, so the answered picker always refuses at capture
 	rewound := make(chan struct{})
 	go func() {
 		defer close(rewound)
 		r.rewind(ui, ag, reg)
 	}()
-	// one exclusive filter answers the picker, the race lands the turn before it
+	// one exclusive filter answers the picker; readLines queues it until the
+	// picker opens, so ordering against start above stays deterministic
 	_, err = io.WriteString(inW, "one\n")
 	require.NoError(t, err)
-	start()
 	<-rewound
 	release()
 

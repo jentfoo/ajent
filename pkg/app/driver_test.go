@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -609,16 +610,21 @@ func TestMCPConfigDisabledToolsResumeRestoresEnablement(t *testing.T) {
 }
 
 var (
+	fakeMu       sync.Mutex
 	fakeMCPPath  string // shared fakeserver binary, compiled on first use
 	fakeMCPUsers int    // tests holding it; the last release removes its dir
 )
 
 // buildFakeMCPServer retains the pkg/mcp fakeserver binary for the calling
-// test's lifetime, compiling it once per run. Cleanup runs after the test's own
-// (LIFO), so spawned servers are gone before the last holder removes the
-// directory.
+// test's lifetime, compiled once per run. The lock spans the whole build:
+// parallel first-callers wait and reuse rather than leak copies; t.Fatalf under
+// it is safe because Goexit runs the deferred Unlock. Cleanup runs after each
+// test's own (LIFO): spawned servers exit before dir removal.
 func buildFakeMCPServer(t *testing.T) string {
 	t.Helper()
+
+	fakeMu.Lock()
+	defer fakeMu.Unlock()
 
 	if fakeMCPPath == "" {
 		// resolved off this file, never the test's working directory
@@ -631,6 +637,7 @@ func buildFakeMCPServer(t *testing.T) string {
 		out := filepath.Join(dir, "fakeserver")
 		cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, src)
 		if b, err := cmd.CombinedOutput(); err != nil {
+			_ = os.RemoveAll(dir)
 			t.Fatalf("build fakeserver: %v\n%s", err, b)
 		}
 		fakeMCPPath = out
@@ -638,6 +645,8 @@ func buildFakeMCPServer(t *testing.T) string {
 	fakeMCPUsers++
 
 	t.Cleanup(func() {
+		fakeMu.Lock()
+		defer fakeMu.Unlock()
 		fakeMCPUsers--
 		if fakeMCPUsers == 0 && fakeMCPPath != "" {
 			_ = os.RemoveAll(filepath.Dir(fakeMCPPath))
