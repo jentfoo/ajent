@@ -86,11 +86,6 @@ type Counter interface {
 	CountTokens(ctx context.Context, req Request) (int, error)
 }
 
-// Discoverer is implemented by providers that can list their own models.
-type Discoverer interface {
-	DiscoverModels(ctx context.Context) ([]Model, error)
-}
-
 // ReasoningConfig is what the user chose, before provider translation. It also
 // round-trips through JSON as a session setting_change value.
 type ReasoningConfig struct {

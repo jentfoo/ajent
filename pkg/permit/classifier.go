@@ -41,12 +41,6 @@ func (s Subject) key() string {
 // IsShell reports whether the subject is a shell command rather than an MCP/extension call.
 func (s Subject) IsShell() bool { return s.Name == tools.ToolBash }
 
-// Classifier decides whether an unverifiable tool call may run unattended.
-// The host supplies a fresh-context model adapter in the auto modes.
-type Classifier interface {
-	Classify(ctx context.Context, s Subject) Class
-}
-
 // classCacheMax bounds the session LRU so it stays cheap and forgets old commands.
 const classCacheMax = 500
 
@@ -75,13 +69,9 @@ type inflightClass struct {
 	class Class
 }
 
-// NewCachedClassifier returns a session-scoped, LRU-caching classifier over fn.
-func NewCachedClassifier(fn ClassifierFn) *cachedClassifier {
-	return newCachedClassifierMax(fn, classCacheMax)
-}
-
-// newCachedClassifierMax builds a caching classifier with a custom cap for tests.
-func newCachedClassifierMax(fn ClassifierFn, max int) *cachedClassifier {
+// newCachedClassifier builds a caching classifier over fn holding at most max
+// verdicts, classCacheMax in production.
+func newCachedClassifier(fn ClassifierFn, max int) *cachedClassifier {
 	return &cachedClassifier{fn: fn, max: max,
 		vals: make(map[string]Class), inflight: make(map[string]*inflightClass)}
 }

@@ -145,9 +145,9 @@ type UI struct {
 	// rewind gesture configuration and state (see rewind.go)
 	doubleEscWindow time.Duration
 	onRewind        func()
-	idle            bool // host marks true while awaiting prompt, false during a turn
-	escPending      bool // first idle Esc seen, waiting for a second within the window
-	rewTimer        escToken
+	idle            bool                                    // host marks true while awaiting prompt, false during a turn
+	escPending      bool                                    // first idle Esc seen, waiting for a second within the window
+	rewTimer        *time.Timer                             // pending lone-Esc flush, nil when none
 	afterDelay      func(time.Duration, func()) *time.Timer // time.AfterFunc unless overridden in tests
 
 	act        *pending // interaction owning the live block

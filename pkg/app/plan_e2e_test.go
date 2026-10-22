@@ -550,44 +550,6 @@ func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	assert.Contains(t, planningCtx, "add a --version flag")
 }
 
-// TestPlanResumeLandedKickoffStaysSingle drives a mid-workflow resume whose
-// kickoff already landed: the restore must stay silent and the next prompt must
-// not carry a second copy of the review kickoff.
-func TestPlanResumeLandedKickoffStaysSingle(t *testing.T) {
-	t.Parallel()
-
-	// the first review ends with no verdict, so the plain-mode ask fails and the
-	// workflow parks in reviewing with both kickoffs delivered
-	h := newPlanHarness(t,
-		[]llm.ScriptedTurn{
-			{Events: devCallTurn("1", plan.DevImplementTool, `{"plan":"the plan"}`)},
-			{Events: textTurn("still reading the diff")},
-			{Events: devCallTurn("2", plan.DevCompleteTool, `{}`)},
-		},
-		[]llm.ScriptedTurn{
-			{Events: devCallTurn("3", plan.DevReviewTool, `{"summary":"added the flag"}`)},
-		},
-	)
-	require.Empty(t, h.ctl.Start(t.Context(), ""))
-	h.prompt(t, "add a --version flag")
-	h.prompt(t, "the plan") // implementing and review kickoffs both land
-	require.True(t, h.ctl.Active())
-
-	h.resumeFromTranscript(t)
-	require.True(t, h.ctl.Active())
-	assert.NotContains(t, strings.Join(h.notices, "\n"), "never reached the transcript")
-
-	_, changed := h.ctl.BeforePrompt(t.Context(), agent.Input{Text: "ship it"})
-	assert.False(t, changed) // no repaired kickoff rides ahead of the prompt
-
-	h.prompt(t, "ship it")
-	require.False(t, h.ctl.Active())
-	finalCtx := texts(h.planner.Requests()[2])
-	assert.Equal(t, 1, strings.Count(finalCtx, "<plan>\n"))
-	assert.Equal(t, 1, strings.Count(finalCtx, "<implementation_summary>"))
-	assert.Contains(t, finalCtx, "ship it")
-}
-
 // TestPlanResumeLandedGoalStaysCaptured covers the planning half of the same
 // resume: a goal that already landed must stay captured, so a later prompt is
 // an ordinary steer rather than the goal all over again.

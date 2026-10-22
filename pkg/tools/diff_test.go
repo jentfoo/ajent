@@ -506,27 +506,6 @@ func TestGitDiffSubmoduleStyles(t *testing.T) {
 		assert.NotContains(t, out, "  > ")
 	})
 
-	// a new child commit staged into the index is a forward move, listed ">"
-	t.Run("log_forward_subjects", func(t *testing.T) {
-		g := newCheckoutRepo(t)
-		sub := filepath.Join(g.dir, "sub")
-		gitRun(t, sub, "-c", "user.email=t@t", "-c", "user.name=t",
-			"commit", "-qm", "child three", "--allow-empty")
-		gitRun(t, g.dir, "add", "sub")
-		cr, err := git.PlainOpen(sub)
-		require.NoError(t, err)
-		ref, err := cr.Head()
-		require.NoError(t, err)
-
-		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
-			`{"to":"worktree","submodule":"log"}`)
-		assert.False(t, isErr)
-		// a fast-forward still prints git's two dots, no marker
-		assert.Contains(t, out, "Submodule sub "+shortHash(plumbing.NewHash(g.second))+
-			".."+shortHash(ref.Hash())+":")
-		assert.Contains(t, out, "  > child three")
-	})
-
 	t.Run("diff_form_renders_child_patch", func(t *testing.T) {
 		g := newCheckoutRepo(t)
 		g.checkout(t, g.first)

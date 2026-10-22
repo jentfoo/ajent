@@ -9,6 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
+	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -90,14 +91,14 @@ type barrierOptions struct {
 // workspace write roots, config safe/deny lists, dry-run and notices. o's
 // caller-set fields (mode, grants, prompter, noter, preview) pass through.
 func (d barrierOptions) options(o permit.Options) permit.Options {
-	o.Classifier = permit.NewCachedClassifier(classifierAdapter{
+	o.Classifier = classifierAdapter{
 		providerFor: d.providerFor,
 		model:       d.model,
 		schema:      toolSchema(d.reg),
 		cwd:         config.Cwd(),
 		tmp:         os.TempDir(),
 		session:     d.session,
-	}.Classify)
+	}.Classify
 	o.WriteRoots = []string{config.Cwd(), os.TempDir()}
 	o.SafeCommands = d.safe
 	o.DeniedCommands = d.denied
@@ -112,14 +113,9 @@ func (d barrierOptions) install(b *permit.Barrier) {
 	d.reg.InstallGate([]tools.Guard{b.Guard()}, b.Asker())
 }
 
-// reserve is the small slice of the sub-agent manager the batch hook needs.
-type reserve interface {
-	Reserve(calls []agent.ToolCall)
-}
-
 // wireBatchHooks sets opts.OnToolBatch to reserve sub-agent job numbers and
 // prefetch classifications for one step's calls, both in message order.
-func wireBatchHooks(opts *agent.Options, sag reserve, b *permit.Barrier) {
+func wireBatchHooks(opts *agent.Options, sag *subagent.Manager, b *permit.Barrier) {
 	opts.OnToolBatch = func(ctx context.Context, calls []agent.ToolCall) {
 		if sag != nil {
 			sag.Reserve(calls)

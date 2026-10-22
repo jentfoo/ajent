@@ -37,7 +37,7 @@ type Barrier struct {
 	mu         sync.Mutex
 	mode       Mode
 	dialogs    *Dialogs                   // ask-a-person paths, nil meaning unattended
-	classifier Classifier                 // auto-mode verdicts for every gated call
+	classifier *cachedClassifier          // auto-mode verdicts for every gated call
 	notice     func(string)               // transient UI notices (auto-allow)
 	dryRun     func(agent.ToolCall) error // registry-backed edit dry run
 	ro         func(string) bool
@@ -79,7 +79,7 @@ type Options struct {
 	ModeSet        bool // whether Mode overrides the default
 	Grants         []string
 	Dialogs        *Dialogs                   // approval UI, nil meaning unattended
-	Classifier     Classifier                 // required: auto-mode verdicts for every gated call
+	Classifier     ClassifierFn               // required: auto-mode verdicts for every gated call
 	Notice         func(string)               // required: transient status notices
 	DryRun         func(agent.ToolCall) error // required: registry-backed edit dry run
 	SafeCommands   []string                   // exact tool names or bash lines skipping the prompt
@@ -101,7 +101,7 @@ func NewBarrier(ro func(string) bool, o Options) *Barrier {
 		ro:         ro,
 		grants:     o.Grants,
 		dialogs:    o.Dialogs,
-		classifier: o.Classifier,
+		classifier: newCachedClassifier(o.Classifier, classCacheMax),
 		notice:     o.Notice,
 		dryRun:     o.DryRun,
 	}
@@ -286,14 +286,10 @@ func (b *Barrier) cancelWarm(s Subject) {
 	}
 }
 
-// cachedVerdict returns a verdict already banked for s, ok false for a bare fn
-// classifier or a miss. It never blocks and never starts a request.
+// cachedVerdict returns a verdict already banked for s, ok false on a miss. It
+// never blocks and never starts a request.
 func (b *Barrier) cachedVerdict(s Subject) (Class, bool) {
-	c, ok := b.classifier.(*cachedClassifier)
-	if !ok {
-		return ClassUnsure, false
-	}
-	return c.peek(s)
+	return b.classifier.peek(s)
 }
 
 // holdForDialog waits out typing so the next Open never steals focus from a

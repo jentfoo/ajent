@@ -199,7 +199,7 @@ func newTestBarrierOpts(p *fakePrompter, o Options) *Barrier {
 		o.DryRun = func(agent.ToolCall) error { return nil } // predicts no failure
 	}
 	if o.Classifier == nil {
-		o.Classifier = &fakeClassifier{verdict: ClassUnsure} // fails closed if ever consulted
+		o.Classifier = func(context.Context, Subject) Class { return ClassUnsure } // fails closed if ever consulted
 	}
 	if p != nil && o.Dialogs == nil {
 		o.Dialogs = &Dialogs{
@@ -665,7 +665,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("auto_allow_verdict_runs", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
 		n := &noticeRecorder{}
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl, Notice: n.record})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl.Classify, Notice: n.record})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionAllow, d.Action)
@@ -676,7 +676,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	// a deny verdict refuses without ever opening a dialog
 	t.Run("auto_deny_verdict_refuses", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl.Classify})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -687,7 +687,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	// it, so unattended it refuses outright, the model never judging raw text
 	t.Run("redirect_line_refuses_without_model", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl.Classify})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"echo hi > out.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -697,7 +697,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// an unsure verdict fails closed like any unapproved call
 	t.Run("unsure_fails_closed", func(t *testing.T) {
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: &fakeClassifier{verdict: ClassUnsure}})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: (&fakeClassifier{verdict: ClassUnsure}).Classify})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -706,7 +706,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 
 	// a cancelled context refuses even an allow verdict
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: &fakeClassifier{verdict: ClassAllow}})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify})
 
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -717,7 +717,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	// a core writer has no unattended path in any auto mode
 	t.Run("write_denied_everywhere", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl})
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl.Classify})
 
 		d := runAsk(b, t.Context(), "write", []byte(`{}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -729,7 +729,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("extension_tool_classified", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
 		b := newTestBarrierOpts(nil, Options{
-			Mode: ModeAuto, ModeSet: true, Classifier: cl, Notice: func(string) {},
+			Mode: ModeAuto, ModeSet: true, Classifier: cl.Classify, Notice: func(string) {},
 		})
 
 		d := runAsk(b, t.Context(), "srv__deploy", []byte(`{"env":"prod"}`))
@@ -743,7 +743,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 		p := newFakePrompter()
 		p.err = errors.New("tui: no interactive terminal")
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -817,7 +817,7 @@ func TestGrantSessionAllows(t *testing.T) {
 	t.Run("unlisted_bash_auto_classifies", func(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassDeny}
 		b := newTestBarrierOpts(nil, Options{
-			Mode: ModeAuto, ModeSet: true, Grants: []string{"python3"}, Classifier: cl,
+			Mode: ModeAuto, ModeSet: true, Grants: []string{"python3"}, Classifier: cl.Classify,
 		})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
@@ -1201,7 +1201,7 @@ func TestAskerAuto(t *testing.T) {
 	t.Run("classifies_read_only_and_resolves_dialog", func(t *testing.T) {
 		p := newFakePrompter()
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1215,7 +1215,7 @@ func TestAskerAuto(t *testing.T) {
 	t.Run("write_verdict_keeps_dialog_waiting", func(t *testing.T) {
 		p := newFakePrompter()
 		cl := &fakeClassifier{verdict: ClassDeny}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1232,7 +1232,7 @@ func TestAskerAuto(t *testing.T) {
 	t.Run("classifies_clear_write_and_approves_on_read_only", func(t *testing.T) {
 		p := newFakePrompter()
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		// a confident write (rm) is still classified in auto mode, a readonly verdict
 		// resolving the dialog open without a keystroke.
@@ -1249,7 +1249,7 @@ func TestAskerAuto(t *testing.T) {
 	t.Run("read_only_emits_notice", func(t *testing.T) {
 		n := &noticeRecorder{}
 		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
-			Classifier: &fakeClassifier{verdict: ClassAllow}, Notice: n.record}, ModeAuto))
+			Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify, Notice: n.record}, ModeAuto))
 
 		done := make(chan struct{})
 		go func() {
@@ -1267,7 +1267,7 @@ func TestAskerAuto(t *testing.T) {
 		n := &noticeRecorder{}
 		p := newFakePrompter()
 		b := newTestBarrierOpts(p, withMode(Options{
-			Classifier: &fakeClassifier{verdict: ClassDeny}, Notice: n.record}, ModeAuto))
+			Classifier: (&fakeClassifier{verdict: ClassDeny}).Classify, Notice: n.record}, ModeAuto))
 
 		go runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
 		d := waitDialog(t, p)
@@ -1278,9 +1278,13 @@ func TestAskerAuto(t *testing.T) {
 	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
 		cancelled := make(chan struct{})
-		cl := &blockingClassifier{cancel: cancelled}
+		classify := func(ctx context.Context, _ Subject) Class {
+			<-ctx.Done()
+			close(cancelled)
+			return ClassUnsure
+		}
 		p := newFakePrompter()
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: classify}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1304,7 +1308,7 @@ func TestAskerAuto(t *testing.T) {
 	t.Run("mcp_classifies_non_bash_calls", func(t *testing.T) {
 		p := newFakePrompter()
 		cl := &fakeClassifier{verdict: ClassAllow}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1341,7 +1345,7 @@ func TestAskerDialogHold(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // held for the whole test, the verdict must not wait it out
 		defer release()
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassAllow}}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)) }()
@@ -1360,7 +1364,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("deny_verdict_keeps_holding", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold()
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassDeny}}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: (&fakeClassifier{verdict: ClassDeny}).Classify}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() { done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm x"}`)) }()
@@ -1379,7 +1383,7 @@ func TestAskerDialogHold(t *testing.T) {
 		release := p.beginHold() // held for the whole test, the cached verdict must not wait it out
 		defer release()
 		var calls atomic.Int32
-		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassAllow })
+		cl := func(context.Context, Subject) Class { calls.Add(1); return ClassAllow }
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"stat f.txt"}`)}
@@ -1405,7 +1409,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("banked_deny_still_dialogues", func(t *testing.T) {
 		p := newFakePrompter()
 		var calls atomic.Int32
-		cl := NewCachedClassifier(func(context.Context, Subject) Class { calls.Add(1); return ClassDeny })
+		cl := func(context.Context, Subject) Class { calls.Add(1); return ClassDeny }
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
 
 		call := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"rm f.txt"}`)}
@@ -1462,15 +1466,6 @@ func (r *noticeRecorder) all() []string {
 	defer r.mu.Unlock()
 
 	return append([]string(nil), r.notices...)
-}
-
-// blockingClassifier waits for ctx cancellation and reports it.
-type blockingClassifier struct{ cancel chan struct{} }
-
-func (c *blockingClassifier) Classify(ctx context.Context, s Subject) Class {
-	<-ctx.Done()
-	close(c.cancel)
-	return ClassUnsure
 }
 
 // gatedClassifier holds its verdict until released, modelling a slow review.
@@ -1547,7 +1542,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 	t.Run("leaving_auto_cancels_pending_verdict", func(t *testing.T) {
 		p := newFakePrompter()
 		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		var got tools.Decision
 		done := make(chan struct{})
@@ -1577,7 +1572,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 		releaseHold := p.beginHold()
 		defer releaseHold()
 		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
 		go func() {
@@ -1677,7 +1672,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 			p := newFakePrompter()
 			cl := &fakeClassifier{verdict: ClassAllow} // would auto-allow if ever consulted
 			b := newTestBarrierOpts(p, withMode(Options{
-				Classifier: cl, WriteRoots: []string{t.TempDir()}}, c.mode))
+				Classifier: cl.Classify, WriteRoots: []string{t.TempDir()}}, c.mode))
 
 			got := runAndAnswer(t, p, b, c.tool, []byte(c.input), int(optDeny))
 			assert.Equal(t, tools.ActionDeny, got.Action)
@@ -1687,7 +1682,7 @@ func TestAskerNeverClassifiesBuiltins(t *testing.T) {
 
 	t.Run("mcp_tool_still_classified", func(t *testing.T) {
 		p := newFakePrompter()
-		b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassAllow}}, ModeAuto))
+		b := newTestBarrierOpts(p, withMode(Options{Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify}, ModeAuto))
 
 		got := runAsk(b, t.Context(), "mcp__x", []byte(`{}`))
 		assert.Equal(t, tools.ActionAllow, got.Action) // resolved by the classifier, no answer given
@@ -1718,7 +1713,7 @@ func TestClassifyCall(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			b := newTestBarrierOpts(nil, Options{Classifier: &fakeClassifier{}})
+			b := newTestBarrierOpts(nil, Options{Classifier: (&fakeClassifier{}).Classify})
 			assert.Equal(t, c.want, b.classifyCall(c.mode, c.tool))
 		})
 	}
@@ -1863,7 +1858,7 @@ func TestPrevResetsSessionAllows(t *testing.T) {
 
 	// a grant earned in auto must not survive stepping back into allow-read
 	p := newFakePrompter()
-	b := newTestBarrierOpts(p, withMode(Options{Classifier: &fakeClassifier{verdict: ClassDeny}}, ModeAuto))
+	b := newTestBarrierOpts(p, withMode(Options{Classifier: (&fakeClassifier{verdict: ClassDeny}).Classify}, ModeAuto))
 
 	got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"curl example.com"}`), int(optAllowSession))
 	assert.Equal(t, tools.ActionAllow, got.Action)
@@ -1977,10 +1972,9 @@ func TestPrefetch(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cl := &concurrentClassifier{verdict: ClassAllow}
-			// the session's cached classifier, as main.go wires it: concurrent identical
-			// subjects join one request instead of duplicating it
+			// identical subjects join one request through the barrier's own cache
 			b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
-				Classifier: NewCachedClassifier(cl.Classify), SafeCommands: c.safe}, c.mode))
+				Classifier: cl.Classify, SafeCommands: c.safe}, c.mode))
 			b.Prefetch(t.Context(), c.in)
 			require.Eventually(t, func() bool { return cl.count() == c.want }, time.Second, 10*time.Millisecond)
 		})
@@ -1993,7 +1987,7 @@ func TestPrefetchCancellation(t *testing.T) {
 	// the turn's abort cancels every in-flight prefetched classification
 	t.Run("abort_cancels_batch", func(t *testing.T) {
 		cl := &countingBlockingClassifier{}
-		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl}, ModeAuto))
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 		ctx, cancel := context.WithCancel(t.Context())
 		calls := []agent.ToolCall{bashCall("rm f"), bashCall("git push origin main")}
@@ -2009,7 +2003,11 @@ func TestPrefetchCancellation(t *testing.T) {
 		p := newFakePrompter()
 		stopped := make(chan struct{})
 		b := newTestBarrierOpts(p, withMode(Options{
-			Classifier: NewCachedClassifier((&blockingClassifier{cancel: stopped}).Classify)}, ModeAuto))
+			Classifier: func(ctx context.Context, _ Subject) Class {
+				<-ctx.Done()
+				close(stopped)
+				return ClassUnsure
+			}}, ModeAuto))
 
 		// the turn stays live past the answer, only the answer stopping the request
 		turnCtx, turnCancel := context.WithCancel(t.Context())
@@ -2039,7 +2037,7 @@ func TestPrefetchSkipsSessionAllowed(t *testing.T) {
 	t.Parallel()
 
 	cl := &concurrentClassifier{verdict: ClassAllow}
-	b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl}, ModeAuto))
+	b := newTestBarrierOpts(newFakePrompter(), withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 	// grant "rm" for the session so a later rm call is covered by memory.
 	b.allows["bash:rm"] = true
@@ -2178,7 +2176,7 @@ func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-			b := newTestBarrierOpts(nil, withMode(Options{Classifier: cl}, ModeAuto))
+			b := newTestBarrierOpts(nil, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
 			done := make(chan tools.Decision, 1)
 			go func() {

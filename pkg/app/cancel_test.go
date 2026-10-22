@@ -245,7 +245,7 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 	prompter := newCancelPrompter()
 	b := permit.NewBarrier(func(string) bool { return false }, permit.Options{
 		Mode: permit.ModeAuto, ModeSet: true,
-		Classifier: permit.NewCachedClassifier(adapter.Classify),
+		Classifier: adapter.Classify,
 		Notice:     func(string) {}, // wired unconditionally by both front ends
 		DryRun:     func(agent.ToolCall) error { return nil },
 		Dialogs: &permit.Dialogs{
