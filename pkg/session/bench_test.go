@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -196,6 +197,14 @@ func BenchmarkStoreScan(b *testing.B) {
 			}
 			if len(infos) != 1 {
 				b.Fatalf("got %d sessions, want 1", len(infos))
+			}
+		}
+	})
+	// a miss used to pay a second full directory scan for the damaged hint
+	b.Run("find_miss", func(b *testing.B) {
+		for b.Loop() {
+			if _, err := store.Find(workspace, "no-such-target"); !errors.Is(err, ErrNotFound) {
+				b.Fatalf("expected not-found, got %v", err)
 			}
 		}
 	})

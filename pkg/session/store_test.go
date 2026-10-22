@@ -610,6 +610,19 @@ func TestNameOf(t *testing.T) {
 
 		assert.Equal(t, "renamed", read(t, w))
 	})
+
+	// raw file order decides: a rename sitting before line 1 (hand-built or damaged
+	// transcript) still beats the session entry's own name
+	t.Run("rename_before_session_wins", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		writeLines(t, p, []string{
+			`{"id":"n1","type":"session_name","ts":1700000000000,"data":{"name":"renamed"}}`,
+			`{"id":"root","type":"session","ts":1700000000001,"data":{"version":1}}`,
+		})
+		entries, _, err := Read(p)
+		require.NoError(t, err)
+		assert.Equal(t, "renamed", NameOf(entries))
+	})
 }
 
 func TestValidateName(t *testing.T) {
