@@ -147,6 +147,37 @@ func TestLoad(t *testing.T) {
 		assert.Equal(t, "keep", s.Settings().Model)
 	})
 
+	t.Run("stores_validated_merge", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		writeConfig(t, userPathFor(t), `{"model":"memo-model"}`)
+
+		s, _, err := Load(Options{Workspace: filepath.Join(home, "proj")})
+		require.NoError(t, err)
+
+		// the validating merge is stored, so the first read does not rebuild it
+		assert.True(t, s.valid)
+		assert.Equal(t, "user", s.resolved.Source("model"))
+		assert.Equal(t, "memo-model", s.Settings().Model)
+	})
+
+	// only the flag layer can reach Merge invalid: every file layer is already
+	// guarded by loadFile's own object check
+	t.Run("merge_validation_fails_load", func(t *testing.T) {
+		for _, data := range []string{"null", `[1]`, `{"oops"`} {
+			t.Setenv("AJENT_HOME", t.TempDir())
+
+			s, warns, err := Load(Options{
+				Workspace: t.TempDir(),
+				Flags:     Layer{Name: "flag", Data: []byte(data)},
+			})
+			assert.Nil(t, s)
+			assert.Empty(t, warns)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), `config layer flag`)
+		}
+	})
+
 	t.Run("odd_case_keys_normalize", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)

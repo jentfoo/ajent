@@ -105,9 +105,14 @@ func Load(opts Options) (*Set, []string, error) {
 	s.env = eLayer
 	s.flags = opts.Flags
 
-	if _, err = Merge(s.layers()...); err != nil {
+	resolved, err := Merge(s.layers()...)
+	if err != nil {
 		return nil, warns, fmt.Errorf("config: %w", err)
 	}
+	s.mu.Lock()
+	s.resolved = resolved
+	s.valid = true
+	s.mu.Unlock()
 	return s, warns, nil
 }
 
