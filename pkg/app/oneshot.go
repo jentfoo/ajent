@@ -136,7 +136,7 @@ func RunHeadless(o HeadlessOptions) int {
 	if rec != nil {
 		opts.Sinks = []agent.Sink{rec.rec.Sink(drain)}
 		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
-		_, _, warns := rec.restoreState(o.Set, o.Reg, st, toolsReg)
+		_, warns := rec.restoreState(o.Set, o.Reg, st, toolsReg)
 		for _, w := range warns {
 			notify("resume: "+w, agent.LevelWarn)
 		}

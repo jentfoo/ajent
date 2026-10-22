@@ -429,10 +429,10 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 }
 
 // restoreState rebuilds resumed state into st from the transcript's branch,
-// seeding set with recorded session overrides. It returns entries and head for
-// replay plus resume warnings; a failed read warns through those rather than
+// seeding set with recorded session overrides. It returns that branch, for
+// replay, plus resume warnings; a failed read warns through those rather than
 // resuming as an unannounced empty conversation.
-func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) ([]session.Entry, string, []string) {
+func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) ([]session.Entry, []string) {
 	var entries []session.Entry
 	var rwarns []string
 	snap := r.snapshot
@@ -444,26 +444,27 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		var err error
 		entries, rwarns, err = session.Read(r.w.Path())
 		if err != nil {
-			return nil, "", append(rwarns, "transcript unreadable: "+err.Error())
+			return nil, append(rwarns, "transcript unreadable: "+err.Error())
 		}
 	}
 	if len(entries) == 0 {
-		return nil, "", nil
+		return nil, nil
 	}
 	head := resumeHead(r.w.Head(), entries)
+	branch := session.Branch(entries, head)
 	// stamp the threshold before state resolution so the trigger and context bar
 	// read one number after resume. permissions.mode is dropped (even when an older
 	// session recorded it) so a restart always starts from the configured default.
-	overrides := session.SettingOverrides(session.Branch(entries, head))
+	overrides := session.SettingOverrides(branch)
 	delete(overrides, "permissions.mode")
 	rwarns = append(rwarns, set.SeedSession(overrides)...)
 	applyImagesBlock(set) // a session saved with images blocked resumes blocked
 	resumed := set.Settings()
 	reg.SetCompactDefault(resumed.Compaction.Threshold) // models declaring none pick up the session default
 
-	rebuilt, warns := r.stateFor(modelResolver(reg), entries, head)
+	rebuilt, warns := session.State(branch, modelResolver(reg))
 	if len(rebuilt.Messages) == 0 && rebuilt.Model.ID == "" {
-		return nil, "", append(rwarns, warns...) // a brand-new transcript carries no history yet
+		return nil, append(rwarns, warns...) // a brand-new transcript carries no history yet
 	}
 	st.Messages = rebuilt.Messages
 	if rebuilt.Model.ID != "" {
@@ -486,15 +487,15 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		toolsReg.SetEnabled(resumed.Tools.Enabled)
 	}
 	st.Tokens = rebuilt.Tokens // a resumed ledger reflects the branch's recorded usage
-	return entries, head, append(rwarns, warns...)
+	return branch, append(rwarns, warns...)
 }
 
 func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
-	entries, head, warns := r.restoreState(set, reg, st, toolsReg)
+	branch, warns := r.restoreState(set, reg, st, toolsReg)
 	for _, wmsg := range warns {
 		ui.Notify("resume: "+wmsg, tui.LevelWarn)
 	}
-	if entries == nil {
+	if branch == nil {
 		return
 	}
 	// the restored model drives turns and preselects in /model, so the registry
@@ -508,7 +509,7 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	if pal, ok := tui.LookupPalette(set.Settings().UI.Theme); ok {
 		ui.SetTheme(pal)
 	}
-	session.Replay(session.Branch(entries, head), replaySink(ui), session.ReplayOptions{})
+	session.Replay(branch, replaySink(ui), session.ReplayOptions{})
 }
 
 func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
@@ -516,10 +517,6 @@ func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		return
 	}
 	ui.SetOnRewind(func() { r.rewind(ui, ag, reg) })
-}
-
-func (r *sessRec) stateFor(resolve func(string) (llm.Model, error), entries []session.Entry, head string) (agent.State, []string) {
-	return session.State(session.Branch(entries, head), resolve)
 }
 
 // errTurnRunning reports a refused state swap: a turn claimed the loop between
@@ -539,7 +536,7 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 			return err
 		}
 		var warns []string
-		rebuilt, warns = r.stateFor(modelResolver(reg), entries, head)
+		rebuilt, warns = session.State(session.Branch(entries, head), modelResolver(reg))
 		for _, wmsg := range warns {
 			ui.Notify(prefix+wmsg, tui.LevelWarn)
 		}

@@ -149,7 +149,7 @@ func TestForkToRefusedAfterSwitch(t *testing.T) {
 	assert.Equal(t, "m", live.ID)
 
 	// the branch still resolves its model once the turn ends
-	rebuilt, _ := r.stateFor(modelResolver(reg), entries, w.Head())
+	rebuilt, _ := session.State(session.Branch(entries, w.Head()), modelResolver(reg))
 	assert.Equal(t, "p/a", rebuilt.Model.Key())
 }
 

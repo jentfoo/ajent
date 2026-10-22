@@ -99,13 +99,13 @@ func TestRewindStateRebuild(t *testing.T) {
 
 	// rewind onto the *first user message* (index 1). Context is just that
 	// prompt, because rewinding drops everything after the pick.
-	st, _ := r.stateFor(rewindResolve(), entries, branch[1].ID)
+	st, _ := session.State(session.Branch(entries, branch[1].ID), rewindResolve())
 	require.Len(t, st.Messages, 1)
 	assert.Equal(t, llm.RoleUser, st.Messages[0].Role)
 	assert.Equal(t, "one", textOf(st.Messages[0]))
 
 	// rewinding onto the tip keeps the full chain.
-	stTip, _ := r.stateFor(rewindResolve(), entries, branch[len(branch)-1].ID)
+	stTip, _ := session.State(session.Branch(entries, branch[len(branch)-1].ID), rewindResolve())
 	require.Len(t, stTip.Messages, 2) // "one" + its assistant reply
 	assert.Equal(t, llm.RoleAssistant, stTip.Messages[1].Role)
 
@@ -1416,8 +1416,8 @@ func TestRestoreStateReadFailure(t *testing.T) {
 		require.NoError(t, os.Remove(p))
 
 		var st agent.State
-		entries, _, warns := r.restoreState(nil, nil, &st, nil)
-		assert.Nil(t, entries)
+		branch, warns := r.restoreState(nil, nil, &st, nil)
+		assert.Nil(t, branch)
 		require.Len(t, warns, 1)
 		assert.Contains(t, warns[0], "transcript unreadable")
 	})
@@ -1431,8 +1431,8 @@ func TestRestoreStateReadFailure(t *testing.T) {
 		require.NoError(t, os.Truncate(p, 0)) // readable but holds no lines
 
 		var st agent.State
-		entries, _, warns := r.restoreState(nil, nil, &st, nil)
-		assert.Nil(t, entries)
+		branch, warns := r.restoreState(nil, nil, &st, nil)
+		assert.Nil(t, branch)
 		assert.Empty(t, warns)
 	})
 }
@@ -1525,11 +1525,10 @@ func TestNewSessionSeedsSnapshot(t *testing.T) {
 
 	// the startup rebuild consumes the snapshot and restores its messages
 	st := &agent.State{Tokens: tokens.New(llm.Model{})}
-	entries, head, warns := rec.restoreState(set, reg, st, nil)
+	branch, warns := rec.restoreState(set, reg, st, nil)
 	require.Empty(t, warns)
 	assert.Equal(t, snapshot{}, rec.snapshot)
-	assert.Equal(t, want, entries)
-	assert.NotEmpty(t, head)
+	assert.Equal(t, want, branch) // a linear transcript: the branch is every entry
 	assert.Len(t, st.Messages, 2)
 	assert.Equal(t, rec.hint, sessionHint(rec)) // the root id outlives the snapshot
 }
@@ -1570,7 +1569,7 @@ func TestResumeSurfacesSnapshotWarnings(t *testing.T) {
 	t.Cleanup(func() { _ = rec.w.Close() })
 
 	st := &agent.State{Tokens: tokens.New(llm.Model{})}
-	_, _, warns := rec.restoreState(set, reg, st, nil)
+	_, warns := rec.restoreState(set, reg, st, nil)
 	assert.NotEmpty(t, warns, "the open-time parse must carry Read's per-line warnings")
 }
 
@@ -1603,22 +1602,29 @@ func TestResumeSeesConcurrentAppend(t *testing.T) {
 	t.Cleanup(func() { _ = rec.w.Close() })
 	require.NotEmpty(t, rec.snapshot.entries)
 
-	// a second ajent on the same transcript appends after our open-time parse
+	// a second ajent on the same transcript appends after our open-time parse,
+	// then a corrupt line lands behind it
 	other, oerr := session.Open(seed.Path())
 	require.NoError(t, oerr)
 	_, aerr = other.Append(session.TypeMessage,
 		session.MessageData{Message: llm.Text(llm.RoleUser, "theirs")})
 	require.NoError(t, aerr)
 	require.NoError(t, other.Close())
+	f, ferr := os.OpenFile(seed.Path(), os.O_APPEND|os.O_WRONLY, 0o600)
+	require.NoError(t, ferr)
+	_, werr := f.WriteString("{not json}\n")
+	require.NoError(t, werr)
+	require.NoError(t, f.Close())
 
-	// the rebuild must notice the growth and re-read: the returned entries see
-	// the concurrent append, while the restored branch still follows this
-	// writer's head (the last-writer-wins cursor), leaving theirs one rewind away
 	st := &agent.State{Tokens: tokens.New(llm.Model{})}
-	entries, _, warns := rec.restoreState(set, reg, st, nil)
-	require.Empty(t, warns)
-	require.NotEmpty(t, entries)
-	assert.True(t, slices.ContainsFunc(entries, func(e session.Entry) bool {
+	branch, warns := rec.restoreState(set, reg, st, nil)
+	// the rebuild must notice the growth and re-read: only a live parse sees the
+	// unparseable tail, so a stale-snapshot rebuild would restore silently
+	assert.NotEmpty(t, warns)
+	require.NotEmpty(t, branch)
+	// the restored branch follows this writer's head (the last-writer-wins
+	// cursor), leaving theirs one rewind away
+	assert.False(t, slices.ContainsFunc(branch, func(e session.Entry) bool {
 		return e.ID == other.Head()
 	}))
 	assert.True(t, slices.ContainsFunc(st.Messages, func(m llm.Message) bool {
