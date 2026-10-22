@@ -187,10 +187,16 @@ The store:
   actually left in progress rather than an abandoned fork. A newer-format
   transcript appears too, marked `Blocked`, so it never reads as absent. A
   transcript that holds no session entry is not a session and never lists, so
-  an id-less file can never surface as a resumable row.
+  an id-less file can never surface as a resumable row. Nor does one whose
+  every `session` line fails to decode: that marks the file `Damaged`, and
+  listing drops the row.
 - **Find** resolves `--resume`/`--delete` targets: exact id first, then a unique
-  id prefix, and names match exactly only. Ambiguity at any step fails with a clear
-  error naming the candidates (see "Resume modes").
+  id prefix, and names match exactly only. Ambiguity at any step fails with
+  a clear error naming the candidates (see "Resume modes"). A target matching
+  no row falls back to resolving it as a file path inside the workspace's
+  session directory, which is how a damaged transcript stays reachable:
+  deletion needs no decode, and a miss names any damaged files present so
+  hidden never reads as absent.
 - **NameConflict** is naming's one rule: a name is usable iff `Find` reaches
   nothing, or reaches the session being named. Names are kept narrower than the
   printable set so the exit hint's resume command is never refused at the door.
@@ -243,15 +249,20 @@ land as recall rows for ↑/↓ + Ctrl+R. An included `!` run lands as one
 **injected** user-message entry when flushed, never a typed-prompt entry.
 Prompts appear in both.
 
-The store is append-only at submit time: `EditorHistory.Append` trims trailing
-CRs, drops blank and secret-prefixed messages (the pasted-secret invariant),
-then one atomic `O_APPEND` write of the JSON row. A single short write never
-interleaves bytes, so concurrent agents on one workspace cannot corrupt it;
-different workspaces are different files. Every append is durable before recall,
-so a line lives only on disk, and an append that fails to persist is held back in a
-queue capped at the same line budget as recall, and retried by the next
-compaction. A retry that fails keeps the queue, so the lines stay recallable
-this session rather than being dropped by the failed rewrite.
+The store is append-only at submit time. Whether a submission counts as
+secret-bearing is decided **once, on the form that reaches the transcript**: the
+driver tests the classified prompt line (`line.Rest`) before appending, and
+`EditorHistory.Append` re-tests every raw line after stripping its editor
+escape, so an escaped `" secret:…"` cannot reach the durable file in either
+layer. Append then trims trailing CRs, drops blank and secret-bearing
+messages (the pasted-secret invariant), and makes one atomic `O_APPEND` write of
+the JSON row. A single short write never interleaves bytes, so concurrent agents
+on one workspace cannot corrupt it. Different workspaces are different files.
+Every append is durable before recall, so a line lives only on disk, and an
+append that fails to persist is held back in a queue capped at the same line
+budget as recall, and retried by the next compaction. A retry that fails keeps
+the queue, so the lines stay recallable this session rather than being dropped
+by the failed rewrite.
 
 Most rows are bare JSON strings (visible). Argv bootstrap prompts (`ajent
 "prompt"`) and the `-p` one-shot record like typed lines: visible in ↑/↓ and
@@ -271,16 +282,20 @@ merge local appends, dedup + cap, replace. It takes **no lock**, so last writer
 wins. Losing at most a few messages in the read→rename window is accepted over
 flocking the every-message append path. Rows that are not valid JSON
 (hand-edited or plain-text leftovers) decode literally, so the file stays
-human-edit friendly. Compaction also runs once on exit and
-writes nothing when there is no message to persist,
-so an idle workspace never gains a phantom empty file.
+human-edit friendly. Compaction also runs once on exit and writes nothing when
+there are no rows at all, so an idle workspace never gains a phantom empty file,
+while a file whose every row was dropped is emptied instead of left holding
+excluded values.
 
 `RecallIndex` unifies recall onto one source: every typed message first, then
 any recorded prompt not already present (backfilling older transcripts). It
 reuses the `Prompt` type, and a typed-only line carries no timestamp. The
-pasted-secret invariant spans both sources: editor history drops secret-prefixed
+pasted-secret invariant spans both sources: editor history drops secret-bearing
 input at append time and both prompt indexes drop it at read time, so one
 surface cannot resurface what the other hides.
+Normalization re-applies the stripped-form test to every stored row, so rows an
+older build wrote raw heal out of recall on first read and out of the file at
+the next compaction.
 
 ## Reading and rebuilding
 
@@ -459,8 +474,8 @@ opens and exit, like `--version` and `--update`.
 
 | Invocation | Behaviour |
 |---|---|
-| `--delete <id\|name>` | removes that one transcript, resolved through the same `Find` as `--resume` (exact name, full id, unique id prefix). No prompt: the user named one session. A newer-format transcript resolves too, since deletion needs no decode and it is the only way to free its name from here |
-| `--delete-old [days]` | lists every unnamed session unused for 28 days (or the given window), asks to confirm, then removes them, excluding newer-format sessions |
+| `--delete <id\|name>` | removes that one transcript, resolved through the same `Find` as `--resume` (exact name, full id, unique id prefix). No prompt: the user named one session. A newer-format transcript resolves too, since deletion needs no decode and it is the only way to free its name from here. A path inside the session directory also resolves, so a `Damaged` transcript stays removable even though it never lists |
+| `--delete-old [days]` | lists every unnamed session unused for 28 days (or the given window), asks to confirm, then removes them, excluding newer-format sessions, while damaged transcripts never list and so are never swept |
 
 A name is the signal that a session is worth keeping, so `--delete-old` never
 sweeps one. That is the same argument that exempts a named session from the

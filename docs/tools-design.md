@@ -508,9 +508,11 @@ Off-by-default extras for no-shell agents.
   default match cap with a named note, never silently, and surfaces stderr from an
   underlying tool as an error. The rg path and the Go fallback share one output
   contract (filenames always attributed, root-relative paths, rg's exact line
-  shape `path:line:text` with `path-line-text` context and `--` block breaks,
-  cap notes counting matches rather than output lines), so results read
-  identically whichever engine ran.
+  shape `path:line:text` with `path-line-text` context and `--` block breaks
+  only when context lines were requested, every matching line marked a match
+  even when an earlier match's context reached it first, cap notes counting
+  matches rather than output lines), so results read identically whichever
+  engine ran.
 - Both spill their complete result when the bound cuts it, so the model can page
   the rest recoverably rather than losing it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via

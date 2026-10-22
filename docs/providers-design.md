@@ -660,6 +660,8 @@ reasoning on turns without tool calls.
   out of room, and an absent reason keeps the safe truncation default.
   Chat-completions maps its `content_filter` finish the same way, while
   unknown stop reasons keep the `EndTurn` default on every dialect.
+  Stop-reason matching folds wire-spelling case on every dialect, so a
+  capitalised variant classifies identically.
 - Function tools carry explicit `strict: false` under the strict gate, and a
   grammar turns one into a `custom` tool.
 - A result's `AddedToolNames` materialize right after its output: an
