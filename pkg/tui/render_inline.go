@@ -219,11 +219,12 @@ func (r *inlineRenderer) composeRows(b *strings.Builder, diff bool) []string {
 			emitted[i] = prev[i] // unchanged input at this width: nothing to recompute
 			continue
 		}
-		row = truncateDisplay(sanitizeRow(row), width)
+		row, w := truncateDisplayW(sanitizeRow(row), width)
 		if i == r.caretRow {
 			row = paintCaret(row, r.caretCol, width)
+			w = displayWidth(row) // the painted caret can pad past the truncated text
 		}
-		emitted[i], widths[i] = row, displayWidth(row)
+		emitted[i], widths[i] = row, w
 		if !diff || i >= len(prev) || prev[i] != row {
 			b.WriteString(row)
 			if diff {

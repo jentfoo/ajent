@@ -137,37 +137,41 @@ func paintCaret(row string, col, maxW int) string {
 
 // truncateDisplay returns s limited to max columns, keeping escape sequences intact.
 func truncateDisplay(s string, max int) string {
+	out, _ := truncateDisplayW(s, max)
+	return out
+}
+
+// truncateDisplayW is truncateDisplay with the display width of what it emits,
+// so a caller that needs both does not re-measure. The width describes out:
+// truncation can land short of max when no whole cluster fits.
+func truncateDisplayW(s string, max int) (string, int) {
 	if max <= 0 {
-		return ""
-	} else if displayWidth(s) <= max {
-		return s
+		return "", 0
 	}
-	var b strings.Builder
-	var w int
+	var w, off int // emitted columns; bytes of s before the current segment
 	var styled bool
 	for _, seg := range splitANSI(s) {
 		if seg.escape {
 			styled = true
-			b.WriteString(seg.text)
+			off += len(seg.text)
 			continue
 		}
 		g := uniseg.NewGraphemes(seg.text)
 		for g.Next() {
 			cw := uniseg.StringWidth(g.Str())
 			if w+cw > max {
+				start, _ := g.Positions()
+				out := s[:off+start]
 				if styled {
-					b.WriteString(sgrReset)
+					out += sgrReset
 				}
-				return b.String()
+				return out, w
 			}
 			w += cw
-			b.WriteString(g.Str())
 		}
+		off += len(seg.text)
 	}
-	if styled {
-		b.WriteString(sgrReset)
-	}
-	return b.String()
+	return s, w // nothing cut: s fits and w is its width
 }
 
 // GraphemeCells splits s into grapheme clusters, one cell per element.

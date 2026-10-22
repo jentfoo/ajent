@@ -417,12 +417,11 @@ func tableRowGroup(cells [][]string, w []int, al []mdAlign) []string {
 // padLine pads s to width columns honoring a column alignment. Styling is already
 // baked into s, and the appended spaces are plain. Content wider than w (a single
 // grapheme the wrapper cannot cut) clips here; truncation can land short of w,
-// so the clipped result re-measures to keep every slot exactly w columns.
+// so its returned width keeps every slot exactly w columns.
 func padLine(s string, w int, a mdAlign) string {
 	sw := displayWidth(s)
 	if sw > w {
-		s = truncateDisplay(s, w)
-		sw = displayWidth(s)
+		s, sw = truncateDisplayW(s, w)
 	}
 	switch a {
 	case alignCenter:

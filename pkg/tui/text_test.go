@@ -58,6 +58,56 @@ func TestTruncateDisplay(t *testing.T) {
 	})
 }
 
+func TestTruncateDisplayW(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   string
+		max  int
+		out  string
+		w    int
+	}{
+		{"empty", "", 5, "", 0},
+		{"fits_unchanged", "hello", 10, "hello", 5},
+		{"zero_max_empty", "hello", 0, "", 0},
+		{"cuts_to_width", "hello", 3, "hel", 3},
+		{"styled_cut_resets", "\x1b[1mhello\x1b[0m", 3, "\x1b[1mhel\x1b[0m", 3},
+		// a fitting string comes back untouched: no spurious reset is appended
+		{"styled_fit_untouched", "\x1b[1mhi\x1b[0m", 10, "\x1b[1mhi\x1b[0m", 2},
+		// Ａ costs two columns: no whole cluster fits the last one, so the
+		// emitted width lands short of max
+		{"wide_rune_lands_short", "ＡＢＣ", 3, "Ａ", 2},
+		{"escapes_only_fit", "\x1b[1m", 4, "\x1b[1m", 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out, w := truncateDisplayW(tc.in, tc.max)
+			assert.Equal(t, tc.out, out)
+			assert.Equal(t, tc.w, w)
+		})
+	}
+
+	// the width must describe what is emitted at every cut point, not just the
+	// ones the table covers
+	t.Run("width_matches_output", func(t *testing.T) {
+		for _, in := range []string{
+			"plain text",
+			"\x1b[2;48;5;236mstyled row\x1b[0m tail after a reset",
+			"\u0301abc\u0301def", // zero-width clusters keep the budget on the bases
+			"\U0001F468\u200d\U0001F469 family \u4e16\u754c",
+			"tab\tthere\x1b[2Bboom",
+			"\x1b]0;title\x07osc tail",
+		} {
+			for limit := 0; limit <= displayWidth(in)+2; limit++ {
+				out, w := truncateDisplayW(in, limit)
+				assert.Equal(t, truncateDisplay(in, limit), out, "input %q at %d", in, limit)
+				assert.Equal(t, displayWidth(out), w, "input %q at %d", in, limit)
+			}
+		}
+	})
+}
+
 func TestGraphemesOf(t *testing.T) {
 	t.Parallel()
 

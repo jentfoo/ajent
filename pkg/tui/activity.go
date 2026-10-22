@@ -20,8 +20,8 @@ func shadeRow(st Style, text string, w int) string {
 		return truncateDisplay(sanitizeRow(text), max(w-1, 1))
 	}
 	sw := max(w-1, 1)
-	body := truncateDisplay(sanitizeRow(text), sw)
-	fill := sw - displayWidth(body)
+	body, bw := truncateDisplayW(sanitizeRow(text), sw)
+	fill := sw - bw
 	var b strings.Builder
 	b.WriteString(open)
 	b.WriteString(body)
