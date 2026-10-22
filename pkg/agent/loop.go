@@ -411,11 +411,14 @@ func (a *Agent) stream(ctx context.Context, sink Sink) (llm.Message, llm.Usage, 
 		return llm.Message{}, llm.Usage{}, 0, err
 	}
 	req := llm.Prepare(a.buildRequest()) // prepare once, providers re-run it as a no-op
-	// the request is already normalized, so estimate the prepared messages directly
-	predicted := tokens.EstimateFixed(req) + tokens.EstimateMessages(req.Messages)
+	// the request is already normalized, so estimate the prepared messages directly.
+	// fixed also seeds the ledger base below; EstimateFixed tokenizes the whole
+	// system block plus every tool schema, so it runs once per call.
+	fixed := tokens.EstimateFixed(req)
+	predicted := fixed + tokens.EstimateMessages(req.Messages)
 	// the system prompt and tool schemas are built into every request, so they
 	// must occupy context from the very first turn, not just after an exact report.
-	a.state.Tokens.SetBase(tokens.EstimateFixed(req)) // replaced, so it self-corrects any seeded floor
+	a.state.Tokens.SetBase(fixed) // replaced, so it self-corrects any seeded floor
 	keepThink := llm.ResolveRetain(a.state.Reasoning.Retain, a.state.Model.Caps) != llm.RetainNone
 	// report the ledger only for the outcome the caller sees, a retried attempt's
 	// partial usage never lands, its streamed output already moved the bar
@@ -590,7 +593,7 @@ func (a *Agent) forward(sink Sink, keepThink bool, prog *toolProgress, ev llm.Ev
 func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlock) ([]llm.ToolResultBlock, bool) {
 	ordered := make([]ToolCall, len(calls))
 	for i, c := range calls {
-		ordered[i] = callFrom(c)
+		ordered[i] = ToolCall{ID: c.ID, Name: c.Name, Input: c.Input}
 	}
 	if fn := a.opts.OnToolBatch; fn != nil {
 		// the last point the batch is still in message order, the parallel path below
@@ -618,29 +621,29 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	if parallel {
 		sem := make(chan struct{}, runtime.NumCPU())
 		var wg sync.WaitGroup
-		for i, c := range calls {
+		for i := range calls {
 			if ctx.Err() != nil {
 				break // a cancelled batch leaves the rest unanswered, abort fills them
 			}
 			wg.Add(1)
-			go func(i int, c llm.ToolCallBlock) {
+			go func(i int, c ToolCall) {
 				defer wg.Done()
 				defer func() { // a panicked runTool still releases its slot
 					<-sem
 				}()
 				sem <- struct{}{}
-				out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
-			}(i, c)
+				out[i], ends[i] = a.runTool(ctx, sink, c)
+			}(i, ordered[i])
 		}
 		wg.Wait()
 		return out, slices.Contains(ends, true)
 	}
 
-	for i, c := range calls {
+	for i, c := range ordered {
 		if ctx.Err() != nil {
 			break // a cancelled batch leaves the rest unanswered, abort fills them
 		}
-		out[i], ends[i] = a.runTool(ctx, sink, callFrom(c))
+		out[i], ends[i] = a.runTool(ctx, sink, c)
 	}
 	return out, slices.Contains(ends, true)
 }
@@ -781,11 +784,6 @@ func (a *Agent) syncContext(force bool) {
 // which is when the loop recounts after appending instead of trusting an estimate.
 func needsRecount(caps llm.Capabilities, u llm.Usage) bool {
 	return tokens.Zero(u) && caps.Tokenizer == llm.TokenizerRemoteTokenize
-}
-
-// callFrom adapts a model tool-call block into the agent's ToolCall.
-func callFrom(c llm.ToolCallBlock) ToolCall {
-	return ToolCall{ID: c.ID, Name: c.Name, Input: c.Input}
 }
 
 // allParallel reports whether every requested tool allows parallel execution.
