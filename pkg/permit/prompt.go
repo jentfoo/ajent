@@ -57,37 +57,20 @@ const (
 	optDeny                // refuse with an optional reason
 )
 
-// plainLabels serve tool-name session memory for non-shell calls, while a bash line with
-// nameable heads gets its own per-command label instead.
-var plainLabels = []string{
-	"Allow",
-	"Allow with note",
-	"Allow for session",
-	"Deny",
-}
-
-// bareLabels serve a line no session grant can cover (redirect, substitution,
-// unnameable head): allowing it never generalizes, so no memory option is offered.
-var bareLabels = []string{
-	"Allow",
-	"Allow with note",
-	"Deny",
-}
-
 // optionsFor returns the dialog's labels and their action mapping for a tool
 // call, kept index-aligned so resolveChoice maps a rendered choice back to its
 // opt constant. A bash line no grant can cover (compound, substitution or an
 // unnameable head) offers no session memory: allowing it never generalizes.
 func optionsFor(name, command string) ([]string, []int) {
 	if name != tools.ToolBash { // a tool remembers under its own name
-		return slices.Clone(plainLabels),
+		return []string{"Allow", "Allow with note", namedSessionLabel([]string{name}), "Deny"},
 			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
 	if names, ok := sessionNames(command); ok && len(names) > 0 {
 		return []string{"Allow", "Allow with note", namedSessionLabel(names), "Deny"},
 			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
 	}
-	return slices.Clone(bareLabels), []int{optAllow, optAllowNote, optDeny}
+	return []string{"Allow", "Allow with note", "Deny"}, []int{optAllow, optAllowNote, optDeny}
 }
 
 // buildOptions returns the option labels an approval dialog offers for a tool call.
@@ -103,10 +86,10 @@ func optionActions(name, command string) []int {
 	return actions
 }
 
-// namedSessionLabel renders the allow-for-session option over the named commands:
-// "Allow `ifconfig` for session" / "Allow `rm` and `mkdir` for session", lists past
-// three eliding into "and N more". The bash tool prefix is dropped since only
-// shell commands reach here.
+// namedSessionLabel renders the allow-for-session option over the session
+// names: "Allow `ifconfig` for session" / "Allow `rm` and `mkdir` for session",
+// lists past three eliding into "and N more". Bash callers pass command heads,
+// other tools their tool name.
 func namedSessionLabel(names []string) string {
 	const maxShown = 3
 	shown, more := names, 0

@@ -71,6 +71,15 @@ func TestBuildOptions(t *testing.T) {
 			assert.Equal(t, "Deny", opts[len(opts)-1], c.in)
 		}
 	}
+
+	// non-shell tools remember under their own name, in bash's backtick style
+	for _, name := range []string{"edit", "write"} {
+		opts := buildOptions(name, "")
+		actions := optionActions(name, "") // labels and actions stay aligned
+		assert.Len(t, opts, 4)
+		assert.Len(t, actions, 4)
+		assert.Equal(t, "Allow `"+name+"` for session", opts[optAllowSession])
+	}
 }
 
 func TestAllowSessionKey(t *testing.T) {
