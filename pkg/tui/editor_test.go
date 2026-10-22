@@ -418,10 +418,18 @@ func TestEditorKill(t *testing.T) {
 		assert.Equal(t, 3, e.pos)
 	})
 
-	t.Run("nonempty_line_tail_is_noop", func(t *testing.T) {
+	t.Run("nonempty_row_end_joins_below", func(t *testing.T) {
 		e := newEditorAt("hello\nworld", 5)
 		e.KillToLineEnd(wide)
-		assert.Equal(t, "hello\nworld", e.Value())
+		assert.Equal(t, "helloworld", e.Value())
+		assert.Equal(t, 5, e.pos)
+	})
+
+	t.Run("wrap_break_tail_is_noop", func(t *testing.T) {
+		// the caret at a wrapped row's end sits on the dropped break space
+		e := newEditorAt("hello world", 5)
+		e.KillToLineEnd(9) // wraps to [hello][world]
+		assert.Equal(t, "hello world", e.Value())
 		assert.Equal(t, 5, e.pos)
 	})
 

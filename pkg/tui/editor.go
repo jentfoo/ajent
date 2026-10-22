@@ -176,10 +176,10 @@ func (e *editor) LineEnd(width int) {
 }
 
 // KillToLineEnd clears from the cursor to the end of the current visual row
-// (the wrapped line on screen), leaving the caret where it was. An already-
-// empty line is removed like Delete: the newline in front of the caret goes,
-// the line below joins at the caret, and the caret stays put. A trailing empty
-// line joins the one above instead. A non-empty row tail is a no-op.
+// (the wrapped line on screen), leaving the caret where it was. A caret sitting
+// on a newline removes it like Delete: an empty row joins the line below and
+// the end of a non-empty row pulls the next line up. A trailing empty line
+// joins the one above instead.
 func (e *editor) KillToLineEnd(width int) {
 	starts, ends := e.layout(width)
 	r := e.displayRow(starts, ends)
@@ -195,10 +195,10 @@ func (e *editor) KillToLineEnd(width int) {
 			from--
 		}
 		e.cells = slices.Delete(e.cells, from, ends[r]) // caret unmoved: content below joins at it
-	case e.lineStart(e.pos) != e.pos: // text before the cursor: nothing to clear
-	case e.pos < len(e.cells): // empty line: delete joins the line below at the caret
+	case e.pos < len(e.cells) && e.cells[e.pos] == "\n": // newline under the caret: join the line below
 		e.saveUndo()
 		e.cells = slices.Delete(e.cells, e.pos, e.pos+1) // cells[pos] is the newline
+	case e.lineStart(e.pos) != e.pos: // wrap break or buffer end: nothing to clear
 	case e.pos > 0: // trailing empty line: join the line above
 		e.saveUndo()
 		e.cells = slices.Delete(e.cells, e.pos-1, e.pos)
