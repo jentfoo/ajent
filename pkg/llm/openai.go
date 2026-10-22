@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,7 +210,7 @@ func responsesItems(m Message, caps Capabilities, schemaByName map[string]ToolSc
 				return nil, errors.New("llm: model does not accept image input")
 			}
 			content = append(content, respContent{Type: respInputImage,
-				ImageURL: "data:" + v.MediaType + ";base64," + base64.StdEncoding.EncodeToString(v.Data)})
+				ImageURL: imageDataURL(v.MediaType, v.Data)})
 		case ThinkingBlock:
 			flushMessage()
 			switch {
@@ -257,13 +256,9 @@ func toolResultOutput(caps Capabilities, blocks BlockList) any {
 	if text != "" {
 		parts = append(parts, respContent{Type: respInputText, Text: text})
 	}
-	for _, b := range blocks {
-		img, ok := b.(ImageBlock)
-		if !ok {
-			continue
-		}
-		url := "data:" + img.MediaType + ";base64," + base64.StdEncoding.EncodeToString(img.Data)
-		parts = append(parts, respContent{Type: respInputImage, ImageURL: url})
+	for _, img := range ImageBlocks(blocks) {
+		parts = append(parts, respContent{Type: respInputImage,
+			ImageURL: imageDataURL(img.MediaType, img.Data)})
 	}
 	return parts
 }

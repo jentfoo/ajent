@@ -351,7 +351,7 @@ func compatContent(blocks BlockList, caps Capabilities) ([]compatPart, string, e
 			parts = append(parts, compatPart{Type: "text", Text: v.Text})
 		case ImageBlock:
 			parts = append(parts, compatPart{Type: "image_url", ImageURL: &compatImageURL{
-				URL: "data:" + v.MediaType + ";base64," + base64.StdEncoding.EncodeToString(v.Data),
+				URL: imageDataURL(v.MediaType, v.Data),
 			}})
 		}
 	}
@@ -383,6 +383,12 @@ func blocksText(blocks BlockList) string {
 		}
 	}
 	return strings.Join(texts, "\n")
+}
+
+// imageDataURL renders an image as the base64 data URL both OpenAI dialects
+// carry inline images in.
+func imageDataURL(mediaType string, data []byte) string {
+	return "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(data)
 }
 
 // compatTools converts tool schemas to the chat-completions wire form. When

@@ -1149,6 +1149,25 @@ func TestCompatErrObjCodeString(t *testing.T) {
 	}
 }
 
+func TestImageDataURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		mediaType string
+		data      []byte
+		want      string
+	}{
+		{"png_bytes", "image/png", []byte{1, 2, 3}, "data:image/png;base64,AQID"},
+		{"empty_media_and_data", "", nil, "data:;base64,"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, imageDataURL(tc.mediaType, tc.data))
+		})
+	}
+}
+
 // TestThinkTagReplayField pins the ingest rule end to end: reasoning that
 // arrived inside content tags carries the configured replay field, so the
 // request after a tool result sends it back instead of dropping it.
