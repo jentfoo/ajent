@@ -145,11 +145,7 @@ func newPlanController(d planDeps) *plan.Controller {
 
 		SetInput: d.ui.SetInput,
 		Ask: func(ctx context.Context, q string, opts []string) (int, error) {
-			options := make([]tui.Option, len(opts))
-			for i, o := range opts {
-				options[i] = tui.Option{Label: o}
-			}
-			return d.ui.SelectContext(ctx, q, options)
+			return d.ui.SelectContext(ctx, q, tuiOptions(opts))
 		},
 		Notify: func(msg string, level agent.Level) { d.ui.Notify("plan: "+msg, tui.Level(level)) },
 		Status: func(text, short string) {
@@ -254,11 +250,7 @@ func askUser(ui *tui.UI) tools.AskFunc {
 		if ui == nil || ui.Mode() == tui.ModePlain {
 			return 0, "", false, tui.ErrNoUI
 		}
-		options := make([]tui.Option, len(opts))
-		for i, o := range opts {
-			options[i] = tui.Option{Label: o}
-		}
-		ans, err := ui.Ask(ctx, tui.Question{Text: question, Options: options})
+		ans, err := ui.Ask(ctx, tui.Question{Text: question, Options: tuiOptions(opts)})
 		if err != nil {
 			return 0, "", false, err
 		} else if ans.Chat { // replied in their own words rather than choosing

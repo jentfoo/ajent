@@ -20,6 +20,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
+	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
 // uiConsole implements command.Console over the objects the driver already
@@ -320,14 +321,7 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 	c.st.Model = m // compactor.run reads the threshold from here
 	t := c.st.Tokens
 	t.SetWindow(m) // keeps every context term, SetModel would blank the bar
-	cs := t.Context()
-	c.ui.SetContext(tui.ContextInfo{
-		Used:      cs.Used,
-		Window:    cs.Window,
-		Reserve:   cs.Reserve,
-		Compact:   cs.Compact,
-		Estimated: cs.Estimated,
-	})
+	c.ui.SetContext(tuisink.ContextInfo(t.Context()))
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
@@ -366,14 +360,7 @@ func (c *uiConsole) applyModel(m llm.Model) {
 	// smaller window must reflect that it now overflows, or threshold auto-compaction
 	// could never fire on this model.
 	t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
-	cs := t.Context()
-	c.ui.SetContext(tui.ContextInfo{
-		Used:      cs.Used,
-		Window:    cs.Window,
-		Reserve:   cs.Reserve,
-		Compact:   cs.Compact,
-		Estimated: cs.Estimated,
-	})
+	c.ui.SetContext(tuisink.ContextInfo(t.Context()))
 	// record a session override so Explain and Settings report (session). The
 	// user-layer persist is the direct /model command's job, not this apply.
 	_ = c.set.SetSession("model", m.Key())

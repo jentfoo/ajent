@@ -595,11 +595,7 @@ func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
 	if ui == nil {
 		return
 	}
-	cs := t.Context()
-	ui.SetContext(tui.ContextInfo{
-		Used: cs.Used, Window: cs.Window, Reserve: cs.Reserve,
-		Compact: cs.Compact, Estimated: cs.Estimated,
-	})
+	ui.SetContext(tuisink.ContextInfo(t.Context()))
 }
 
 // liveModel captures the live model for a switch to keep across a rebuild. ok

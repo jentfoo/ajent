@@ -144,13 +144,21 @@ func (s *Sink) Usage(llm.Usage) {}
 
 // Context updates the context bar from the ledger's snapshot.
 func (s *Sink) Context(c tokens.ContextState) {
-	s.ui.SetContext(tui.ContextInfo{
+	s.ui.SetContext(ContextInfo(c))
+}
+
+// ContextInfo maps a ledger's context snapshot onto tui's view model, shared by
+// callers outside this package. Its field list is pinned against
+// tokens.ContextState by TestContextInfo, so a new term fails there until the
+// conversion propagates it.
+func ContextInfo(c tokens.ContextState) tui.ContextInfo {
+	return tui.ContextInfo{
 		Used:      c.Used,
 		Window:    c.Window,
 		Reserve:   c.Reserve,
 		Compact:   c.Compact,
 		Estimated: c.Estimated,
-	})
+	}
 }
 
 // Notice surfaces a message at the matching severity.

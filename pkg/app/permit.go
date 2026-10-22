@@ -28,11 +28,7 @@ func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Di
 	if a.ui.Mode() == tui.ModePlain { // nobody to ask in headless/piped mode
 		return nil, tui.ErrNoUI
 	}
-	opts := make([]tui.Option, len(options))
-	for i, o := range options {
-		opts[i] = tui.Option{Label: o}
-	}
-	d := a.ui.OpenDecision(tui.DecisionRequest{Prompt: prompt, Context: subject, Options: opts})
+	d := a.ui.OpenDecision(tui.DecisionRequest{Prompt: prompt, Context: subject, Options: tuiOptions(options)})
 	return decisionAdapter{d}, nil
 }
 

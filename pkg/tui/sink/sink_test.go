@@ -2,6 +2,7 @@ package sink
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -60,6 +62,43 @@ func (h *headlessUI) rendered() string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return strings.Clone(h.out.String())
+}
+
+// TestContextInfo pins ContextInfo's field list against tokens.ContextState, so
+// a new ledger term fails here until the conversion propagates it.
+func TestContextInfo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fields_track_context_state", func(t *testing.T) {
+		src, dst := reflect.TypeFor[tokens.ContextState](), reflect.TypeFor[tui.ContextInfo]()
+		require.Equal(t, src.NumField(), dst.NumField())
+		for i := range src.NumField() {
+			assert.Equal(t, src.Field(i).Name, dst.Field(i).Name)
+			assert.Equal(t, src.Field(i).Type, dst.Field(i).Type)
+		}
+	})
+
+	t.Run("maps_every_field", func(t *testing.T) {
+		var in tokens.ContextState
+		// fill every field with a distinct value, so an unmapped one cannot slip through as zero
+		v := reflect.ValueOf(&in).Elem()
+		for i := range v.NumField() {
+			switch f := v.Field(i); f.Kind() {
+			case reflect.Bool:
+				f.SetBool(true)
+			case reflect.String:
+				f.SetString("x")
+			default:
+				f.SetInt(int64(i + 1))
+			}
+		}
+		out := ContextInfo(in)
+		src, dst := reflect.ValueOf(in), reflect.ValueOf(out)
+		for i := range src.NumField() {
+			name := src.Type().Field(i).Name
+			assert.Equal(t, src.Field(i).Interface(), dst.FieldByName(name).Interface())
+		}
+	})
 }
 
 func TestToolStartDisplay(t *testing.T) {

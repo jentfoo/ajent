@@ -256,11 +256,7 @@ func (h *planHarness) host() plan.Host {
 		SetInput: func(s string) { h.editor = append(h.editor, s) },
 		Notify:   func(msg string, _ agent.Level) { h.notices = append(h.notices, msg) },
 		Ask: func(ctx context.Context, q string, opts []string) (int, error) {
-			options := make([]tui.Option, len(opts))
-			for i, o := range opts {
-				options[i] = tui.Option{Label: o}
-			}
-			return ui.SelectContext(ctx, q, options)
+			return ui.SelectContext(ctx, q, tuiOptions(opts))
 		},
 		Status: func(text, short string) {
 			ui.SetStatusSegment(segment(segPlan, text, short))
