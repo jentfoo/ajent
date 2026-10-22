@@ -119,6 +119,35 @@ func TestDetect(t *testing.T) {
 	}
 }
 
+func TestStatRegular(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	fi, err := statRegular(filepath.Join(dir, "missing.txt"))
+	require.NoError(t, err)
+	assert.Nil(t, fi) // a missing file is not refused here
+
+	p := filepath.Join(dir, "reg.txt")
+	require.NoError(t, os.WriteFile(p, nil, 0o600))
+	fi, err = statRegular(p)
+	require.NoError(t, err)
+	require.NotNil(t, fi)
+	assert.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
+}
+
+func TestWritePerm(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, os.FileMode(0o644), writePerm(nil)) // a new file gets the default
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "m.txt")
+	require.NoError(t, os.WriteFile(p, nil, 0o600))
+	fi, err := os.Stat(p)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), writePerm(fi)) // an overwrite keeps the mode
+}
+
 func TestReadBytes(t *testing.T) {
 	t.Parallel()
 

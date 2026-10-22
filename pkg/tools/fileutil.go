@@ -31,18 +31,26 @@ func specialFile(m os.FileMode) bool {
 	return m&(os.ModeNamedPipe|os.ModeDevice|os.ModeSocket) != 0
 }
 
+// statRegular stats path, reporting the not-a-regular-file refusal when it
+// names a pipe, device or socket. A failed stat returns no fi and no error; the
+// open that follows reports a missing file.
+func statRegular(path string) (os.FileInfo, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return nil, nil
+	}
+	if specialFile(fi.Mode()) {
+		return nil, &fs.PathError{Op: "open", Path: path, Err: errNotRegular}
+	}
+	return fi, nil
+}
+
 // refuseSpecial returns the open refusal for path when it names a pipe, device
 // or socket, nil when it may be opened. Stat errors are left to the open that
 // follows.
 func refuseSpecial(path string) error {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return nil
-	}
-	if specialFile(fi.Mode()) {
-		return &fs.PathError{Op: "open", Path: path, Err: errNotRegular}
-	}
-	return nil
+	_, err := statRegular(path)
+	return err
 }
 
 // probeFile reports path's kind and size info alongside its content. Kind comes
@@ -94,10 +102,10 @@ func readSniff(r io.Reader) ([]byte, error) {
 	return head[:n], nil
 }
 
-// writePerm returns path's existing permission bits, or 0o644 for a new file.
+// writePerm returns fi's permission bits, or 0o644 when fi is nil (a new file).
 // Overwrites must not silently widen (or narrow) an owner-only mode like 0o600.
-func writePerm(path string) os.FileMode {
-	if fi, err := os.Stat(path); err == nil {
+func writePerm(fi os.FileInfo) os.FileMode {
+	if fi != nil {
 		return fi.Mode().Perm()
 	}
 	return 0o644

@@ -92,15 +92,18 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 		return agent.ErrorToolResult(err.Error()), nil
 	}
 	// a write that cannot read its target must not destroy it: the rename
-	// would unlink the node and leave a regular file in its place
-	if err := refuseSpecial(full); err != nil {
+	// would unlink the node and leave a regular file in its place. fi feeds
+	// writePerm, so one stat serves both the refusal and mode preservation
+	fi, err := statRegular(full)
+	if err != nil {
 		return agent.ErrorToolResult("write: " + err.Error()), nil
 	}
 
+	norm := normalizeToLF(p.Content) // one pass for both the bytes written and the diff below
 	// an overwrite keeps the existing file's majority line ending, a new file gets LF
 	disp := readDisplaced(full)
-	data := []byte(restoreLineEndings(normalizeToLF(p.Content), detectLineEnding(disp.data)))
-	if err := config.WriteFileAtomic(full, data, writePerm(full)); err != nil {
+	data := []byte(restoreLineEndings(norm, detectLineEnding(disp.data)))
+	if err := config.WriteFileAtomic(full, data, writePerm(fi)); err != nil {
 		return agent.ErrorToolResult("write: " + err.Error()), nil
 	}
 	t.tracker.Observe(full, data, fileInfo(full), true) // a write produces the whole file
@@ -111,7 +114,7 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	// unreadable bytes have no diff, so stat's size stands in for what was lost
 	switch disp.state {
 	case dispReadable:
-		if d := unifiedDiff(p.Path, p.Path, normalizeToLF(string(disp.data)), normalizeToLF(p.Content)); d != "" {
+		if d := unifiedDiff(p.Path, p.Path, normalizeToLF(string(disp.data)), norm); d != "" {
 			msg += "\n\n" + d
 		}
 	case dispUnreadable: // reporting only, the write flow is unchanged

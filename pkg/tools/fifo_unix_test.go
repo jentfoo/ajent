@@ -71,6 +71,20 @@ func TestRefuseSpecial(t *testing.T) {
 	assert.NoError(t, refuseSpecial(filepath.Join(dir, "missing.txt")))
 }
 
+func TestStatRegularFifo(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "pipe")
+	mkfifo(t, p)
+
+	fifoFence(t, func() {
+		fi, err := statRegular(p)
+		require.Error(t, err)
+		assert.Equal(t, fifoErr, errors.Unwrap(err).Error())
+		assert.Nil(t, fi) // no FileInfo rides along with a refusal
+	})
+}
+
 func TestSpecialFile(t *testing.T) {
 	t.Parallel()
 

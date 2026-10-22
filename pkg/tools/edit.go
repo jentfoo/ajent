@@ -144,7 +144,8 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	}
 
 	// The file is re-read here. A stale or changed file simply fails to match in applyEdits.
-	if err := refuseSpecial(full); err != nil {
+	fi, err := statRegular(full)
+	if err != nil {
 		return agent.ErrorToolResult("edit: " + err.Error()), nil
 	}
 	data, err := os.ReadFile(full)
@@ -161,7 +162,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 			strutil.HumanSize(int64(len(o.final))), strutil.HumanSize(editWriteCeiling))), nil
 	}
 
-	if err := config.WriteFileAtomic(full, o.final, writePerm(full)); err != nil {
+	if err := config.WriteFileAtomic(full, o.final, writePerm(fi)); err != nil {
 		return agent.ErrorToolResult("edit: " + err.Error()), nil
 	}
 	// observes complete: an edit writes the whole file; it also clears edited

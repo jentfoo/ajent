@@ -180,6 +180,21 @@ func TestWriteReportsDisplacedContent(t *testing.T) {
 		require.False(t, res.IsError)
 		assert.NotContains(t, textOf(res), "@@")
 	})
+
+	// both sides of the displaced-content diff are LF-normalized, so a CRLF file's
+	// report carries no stray carriage returns
+	t.Run("crlf_overwrite_diffs_normalized", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "keep\r\nold\r\n")
+
+		res := e.writeExec(t.Context(), `{"path":"a.txt","content":"keep\nnew\n"}`)
+		require.False(t, res.IsError)
+
+		out := textOf(res)
+		assert.Contains(t, out, "-old")
+		assert.Contains(t, out, "+new")
+		assert.NotContains(t, out, "\r")
+	})
 }
 
 func TestWriteUnreadableOverwrite(t *testing.T) {
