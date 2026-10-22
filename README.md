@@ -156,7 +156,7 @@ Per model you can set:
 
 Reasoning retention is configured globally rather than per model (`reasoning.retain`, below) and applied only to what is sent, so the transcript always keeps everything.
 
-The JSON loader is deliberately lenient: `//` comments and trailing commas are accepted, duplicate keys warn instead of silently keeping the last one, and an unrecognised key or reasoning level warns rather than locking you out. An unrecognised `api` disables its provider (a wrong dialect is a wrong protocol), and an unknown flavor just degrades to generic.
+The JSON loader is deliberately lenient: `//` comments and trailing commas are accepted, duplicate keys warn instead of silently keeping the last one, and an unrecognized key or reasoning level warns rather than locking you out. An unrecognized `api` disables its provider (a wrong dialect is a wrong protocol), and an unknown flavor just degrades to generic.
 
 #### Minimal local setup
 
@@ -224,7 +224,7 @@ The top-level blocks:
   * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers, while an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
   * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default, and `/settings` can flip it for the session, while `AJENT_IMAGES_BLOCK=true` sets it for a single run.
   * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
-  * `ui.color` - colour depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`. Any other value names the depth outright. That is the way out if your terminal is classified badly, since `256` turns on syntax highlighting where detection was too conservative and `none` turns colour off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
+  * `ui.color` - color depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`. Any other value names the depth outright. That is the way out if your terminal is classified badly, since `256` turns on syntax highlighting where detection was too conservative and `none` turns color off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
   * `disableUpdateCheck` - turn off the startup update-available notice. Off by default, and a fork install or an offline machine that does not want to nag can set this once in the user layer.
 
 ### Command-line options
