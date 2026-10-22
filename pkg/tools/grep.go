@@ -76,16 +76,16 @@ func (*grepTool) selfBounding() {}
 
 // Execute runs the search, bounded by the limit and GrepResult.
 func (t *grepTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p grepParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[grepParams](call)
+	if !ok {
+		return res, nil
 	}
 	if p.Pattern == "" {
 		return agent.ErrorToolResult("grep needs a non-empty pattern"), nil
 	}
-	cwd, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	cwd, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 
 	mode := p.Mode

@@ -50,16 +50,16 @@ func (*findTool) selfBounding() {}
 // Execute lists matching files bounded by the limit, newest first. The complete
 // result spills to disk when the bound cuts it, so the model can page the file.
 func (t *findTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p findParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[findParams](call)
+	if !ok {
+		return res, nil
 	}
 	if strings.TrimSpace(p.Pattern) == "" {
 		return agent.ErrorToolResult("find needs a non-empty pattern"), nil
 	}
-	root, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	root, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 
 	matches := listFiles(ctx, root, p.Pattern)

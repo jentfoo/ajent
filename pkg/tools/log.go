@@ -68,13 +68,13 @@ func (*gitLogTool) selfBounding() {}
 // follows the file's renames, like `git log --follow`. The complete list
 // spills to disk when the tool bound cuts it.
 func (t *gitLogTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p gitLogParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[gitLogParams](call)
+	if !ok {
+		return res, nil
 	}
-	root, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	root, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {

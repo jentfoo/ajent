@@ -61,9 +61,9 @@ func (*askUserTool) selfBounding() {}
 // A declined or unavailable question is never an error, so a headless run keeps
 // going instead of failing the turn.
 func (t *askUserTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p askParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[askParams](call)
+	if !ok {
+		return res, nil
 	}
 	question := strings.TrimSpace(p.Question)
 	if question == "" {

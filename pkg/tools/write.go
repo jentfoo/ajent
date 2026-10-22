@@ -28,16 +28,27 @@ type writeTool struct {
 var _ agent.Tool = (*writeTool)(nil)
 var _ Previewer = (*writeTool)(nil)
 
+// resolveTarget decodes the call and resolves its target path, shared by
+// Preview and Execute so both report identical failures. The returned error is
+// model-facing as-is.
+func (t *writeTool) resolveTarget(call agent.ToolCall) (writeParams, string, error) {
+	var p writeParams
+	if err := decode(call.Input, &p); err != nil {
+		return writeParams{}, "", errors.New("bad args: " + err.Error())
+	}
+	full, err := t.policy.Resolve(p.Path)
+	if err != nil {
+		return writeParams{}, "", err
+	}
+	return p, full, nil
+}
+
 // Preview returns the file's current and new content for a write call, so the
 // change is shown before it runs. A brand-new file previews as all additions,
 // an existing file whose bytes cannot be read previews a marker naming its
 // stat size, and a special file is refused as Execute refuses it.
 func (t *writeTool) Preview(call agent.ToolCall) (Change, error) {
-	var p writeParams
-	if err := decode(call.Input, &p); err != nil {
-		return Change{}, errors.New("bad args: " + err.Error())
-	}
-	full, err := t.policy.Resolve(p.Path)
+	p, full, err := t.resolveTarget(call)
 	if err != nil {
 		return Change{}, err
 	}
@@ -76,11 +87,7 @@ func (*writeTool) selfBounding() {}
 
 // Execute writes the file, then observes it so @ref dedupe sees current content.
 func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	var p writeParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
-	}
-	full, err := t.policy.Resolve(p.Path)
+	p, full, err := t.resolveTarget(call)
 	if err != nil {
 		return agent.ErrorToolResult(err.Error()), nil
 	}

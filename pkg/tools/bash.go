@@ -74,7 +74,7 @@ func (t *bashTool) Name() string { return ToolBash }
 // one-liner cannot flood the header. The header wraps it, while the status bar,
 // which gets one row, truncates it to the width in force.
 func (t *bashTool) Label(call agent.ToolCall) string {
-	var p bashParams
+	var p bashParams // re-decodes what Execute decodes; sharing awaits a call-identity memo (todo-later 01)
 	if err := decode(call.Input, &p); err != nil {
 		return "bash"
 	}
@@ -118,9 +118,9 @@ func ownProcessGroup(cmd *exec.Cmd) {
 // Execute streams command output to out while teeing a bounded head/tail copy,
 // spilling the excess to disk so the model can read it back.
 func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	var p bashParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[bashParams](call)
+	if !ok {
+		return res, nil
 	}
 	if strings.TrimSpace(p.Command) == "" {
 		return agent.ErrorToolResult("bash needs a non-empty command"), nil
@@ -213,16 +213,12 @@ func (t *bashTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 }
 
 // resolveCwd resolves the call's cwd override against the policy; ok=false
-// when res carries the error result.
+// when res carries the error result. Empty keeps the session cwd unresolved.
 func (t *bashTool) resolveCwd(cwd string) (string, agent.ToolResult, bool) {
 	if cwd == "" {
 		return t.policy.Cwd, agent.ToolResult{}, true
 	}
-	resolved, err := t.policy.Resolve(cwd)
-	if err != nil {
-		return "", agent.ErrorToolResult(err.Error()), false
-	}
-	return resolved, agent.ToolResult{}, true
+	return resolveArg(t.policy, cwd)
 }
 
 // syncSink writes sanitized output to both the live stream and the capture,

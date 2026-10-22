@@ -53,13 +53,13 @@ func (*gitShowTool) selfBounding() {}
 // Execute renders the commit bounded by the tool limit. Blocks stream through
 // the bound and the complete output spills to disk when it cuts.
 func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p gitShowParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[gitShowParams](call)
+	if !ok {
+		return res, nil
 	}
-	root, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	root, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {
@@ -71,7 +71,7 @@ func (t *gitShowTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.
 	}
 	style, err := parseSubmoduleStyle(p.Submodule)
 	if err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+		return badArgs(err), nil
 	}
 	d := newGitDiffOut(t.sessionID, ToolGitShow)
 	defer func() { _ = d.close() }()

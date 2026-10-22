@@ -55,13 +55,13 @@ func (*lsTool) selfBounding() {}
 // it carries wildcards, the files the pattern matches. The complete listing
 // spills to disk when the bound cuts it, so the model can page the file.
 func (t *lsTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p lsParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[lsParams](call)
+	if !ok {
+		return res, nil
 	}
-	full, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	full, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 
 	// an existing path wins over glob expansion so real names like weird[1]

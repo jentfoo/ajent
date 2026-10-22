@@ -47,13 +47,13 @@ func (*gitStatusTool) selfBounding() {}
 // Execute renders the status bounded by the tool limit. The complete listing
 // spills to disk when the bound cuts it, so the model can page the file.
 func (t *gitStatusTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p gitStatusParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[gitStatusParams](call)
+	if !ok {
+		return res, nil
 	}
-	root, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	root, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {

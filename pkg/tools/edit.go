@@ -66,14 +66,25 @@ type editOutcome struct {
 	shifts []lineShift // how this apply moved the lines it did not write
 }
 
+// resolveTarget decodes the call and resolves its target path, shared by
+// resolveApply and Execute so both report identical failures. The returned
+// error is model-facing as-is.
+func (t *editTool) resolveTarget(call agent.ToolCall) (editParams, string, error) {
+	p, err := decodeEditParams(call.Input)
+	if err != nil {
+		return editParams{}, "", errors.New("bad args: " + err.Error())
+	}
+	full, err := t.policy.Resolve(p.Path)
+	if err != nil {
+		return editParams{}, "", err
+	}
+	return p, full, nil
+}
+
 // resolveApply applies the call's edits without writing anything, returning
 // the file's before and after text in LF space.
 func (t *editTool) resolveApply(call agent.ToolCall) (Change, error) {
-	p, err := decodeEditParams(call.Input)
-	if err != nil {
-		return Change{}, errors.New("bad args: " + err.Error())
-	}
-	full, err := t.policy.Resolve(p.Path)
+	p, full, err := t.resolveTarget(call)
 	if err != nil {
 		return Change{}, err
 	}
@@ -127,11 +138,7 @@ func (*editTool) selfBounding() {}
 // call, never an earlier op's output. The result diff is rendered by the guard
 // wrapper before this runs.
 func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.Output) (agent.ToolResult, error) {
-	p, err := decodeEditParams(call.Input)
-	if err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
-	}
-	full, err := t.policy.Resolve(p.Path)
+	p, full, err := t.resolveTarget(call)
 	if err != nil {
 		return agent.ErrorToolResult(err.Error()), nil
 	}

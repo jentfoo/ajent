@@ -58,20 +58,20 @@ func (*gitDiffTool) selfBounding() {}
 // Execute renders the requested diff bounded by the tool limit. Blocks stream
 // through the bound and the complete output spills to disk when it cuts.
 func (t *gitDiffTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p gitDiffParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[gitDiffParams](call)
+	if !ok {
+		return res, nil
 	}
 	if p.From == gitWorktreeRef {
 		return agent.ErrorToolResult(ToolGitDiff + ": from must be a commit-ish; put \"worktree\" in to"), nil
 	}
 	style, err := parseSubmoduleStyle(p.Submodule)
 	if err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+		return badArgs(err), nil
 	}
-	root, err := t.policy.Resolve(argPath(p.Path))
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	root, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 	r, err := openGitRepo(root)
 	if err != nil {

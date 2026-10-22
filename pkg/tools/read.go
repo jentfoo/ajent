@@ -54,13 +54,13 @@ func (*readTool) selfBounding() {}
 // content bounded by ReadFile. Oversized output never spills: the footer pages
 // with offset instead. A range wider than the limit is an error result.
 func (t *readTool) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
-	var p readParams
-	if err := decode(call.Input, &p); err != nil {
-		return agent.ErrorToolResult("bad args: " + err.Error()), nil
+	p, res, ok := decodeCall[readParams](call)
+	if !ok {
+		return res, nil
 	}
-	full, err := t.policy.Resolve(p.Path)
-	if err != nil {
-		return agent.ErrorToolResult(err.Error()), nil
+	full, res, ok := resolveArg(t.policy, p.Path)
+	if !ok {
+		return res, nil
 	}
 
 	data, info, kind, err := probeFile(full)
