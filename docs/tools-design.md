@@ -304,8 +304,9 @@ Writes a whole file atomically (temp file + rename) and creates parent
 directories. Emits a `Change` (empty → content for new files) through
 `Previewer`, rendered before the call is vetted rather than after it applies.
 Overwriting an existing file returns a unified diff of what was displaced, the
-one part of the change the model did not itself supply. A new file reports its
-line count alone. Writes are never gated on readability, so an unreadable
+one part of the change the model did not itself supply; the echo mode
+(`tools.diffEcho`) gates this. A new file reports its line count alone. Writes
+are never gated on readability, so an unreadable
 existing file (a mode-000 in an otherwise writable directory) still goes
 through, but no diff is possible: the preview marks the before side with the
 file's byte size, and the result reports that the existing content could not
@@ -426,7 +427,25 @@ where its written text (as reindented, when a tier shifted it) now occurs
 elsewhere in the file, or where a written line repeats its neighbour. An edit
 matched byte-exactly and landed where aimed returns the summary alone: the diff
 would only restate arguments the model just sent, and extra tokens become text
-for the next `oldText` to be modelled on.
+for the next `oldText` to be modelled on. The echo mode (`tools.diffEcho`,
+below) can suppress or force this diff.
+
+### Diff echo (`tools.diffEcho`)
+
+Both writers can echo a unified diff of the applied change into their tool
+response. One setting selects how much, with `validate` as the compiled-in
+default:
+
+- `never` — no response carries a diff; errors and notes are unaffected.
+- `validate` — only what needs checking rides: an edit with reason to check its
+  result (above), or a write that displaced readable content.
+- `overwrite` — write's displaced-content diff only, never an edit's.
+- `always` — every applied change echoes its diff; a new file still has no
+  before side to show.
+
+The gate covers only the response echo. Notes and error results ride in every
+mode, and the preview rendered through `Output.Diff` before the guard chain is
+a display decision, so no mode touches it.
 
 Line endings follow one package-wide convention: model-visible output is always
 LF, while a write copies untouched regions verbatim and gives each replacement

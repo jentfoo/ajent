@@ -12,14 +12,14 @@ import (
 var editTextLimit = Limit{Lines: 400, Bytes: 32 << 10}
 
 // editReport renders a successful edit for the model: summary line, notes,
-// and the diff when review asks for one.
-func editReport(path string, count int, o editOutcome) string {
+// and the diff when echo asks for one.
+func editReport(path string, count int, o editOutcome, echo DiffEcho) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "applied %d edits to %s", count, path)
 	for _, n := range o.notes {
 		b.WriteString("\n" + n)
 	}
-	if o.review {
+	if echo.editDiff(o.review) {
 		if d := unifiedDiff(path, path, o.before, o.after); d != "" {
 			bounded, _ := Elide(d, editTextLimit)
 			b.WriteString("\n\n" + bounded)

@@ -1,10 +1,15 @@
 package app
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -116,4 +121,56 @@ func TestBuiltinTools(t *testing.T) {
 	assert.Contains(t, desc, "diff")
 	assert.Len(t, warns, 1)
 	assert.Contains(t, warns[0], "ajent-no-such-bin")
+}
+
+func TestBuiltinToolsDiffEcho(t *testing.T) {
+	t.Parallel()
+
+	// writeOverwrite runs a write that replaces existing content, returning the
+	// model-visible text.
+	writeOverwrite := func(t *testing.T, breg *tools.Registry) string {
+		t.Helper()
+
+		path := filepath.Join(t.TempDir(), "a.txt")
+		require.NoError(t, os.WriteFile(path, []byte("old\n"), 0o644))
+		w, ok := breg.Get("write")
+		require.True(t, ok)
+		call := agent.ToolCall{ID: "c", Name: "write",
+			Input: json.RawMessage(`{"path":"` + path + `","content":"new\n"}`)}
+		res, err := w.Execute(t.Context(), call, agent.NewOutput(agent.NopSink{}, "c"))
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		var b strings.Builder
+		for _, blk := range res.Content {
+			if tb, ok := blk.(llm.TextBlock); ok {
+				b.WriteString(tb.Text)
+			}
+		}
+		return b.String()
+	}
+
+	t.Run("never_suppresses_echo", func(t *testing.T) {
+		set := loadTestConfig(t)
+		require.NoError(t, set.SetSession("tools.diffEcho", "never"))
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+
+		breg, err := builtinTools(set, reg, nil, func(string) {})
+		require.NoError(t, err)
+		assert.NotContains(t, writeOverwrite(t, breg), "@@")
+	})
+
+	t.Run("unknown_name_warns", func(t *testing.T) {
+		set := loadTestConfig(t)
+		require.NoError(t, set.SetSession("tools.diffEcho", "noisy"))
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+
+		var warns []string
+		breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) })
+		require.NoError(t, err)
+		require.Len(t, warns, 1)
+		assert.Contains(t, warns[0], `unknown tools.diffEcho "noisy"`)
+		// the default still echoes what the write displaced
+		assert.Contains(t, writeOverwrite(t, breg), "-old")
+	})
 }

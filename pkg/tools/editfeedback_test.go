@@ -39,7 +39,7 @@ func TestUnifiedDiff(t *testing.T) {
 			after.WriteString("new line\n")
 		}
 		o := editOutcome{review: true, before: before.String(), after: after.String()}
-		d := editReport("a.go", 1, o)
+		d := editReport("a.go", 1, o, DiffValidate)
 		assert.Contains(t, d, "truncated")
 		assert.Less(t, countLines(d), 500) // head and tail survive, the middle does not
 	})
@@ -50,14 +50,14 @@ func TestEditReport(t *testing.T) {
 
 	t.Run("exact_match_carries_no_diff", func(t *testing.T) {
 		o := applied(t, "one\ntwo\nthree\n", editOp{OldText: "two", NewText: "2"})
-		out := editReport("a.go", 1, o)
+		out := editReport("a.go", 1, o, DiffValidate)
 
 		assert.Equal(t, "applied 1 edits to a.go", out) // it did exactly what was asked
 	})
 
 	t.Run("replace_all_reports_every_site", func(t *testing.T) {
 		o := applied(t, "a\nx\nb\nx\n", editOp{OldText: "x", NewText: "y", ReplaceAll: true})
-		out := editReport("a.go", 1, o)
+		out := editReport("a.go", 1, o, DiffValidate)
 
 		assert.Contains(t, out, "replaced 2 occurrences")
 		assert.Contains(t, out, "-x")
@@ -68,7 +68,7 @@ func TestEditReport(t *testing.T) {
 		const block = "func helper() error { return nil }"
 		o := applied(t, "package p\n\n"+block+"\n\nfunc other() {}\n",
 			editOp{OldText: "func other() {}", NewText: block})
-		out := editReport("a.go", 1, o)
+		out := editReport("a.go", 1, o, DiffValidate)
 
 		assert.Contains(t, out, "appears 2 times")
 		assert.Contains(t, out, "@@") // the diff rides along so the model can look
@@ -77,7 +77,7 @@ func TestEditReport(t *testing.T) {
 	t.Run("reemitted_line_is_flagged", func(t *testing.T) {
 		// the old regression case: re-emitting a line the file kept
 		o := applied(t, "A\nB\nC\nD\n", editOp{OldText: "C", NewText: "B\nC"})
-		out := editReport("a.txt", 1, o)
+		out := editReport("a.txt", 1, o, DiffValidate)
 
 		assert.Contains(t, out, "lines 2 and 3 are identical")
 		assert.Contains(t, out, "@@")
@@ -96,8 +96,21 @@ func TestEditReport(t *testing.T) {
 		src := "\tsomethingEntirelyDifferent(x)\n\t" + block + "\n"
 		o := applied(t, src,
 			editOp{OldText: "    somethingEntirelyDifferent(x)", NewText: "    " + block})
-		out := editReport("a.go", 1, o)
+		out := editReport("a.go", 1, o, DiffValidate)
 		assert.Contains(t, out, "appears 2 times")
+	})
+
+	t.Run("echo_mode_gates_the_diff", func(t *testing.T) {
+		review := applied(t, "a\nx\nb\nx\n", editOp{OldText: "x", NewText: "y", ReplaceAll: true})
+		clean := applied(t, "one\ntwo\nthree\n", editOp{OldText: "two", NewText: "2"})
+
+		assert.Contains(t, editReport("a.go", 1, review, DiffValidate), "@@")
+		assert.NotContains(t, editReport("a.go", 1, clean, DiffValidate), "@@")
+		// overwrite and never leave edits summary-only even when review fired
+		assert.NotContains(t, editReport("a.go", 1, review, DiffOverwrite), "@@")
+		assert.NotContains(t, editReport("a.go", 1, review, DiffNever), "@@")
+		// always echoes a diff even for an unremarkable apply
+		assert.Contains(t, editReport("a.go", 1, clean, DiffAlways), "@@")
 	})
 }
 
@@ -105,7 +118,7 @@ func TestEditReportNamesANonExactMatch(t *testing.T) {
 	t.Parallel()
 
 	o := applied(t, "msg := \"hi\"\n", editOp{OldText: "msg := “hi”", NewText: "msg := \"bye\""})
-	out := editReport("a.go", 1, o)
+	out := editReport("a.go", 1, o, DiffValidate)
 
 	assert.Contains(t, out, "edit 1")
 	assert.Contains(t, out, "unicode characters")

@@ -141,6 +141,11 @@ the gate" for the rule.
 `tools.enabled` replaces the default enabled set (`read`, `write`, `edit`,
 `bash`) and `tools.limits` bounds each tool's output.
 
+`tools.diffEcho` names when the write/edit results echo a unified diff of the
+change: `never`, `validate` (the compiled-in default), `overwrite` or `always`
+(see `tools-design.md`). pkg/tools parses the name; an unknown value warns and
+keeps the default.
+
 `tools.shellCommands` names extra shell commands the bash tool description
 may advertise. The list starts from a built-in set, adds these extras, then
 drops any entry that is not a bare executable name on PATH, refused by

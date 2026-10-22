@@ -197,6 +197,56 @@ func TestWriteReportsDisplacedContent(t *testing.T) {
 	})
 }
 
+func TestWriteDiffEcho(t *testing.T) {
+	t.Parallel()
+
+	// exec runs the write tool configured with echo.
+	exec := func(t *testing.T, e *toolEnv, echo DiffEcho, args string) agent.ToolResult {
+		t.Helper()
+
+		c := agent.ToolCall{ID: "c", Name: "write", Input: json.RawMessage(args)}
+		res, _ := (&writeTool{policy: e.policy, tracker: e.tracker, echo: echo}).Execute(t.Context(), c, agent.NewOutput(agent.NopSink{}, "c"))
+		return res
+	}
+
+	t.Run("never_suppresses_displaced_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "old\n")
+
+		res := exec(t, e, DiffNever, `{"path":"a.txt","content":"new\n"}`)
+		require.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "wrote a.txt")
+		assert.NotContains(t, textOf(res), "@@") // summary only
+	})
+
+	t.Run("overwrite_keeps_displaced_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "old\n")
+
+		res := exec(t, e, DiffOverwrite, `{"path":"a.txt","content":"new\n"}`)
+		require.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "-old")
+	})
+
+	t.Run("always_shows_displaced_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("a.txt", "old\n")
+
+		res := exec(t, e, DiffAlways, `{"path":"a.txt","content":"new\n"}`)
+		require.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "-old")
+	})
+
+	t.Run("always_has_no_new_file_diff", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+
+		res := exec(t, e, DiffAlways, `{"path":"fresh.txt","content":"only\n"}`)
+		require.False(t, res.IsError)
+		assert.Contains(t, textOf(res), "wrote fresh.txt")
+		assert.NotContains(t, textOf(res), "@@") // nothing was displaced
+	})
+}
+
 func TestWriteUnreadableOverwrite(t *testing.T) {
 	t.Parallel()
 

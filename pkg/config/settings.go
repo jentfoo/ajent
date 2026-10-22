@@ -2,7 +2,7 @@ package config
 
 // Settings is the typed surface of every configuration layer. Enum valued keys
 // are stored as their text names and parsed by the caller (llm.ParseLevel,
-// llm.ParseRetain, tui.ParseMode).
+// llm.ParseRetain, tui.ParseMode, tools.ParseDiffEcho).
 type Settings struct {
 	Model       string      `json:"model,omitempty"`
 	Reasoning   Reasoning   `json:"reasoning,omitzero"`
@@ -42,8 +42,10 @@ type Tools struct {
 	// ShellCommands names extra shell commands the bash tool description may
 	// advertise when bash is enabled. PATH probing and deny filtering happen at
 	// startup in pkg/app.
-	ShellCommands []string   `json:"shellCommands,omitempty"`
-	Limits        ToolLimits `json:"limits,omitzero"`
+	ShellCommands []string `json:"shellCommands,omitempty"`
+	// DiffEcho names when write/edit results echo a unified diff of the change.
+	DiffEcho string     `json:"diffEcho,omitempty"`
+	Limits   ToolLimits `json:"limits,omitzero"`
 }
 
 // ToolLimits is the configurable subset of pkg/tools' built-in output bounds,
@@ -128,6 +130,7 @@ const defaultsJSON = `{
   "reasoning": { "level": "medium" },
   "tools": {
     "enabled": ["read", "write", "edit", "bash"],
+    "diffEcho": "validate",
     "limits": {
       "bash":     { "lines": 4000, "bytes": 32768 },
       "read":     { "lines": 2000, "bytes": 536870912 },

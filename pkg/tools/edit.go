@@ -46,6 +46,7 @@ const editWriteCeiling = 64 << 20
 type editTool struct {
 	policy  PathPolicy
 	tracker *Tracker
+	echo    DiffEcho // tool-response diff gating
 }
 
 var _ agent.Tool = (*editTool)(nil)
@@ -171,7 +172,7 @@ func (t *editTool) Execute(ctx context.Context, call agent.ToolCall, out agent.O
 	t.tracker.markEdited(full, append(shiftRanges(tgt.Edited, o.shifts), o.edited...))
 
 	return agent.ToolResult{
-		Content: llmBlock(editReport(p.Path, len(p.Edits), o)),
+		Content: llmBlock(editReport(p.Path, len(p.Edits), o, t.echo)),
 	}, nil
 }
 

@@ -23,6 +23,7 @@ type writeParams struct {
 type writeTool struct {
 	policy  PathPolicy
 	tracker *Tracker
+	echo    DiffEcho // tool-response diff gating
 }
 
 var _ agent.Tool = (*writeTool)(nil)
@@ -111,11 +112,14 @@ func (t *writeTool) Execute(ctx context.Context, call agent.ToolCall, out agent.
 	msg := fmt.Sprintf("wrote %s (%d lines)", p.Path, countLines(string(data)))
 	// an overwrite displaced content the model never saw, since it supplied the
 	// whole new file. A new file has nothing to report beyond its size, and
-	// unreadable bytes have no diff, so stat's size stands in for what was lost
+	// unreadable bytes have no diff, so stat's size stands in for what was lost.
+	// The echo mode gates only the readable case.
 	switch disp.state {
 	case dispReadable:
-		if d := unifiedDiff(p.Path, p.Path, normalizeToLF(string(disp.data)), norm); d != "" {
-			msg += "\n\n" + d
+		if t.echo.writeDiff() {
+			if d := unifiedDiff(p.Path, p.Path, normalizeToLF(string(disp.data)), norm); d != "" {
+				msg += "\n\n" + d
+			}
 		}
 	case dispUnreadable: // reporting only, the write flow is unchanged
 		msg += "\n\n" + unreadableExisting(disp.size) +

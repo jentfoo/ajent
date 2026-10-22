@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os/exec"
 	"slices"
 	"strings"
@@ -52,10 +53,15 @@ func builtinTools(set *config.Set, reg *llm.Registry, ask tools.AskFunc, warn fu
 	if len(missing) > 0 && warn != nil {
 		warn("tools.shellCommands: not on PATH: " + strings.Join(missing, ", "))
 	}
+	echo, ok := tools.ParseDiffEcho(set.Settings().Tools.DiffEcho)
+	if !ok && warn != nil {
+		warn(fmt.Sprintf("unknown tools.diffEcho %q, using %s", set.Settings().Tools.DiffEcho, echo))
+	}
 	return tools.Builtins(tools.Options{
 		SessionID:     config.Cwd(),
 		Ask:           ask,
 		ShellCommands: cmds,
 		Vision:        func() bool { return reg.Active().Caps.Images },
+		DiffEcho:      echo,
 	})
 }

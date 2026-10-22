@@ -46,6 +46,9 @@ type Options struct {
 	// Vision reports the active model's image capability, consulted live by
 	// read. nil disables read's image arm entirely.
 	Vision func() bool
+	// DiffEcho selects when write/edit results echo a unified diff of the
+	// change; zero takes the default.
+	DiffEcho DiffEcho
 }
 
 // Builtins returns a registry holding read, write, edit and bash enabled plus
@@ -66,8 +69,8 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.tracker = tracker
 	reg.sessionID = opts.SessionID
 	reg.Register(&readTool{policy: policy, tracker: tracker, vision: opts.Vision}, true)
-	reg.Register(&writeTool{policy: policy, tracker: tracker}, true)
-	reg.Register(&editTool{policy: policy, tracker: tracker}, true)
+	reg.Register(&writeTool{policy: policy, tracker: tracker, echo: opts.DiffEcho}, true)
+	reg.Register(&editTool{policy: policy, tracker: tracker, echo: opts.DiffEcho}, true)
 	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID, shellExamples: opts.ShellCommands}, true)
 	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
