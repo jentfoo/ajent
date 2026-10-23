@@ -374,9 +374,15 @@ callers.
 The **call id is the caller's** and must be unique for the life of the session:
 the pair is appended to `State` and persisted, and once `tool_use` ids repeat
 Anthropic rejects every later request, permanently. A caller that can run twice
-in one session numbers its runs. `/init` uses a per-`Runner` counter and `@`
-expansion a per-`Expander` one, both seeded above the ids already present
-whenever the context is rebuilt (resume, rewind, fork).
+in one session numbers its runs through `RunSequencer`, the shared minter and
+parser for these prefixed ids (`Next` mints a run, `CallID` renders it,
+`Seed(msgs)` recovers the counter from history), constructed with each producer's
+package-local prefix so the transcript format (`ref-N`, `init-N`) stays untouched.
+`/init` and `@` expansion each hold one and re-seed it above the ids already
+present whenever the context is rebuilt (resume, rewind, fork). Seeding raises
+to exactly the highest recorded run and only ever upward (the +1 stays with
+`Next`), so a seed racing an expansion can never drag freshly minted ids back
+into reuse.
 
 A staged `!` line is **not** an `InjectPair` caller: it stages a user-authored
 text message (the command and its output, see `prompt-design.md`) via

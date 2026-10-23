@@ -149,6 +149,15 @@ transcript block, and no built-in tool declares either today. Kimi mode adds a
 chat-completions serialization: tools a result loaded leave the top level list
 and a bare system message re-offers their schemas at each load point.
 
+`Prepare` never writes through its input: clean stages return the caller's list
+untouched and only a real edit materializes copies, with the origin stamp cloning
+on first write. Output content can therefore share the caller's backing arrays
+(`State`'s included), so treat request messages as read-only once assembled. That
+copy-on-write is what keeps each builder's re-pass over prepared messages a scan
+rather than a rebuild, and it makes one invariant load-bearing: an output value
+must never depend on whether a turn needed repairs (a rebuilt message carries its
+turn's `Stop` through).
+
 **Traps**: adapters never call the retention helpers directly: they go through
 `Prepare`, which must stay idempotent (the Responses fallback builds the same
 body twice in a session). A provider that genuinely never sends a

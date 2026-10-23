@@ -48,8 +48,9 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   never sees shell or agent_* tools (see `subagents-design.md`).
 - **Generic output bound** — every tool that does not bound its own output
   (`SelfBounding`) is wrapped at registration to keep model-visible content
-  bound. Read-only marking for MCP comes from `annotations.readOnlyHint` or config
-  globs, and the permission barrier uses this metadata (see "Read-only" below).
+  bound. Read-only marking is an explicit `MarkReadOnly` at declaration or, for
+  MCP tools, `annotations.readOnlyHint` and config globs. The permission barrier,
+  the sub-agent filter and the headless read-only scope all read this metadata.
 - **`Close` teardown** — `Close` sits on `agent.Tool` itself rather than an
   optional interface, so teardown fans out without type assertions. The registry
   exposes `Close()` and `pkg/app` calls it on every run's exit paths. The owning
@@ -188,9 +189,9 @@ A one-shot run (`-p`) has no dialog to open, so every ask is settled without
 one. A permission flag names the barrier mode (`ToolScope.barrierMode` in
 `pkg/app`). With none the barrier runs `allow-all` and the **offered tool set**
 carries the policy instead: the model is only ever handed tools it may call, so
-it never spends a step discovering a refusal. `tools.ReadOnlyBuiltins` names
-what survives `--read-only`, and `ask_user` is excluded from every headless scope
-because nobody can answer it.
+it never spends a step discovering a refusal. Under `--read-only` the offered
+set is exactly what the registry reports read-only, and `ask_user` is excluded
+from every headless scope because nobody can answer it.
 
 The one exception is `permissions.deniedCommands`, which is still installed and
 still refuses before the allow-all short circuit. In the allow-all scopes it is
@@ -517,8 +518,8 @@ so it is never force-killed by the model-facing default.
 Off-by-default extras for no-shell agents.
 
 - `find`: glob matching with `**` support, and a bare pattern (`*.go`) matches at
-  any depth. It lists files via `git ls-files -z` (quoting disabled, so non-ASCII
-  filenames stay usable), falling back to a bounded Go walk when git is
+  any depth. It lists files via the shared `GitTrackedFiles` helper (see
+  *Repository file listing* below), falling back to a bounded Go walk when git is
   unavailable or yields nothing. A search never leaves its root: the listing is
   scoped to `Path`, lists regular files only (symlinks are never followed, like
   rg's default traversal), and results are sorted newest first.
@@ -742,29 +743,24 @@ reg.Register(&gitShowTool{policy: policy}, false)
 reg.Register(&gitDiffTool{policy: policy}, false)
 ```
 
-The names join `ReadOnlyBuiltins` in `builtins.go`, so both the headless
-(`--read-only`) scope and, via its own copy, the sub-agent filter pick them up:
+The names join `ReadOnlyBuiltins` in `builtins.go`, which marks the whole list
+read-only right after registration, one explicit grant beside ask_user's:
 
 ```go
-const (
-    ToolGitStatus = "git_status"
-    ToolGitLog    = "git_log"
-    ToolGitShow   = "git_show"
-    ToolGitDiff   = "git_diff"
-)
-
-var ReadOnlyBuiltins = []string{
-    ToolRead, ToolGrep, ToolFind, ToolLs,
-    ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff,
-}
+reg.MarkReadOnly([]string{ToolAskUser})
+reg.MarkReadOnly(ReadOnlyBuiltins)
 ```
 
-The permission barrier's own set (`pkg/permit/classify.go`) is derived from
-`ReadOnlyBuiltins`, so all four names are also allow-listed there in one place.
-Because they are read-only built-ins by name, the barrier runs them free in
-`allow-read` mode, which is correct since go-git cannot mutate anything. Under the
-default headless scope they stay off unless configured via `tools.enabled` or
-listed in `--allow-tools`. No special-case code is needed beyond the constant list.
+That metadata is then the single source of truth downstream: the headless
+(`--read-only`) scope offers exactly what `Registry.ReadOnly` reports, the
+permission barrier (`pkg/permit/classify.go`) allows on it under its core-writer
+veto, and the sub-agent filter includes a tool only when the parent marks it. No
+consumer keeps its own name list or special-cases these names.
+
+Because the mark rides registration rather than enable state, these
+disabled-by-default readers keep it: they still reach a child or a read-only
+scope even though the default headless scope leaves them off unless configured
+via `tools.enabled` or listed in `--allow-tools`.
 
 The sub-agent repo-context gate (a child gets git tools only when its own cwd is
 inside a work tree) lives with the rest of that filter in
@@ -847,6 +843,20 @@ bookkeeping in place, and group rows hide themselves when their members are
 gone, so a second `/plan` re-registers cleanly.
 
 ## Shared infrastructure
+
+### Repository file listing (`walk.go`)
+
+`find`, `grep` and projinit's `/init` survey share one enumeration seam:
+`GitTrackedFiles(ctx, root)` lists tracked plus untracked non-ignored regular
+files as slash names relative to root, empty whenever git cannot answer (not a
+work tree, a failure, nothing listed). The helper owns no fallback. Each caller
+walks its own way on an empty result (`allWalk` here, projinit its own
+dot-skipping file-capped walk), so a failed git or an empty repository degrades
+exactly as it did before the copies were shared. Scoping stays inside the
+listing: the `.` pathspec plus a `WithinRoot` guard keep names under root even
+when an older git emits `../`, Lstat drops symlinks and deleted-but-tracked
+entries so no engine follows a link out of root, and unmerged index stages
+dedupe. A wedged git dies on the shared 10-second quiet-run bound.
 
 ### Path policy (`path.go`)
 

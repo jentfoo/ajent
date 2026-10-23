@@ -163,15 +163,16 @@ and report whether a named tool is read-only.
 
 A child's tool set is a fixed, structural subset of `Registry.All()`:
 
-- Include when the name is one of the read-only built-ins (`read`, `grep`,
-  `find`, `ls`) **or** `src.ReadOnly(name)` (MCP hints / config globs). The
-  four `git_*` readers (`git_status`, `git_log`, `git_show`, `git_diff`) join
-  only when the child's own cwd is inside a git work tree (`inRepo`,
-  computed once per job in `run.go` via `git rev-parse`, the same check
-  `tools.IsGitRepo` makes). Outside a repo the git readers drop while
-  find/grep/ls survive, so git capability is never advertised where it cannot
-  apply. The prompt contract below names them to match: git appears in a
-  child's listed tools only when that same `inRepo` is true.
+- Include when `src.ReadOnly(name)` reports the mark, the registry's read-only
+  metadata (see `tools-design.md`: built-ins marked at construction, MCP hints
+  and config globs for remote tools). The mark rides registration rather than
+  enable state, so a tool disabled in the parent still reaches a child, which
+  has no shell and needs find/grep/ls. The four `git_*` readers join only when
+  the child's own cwd is inside a git work tree (`inRepo`, computed once per
+  job in `run.go` via `git rev-parse`, the same check `tools.IsGitRepo`
+  makes). Outside a repo they drop while find/grep/ls survive, so git
+  capability is never advertised where it cannot apply. The prompt contract
+  below names them on exactly that `inRepo` gate.
 
 This filter, not the permission barrier or a prompt instruction, is what makes a
 child read-only: there is no user at its end to approve anything else.
