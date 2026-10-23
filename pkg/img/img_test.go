@@ -307,16 +307,21 @@ func TestPrepareJPEGFallback(t *testing.T) {
 }
 
 // the jpeg arm keeps no alpha: compositing over white must win over whatever
-// rgb sat beneath, here black under random alpha
+// rgb sat beneath, here random pixels under uniform half alpha
 func TestPrepareAlphaPngFlattensToWhite(t *testing.T) {
 	t.Parallel()
 
-	// black pixels under pseudo-random alpha leave ~1 uncompressed byte per
-	// pixel, so the fixture busts the encoded-size ceiling and lands on jpeg
-	src := image.NewNRGBA(image.Rect(0, 0, 1950, 1950))
+	// random rgb under a constant half alpha still defies compression (~3
+	// bytes/pixel), so a modest fixture busts the encoded-size ceiling and lands
+	// on jpeg without resizing; without the flatten the mean sits near 64
+	// (premultiplied rgb), with it near 191 (white shows through)
+	src := image.NewNRGBA(image.Rect(0, 0, 1150, 1150))
 	rng := rand.New(rand.NewSource(1))
-	for i := 3; i < len(src.Pix); i += 4 {
+	for i := 0; i < len(src.Pix); i += 4 {
 		src.Pix[i] = byte(rng.Intn(256))
+		src.Pix[i+1] = byte(rng.Intn(256))
+		src.Pix[i+2] = byte(rng.Intn(256))
+		src.Pix[i+3] = 128
 	}
 	res, err := Prepare(pngBytes(t, src))
 	require.NoError(t, err)
