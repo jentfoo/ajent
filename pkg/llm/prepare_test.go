@@ -669,6 +669,119 @@ func TestPrepareRepairsToolInputs(t *testing.T) {
 	})
 }
 
+func TestNormalizeContent(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "p", ID: "m", Caps: Capabilities{Reasoning: true}}
+	target := Origin{Provider: m.Provider, Dialect: m.Caps.Dialect, Model: m.ID}
+
+	t.Run("same_origin_passthrough", func(t *testing.T) {
+		msgs := []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", ToolName: "read", Content: BlockList{TextBlock{Text: "r"}}}}},
+		}
+		for i := range msgs {
+			msgs[i].Origin = &target
+		}
+		out := normalizeContent(msgs, RetainAll, m.Caps, target)
+		assert.Equal(t, msgs, out)
+		assert.Same(t, &msgs[0], &out[0]) // untouched messages share the caller's slice
+	})
+
+	t.Run("foreign_thinking_degrades_once", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{Text: "t"}, TextBlock{Text: "a"},
+		}}}
+		out := normalizeContent(in, RetainAll, m.Caps, target)
+		require.Len(t, out, 1)
+		assert.Equal(t, BlockList{TextBlock{Text: "t"}, TextBlock{Text: "a"}}, out[0].Content)
+
+		for i := range out {
+			out[i].Origin = &target
+		}
+		passed := normalizeContent(out, RetainAll, m.Caps, target)
+		assert.Same(t, &out[0], &passed[0]) // the degraded shape is stable on re-run
+	})
+}
+
+func TestDegradeForeignBlocks(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "openai", ID: "gpt-5"}
+	target := Origin{Provider: m.Provider, Dialect: m.Caps.Dialect, Model: m.ID}
+
+	t.Run("same_origin_shares_content", func(t *testing.T) {
+		in := Message{Role: RoleUser, Content: BlockList{
+			TextBlock{Text: "hello"},
+			ToolResultBlock{CallID: "c1", ToolName: "read", Content: BlockList{TextBlock{Text: "r"}}},
+		}}
+		out, changed := degradeForeignBlocks(in, m.Caps, target, map[string]string{})
+		assert.False(t, changed)
+		assert.Same(t, &in.Content[0], &out.Content[0])
+	})
+
+	t.Run("foreign_clean_passthrough", func(t *testing.T) {
+		// nil origin counts as foreign, but nothing here needs stripping
+		in := Message{Role: RoleUser, Content: BlockList{TextBlock{Text: "hello"}}}
+		out, changed := degradeForeignBlocks(in, m.Caps, target, map[string]string{})
+		assert.False(t, changed)
+		assert.Same(t, &in.Content[0], &out.Content[0])
+	})
+
+	t.Run("signature_stripped_copies", func(t *testing.T) {
+		in := Message{Role: RoleAssistant, Content: BlockList{
+			TextBlock{Text: "a", Signature: "sig"},
+		}}
+		out, changed := degradeForeignBlocks(in, m.Caps, target, map[string]string{})
+		assert.True(t, changed)
+		assert.Equal(t, BlockList{TextBlock{Text: "a"}}, out.Content)
+		assert.Equal(t, "sig", in.Content[0].(TextBlock).Signature) // caller keeps its own
+	})
+
+	t.Run("result_follows_rename", func(t *testing.T) {
+		in := Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "old", ToolName: "read", Content: BlockList{TextBlock{Text: "r"}}},
+		}}
+		out, changed := degradeForeignBlocks(in, m.Caps, target, map[string]string{"old": "new"})
+		assert.True(t, changed)
+		assert.Equal(t, "new", out.Content[0].(ToolResultBlock).CallID)
+	})
+}
+
+func TestApplyLadderToResults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty_result_padded", func(t *testing.T) {
+		in := Message{Role: RoleUser, Content: BlockList{ToolResultBlock{CallID: "c1"}}}
+		out, changed := applyLadderToResults(in, map[string]string{})
+		assert.True(t, changed)
+		tr := out.Content[0].(ToolResultBlock)
+		assert.Equal(t, "(no tool output)", tr.Content[0].(TextBlock).Text)
+		assert.Empty(t, in.Content[0].(ToolResultBlock).Content) // caller untouched
+	})
+
+	t.Run("text_result_shares_backing", func(t *testing.T) {
+		in := Message{Role: RoleUser, Content: BlockList{
+			TextBlock{Text: "before"},
+			ToolResultBlock{CallID: "c1", Content: BlockList{TextBlock{Text: "r"}}},
+		}}
+		out, changed := applyLadderToResults(in, map[string]string{})
+		assert.False(t, changed)
+		assert.Same(t, &in.Content[0], &out.Content[0])
+	})
+
+	t.Run("rename_follows_call_id", func(t *testing.T) {
+		in := Message{Role: RoleUser, Content: BlockList{
+			ToolResultBlock{CallID: "old", Content: BlockList{TextBlock{Text: "r"}}},
+		}}
+		out, changed := applyLadderToResults(in, map[string]string{"old": "new"})
+		assert.True(t, changed)
+		assert.Equal(t, "new", out.Content[0].(ToolResultBlock).CallID)
+	})
+}
+
 func TestRepairTurns(t *testing.T) {
 	t.Parallel()
 
@@ -863,6 +976,45 @@ func TestRepairTurns(t *testing.T) {
 		assert.NotEqual(t, processedTools, out[2].Content[0].(TextBlock).Text)
 	})
 
+	t.Run("clean_list_shares_backing", func(t *testing.T) {
+		in := []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{ToolCallBlock{ID: "c1", Name: "read"}}},
+			{Role: RoleUser, Content: BlockList{
+				ToolResultBlock{CallID: "c1", ToolName: "read", Content: BlockList{TextBlock{Text: "r"}}}}},
+		}
+		out := repairTurns(in, m.Caps)
+		assert.Equal(t, in, out)
+		assert.Same(t, &in[0], &out[0]) // untouched turns share the caller's slice
+	})
+
+	t.Run("empty_message_drops", func(t *testing.T) {
+		in := []Message{Text(RoleUser, "q"), {Role: RoleAssistant}, Text(RoleAssistant, "after")}
+		out := repairTurns(in, m.Caps)
+		require.Len(t, out, 2)
+		assert.Equal(t, BlockList{TextBlock{Text: "q"}}, out[0].Content)
+		assert.Equal(t, BlockList{TextBlock{Text: "after"}}, out[1].Content)
+	})
+
+	t.Run("echoed_result_drops", func(t *testing.T) {
+		// a second result for an already-answered call is dropped, and the drop must
+		// land even when the rest of its message passes through untouched
+		in := []Message{
+			Text(RoleUser, "q"),
+			{Role: RoleAssistant, Content: BlockList{
+				ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{}`)}}},
+			{Role: RoleUser, Content: BlockList{ToolResultBlock{CallID: "c1", ToolName: "read",
+				Content: BlockList{TextBlock{Text: "r"}}}}},
+			{Role: RoleUser, Content: BlockList{
+				TextBlock{Text: "note"},
+				ToolResultBlock{CallID: "c1", ToolName: "read",
+					Content: BlockList{TextBlock{Text: "echoed"}}}}},
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 4)
+		assert.Equal(t, BlockList{TextBlock{Text: "note"}}, out[3].Content)
+	})
+
 	t.Run("orphan_after_tool_result_bridged", func(t *testing.T) {
 		// an unanswered call flushed before a plain user turn synthesizes results.
 		// Those still need the assistant bridge under RequiresAssistantAfterToolResult.
@@ -932,6 +1084,40 @@ func TestPrepareIdempotent(t *testing.T) {
 	once := Prepare(req)
 	twice := Prepare(Prepare(req))
 	assert.Equal(t, once.Messages, twice.Messages)
+}
+
+func TestPrepareStampsAreNotWrittenThrough(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "p", ID: "m"}
+	in := []Message{Text(RoleUser, "hello"), Text(RoleAssistant, "hi there")}
+
+	out := Prepare(Request{Model: m, Messages: in}).Messages
+
+	assert.Nil(t, in[0].Origin)     // the caller's slice carries no stamps
+	assert.NotNil(t, out[0].Origin) // the output owns its own
+	assert.NotSame(t, &in[0], &out[0])
+}
+
+func TestPrepareSettledPassSharesMessages(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "openai", ID: "gpt-5", Caps: Capabilities{
+		Dialect: DialectOpenAIResponses, Reasoning: true,
+	}}
+	in := []Message{
+		{Role: RoleAssistant, Content: BlockList{
+			ThinkingBlock{Text: "t"},
+			ToolCallBlock{ID: "call.1|fc/9", Name: "read"},
+		}},
+	}
+	req := Request{Model: m, Messages: foreignOrigin(m, in), Reasoning: ReasoningConfig{Retain: RetainAll}}
+	once := Prepare(req)
+	twice := Prepare(Request{Model: m, Messages: once.Messages,
+		Reasoning: ReasoningConfig{Retain: RetainAll}})
+
+	assert.Equal(t, once.Messages, twice.Messages)        // values unchanged
+	assert.Same(t, &once.Messages[0], &twice.Messages[0]) // the settled pass is a scan
 }
 
 func TestPrepareToolResultImageSplit(t *testing.T) {

@@ -139,10 +139,6 @@ func benchConversation(m Model) []Message {
 			result.AddedToolNames = []string{"ctx7_docs"}
 		}
 		results := BlockList{result}
-		if i%6 == 2 { // a user interjection follows the results
-			msgs = append(msgs, Message{Role: RoleUser, Origin: &own, Content: BlockList{
-				TextBlock{Text: fmt.Sprintf("also check the %dth caller before you edit", i)}}})
-		}
 		if i%7 == 3 { // images arrive inside tool output too, back to back
 			results = append(results,
 				ToolResultBlock{CallID: fmt.Sprintf("call_%03d_b%s", i, idSuffix), ToolName: "grep",
@@ -154,6 +150,10 @@ func benchConversation(m Model) []Message {
 					Content: BlockList{TextBlock{Text: strings.Repeat(fmt.Sprintf("reduce.go:%d: panic recovered\n", i), 6)}}})
 		}
 		msgs = append(msgs, Message{Role: RoleUser, Origin: &own, Content: results})
+		if i%6 == 2 { // a user interjection follows the results
+			msgs = append(msgs, Message{Role: RoleUser, Origin: &own, Content: BlockList{
+				TextBlock{Text: fmt.Sprintf("also check the %dth caller before you edit", i)}}})
+		}
 	}
 	// an aborted turn: its calls were never answered, so repairTurns synthesizes
 	// the missing results
@@ -207,6 +207,29 @@ func BenchmarkPrepare(b *testing.B) {
 			_ = Prepare(req)
 		}
 	})
+}
+
+// BenchmarkPrepareSettled measures the no-change re-pass providers make over
+// already-normalized messages: every stage should scan, not rebuild.
+func BenchmarkPrepareSettled(b *testing.B) {
+	for _, tc := range []struct {
+		name string
+		raw  Request
+	}{
+		{"anthropic", benchRequest(benchModel(DialectAnthropic))},
+		{"completions", benchRequest(benchModel(DialectOpenAICompletions))},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			settled := Prepare(tc.raw)
+			again := Prepare(settled)
+			require.Equal(b, settled.Messages, again.Messages)
+			require.Same(b, &settled.Messages[0], &again.Messages[0]) // a scan shares the list
+
+			for b.Loop() {
+				_ = Prepare(settled)
+			}
+		})
+	}
 }
 
 // BenchmarkProviderWire measures wire assembly off the prepared fixture: the

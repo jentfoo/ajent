@@ -32,6 +32,9 @@ const processedTools = "I have processed the tool results."
 // tool-call inputs replaced with {}. Every request path passes through it so the
 // estimator and the wire never disagree about what is sent. It is idempotent, so
 // calling it twice yields an identical message list.
+//
+// The pass never writes through req.Messages: clean stages share the input's
+// backing arrays untouched and the origin stamp clones on first write.
 func Prepare(req Request) Request {
 	caps := req.Model.Caps
 	target := Origin{Provider: req.Model.Provider, Dialect: caps.Dialect, Model: req.Model.ID}
@@ -43,15 +46,46 @@ func Prepare(req Request) Request {
 	msgs = repairToolInputs(msgs)            // invalid args ride as {}, never raw
 	msgs = repairTurns(msgs, caps)
 
-	// stamp the resolved origin so a later Prepare pass sees same-model messages
+	// stamp the resolved origin so a later Prepare pass sees same-model messages.
+	// Writes clone first: msgs may share the caller's backing array by now, and an
+	// in-place stale origin would reclassify id normalization on the next switch
+	var stamped []Message // cloned messages once a stamp lands; nil while none do
 	for i := range msgs {
-		if m := msgs[i]; m.Origin == nil || *m.Origin != target {
-			m.Origin = &target
-			msgs[i] = m
+		m := msgs[i]
+		if m.Origin != nil && *m.Origin == target {
+			continue
 		}
+		if stamped == nil {
+			stamped = slices.Clone(msgs)
+		}
+		m.Origin = &target
+		stamped[i] = m
+	}
+	if stamped != nil {
+		msgs = stamped
 	}
 	req.Messages = msgs
 	return req
+}
+
+// takeBlocks returns the list a rewrite of src at slot j appends into: an
+// existing rebuild passes through, otherwise everything before j is cloned so
+// later writes never land in shared memory.
+func takeBlocks(content, src BlockList, j int) BlockList {
+	if content != nil {
+		return content
+	}
+	out := make(BlockList, 0, len(src))
+	return append(out, src[:j]...)
+}
+
+// keepBlock appends b once a rebuild is underway; before that the input slice
+// already holds it verbatim, so an unchanged message keeps sharing its array.
+func keepBlock(content BlockList, b Block) BlockList {
+	if content == nil {
+		return nil
+	}
+	return append(content, b)
 }
 
 // splitInlineThinking moves reasoning that leaked into an assistant text block
@@ -282,18 +316,31 @@ func splitToolResultImages(msgs []Message, caps Capabilities) []Message {
 // foreign text signatures stripped, tool-call ids normalized for the target.
 //
 // Call ids rewrite consistently across one request, keeping every result
-// attached to its call. Assistant messages emptied by the pass are dropped.
+// attached to its call. Assistant messages emptied by the pass are dropped. A
+// list needing none of that passes through untouched.
 func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, target Origin) []Message {
 	policy = resolveRetention(policy, caps)
 	keepFrom, lastAssistant := retentionBounds(msgs)
 
-	out := make([]Message, 0, len(msgs))
+	var out []Message // nil while every message passes through untouched
+	// fork copies the messages already passed through on the first change, so a
+	// clean pass returns the caller's slice and a dirty one owns its output
+	fork := func(i int) {
+		if out == nil {
+			out = slices.Clone(msgs[:i])
+		}
+	}
 	rename := map[string]string{} // original foreign call id -> normalized
 
 	for i, m := range msgs {
 		if m.Role != RoleAssistant || !hasThinking(m.Content) {
-			nm := degradeForeignBlocks(m, caps, target, rename)
-			out = append(out, nm)
+			nm, changed := degradeForeignBlocks(m, caps, target, rename)
+			if changed {
+				fork(i)
+			}
+			if out != nil {
+				out = append(out, nm)
+			}
 			continue
 		}
 
@@ -301,116 +348,176 @@ func normalizeContent(msgs []Message, policy RetainPolicy, caps Capabilities, ta
 		foreign := originForeign(m.Origin, target) // full mismatch: any model switch
 		kind := callKindFor(m.Origin, target)      // endpoint vs same-endpoint for ids
 
-		content := make(BlockList, 0, len(m.Content))
-		for _, b := range m.Content {
+		var content BlockList // rebuilt blocks once a change lands in this message
+		for j, b := range m.Content {
 			switch v := b.(type) {
 			case ThinkingBlock:
 				if !keep || foreign && (v.Redacted != "" || strings.TrimSpace(v.Text) == "") {
+					content = takeBlocks(content, m.Content, j)
 					continue // dropped: policy, or an un-replayable foreign token
 				}
 				if foreign {
 					// a foreign reasoning block degrades to visible text so the turn survives
+					content = takeBlocks(content, m.Content, j)
 					content = append(content, TextBlock{Text: v.Text})
 					continue
 				}
 				switch {
 				case caps.RequiresThinkingAsText:
 					if strings.TrimSpace(v.Text) != "" {
+						content = takeBlocks(content, m.Content, j)
 						content = append(content, TextBlock{Text: v.Text})
 					} else if replayable(v, caps) && (v.Signature != "" || v.Redacted != "") {
-						content = append(content, v)
+						content = keepBlock(content, v)
+					} else {
+						content = takeBlocks(content, m.Content, j) // nothing to send back
 					}
 				case !replayable(v, caps):
-					continue // dropped: no token this provider accepts
+					content = takeBlocks(content, m.Content, j) // dropped: no token this provider accepts
 				default:
 					if strings.TrimSpace(v.Text) == "" && v.Signature == "" && v.Redacted == "" &&
 						v.ItemID == "" && len(v.Item) == 0 && len(v.Details) == 0 {
+						content = takeBlocks(content, m.Content, j)
 						continue // nothing to replay at all
 					}
-					content = append(content, v)
+					content = keepBlock(content, v)
 				}
 			case TextBlock:
 				if foreign && v.Signature != "" {
 					v.Signature = ""
+					content = takeBlocks(content, m.Content, j)
+					content = append(content, v)
+					continue
 				}
-				content = append(content, v)
+				content = keepBlock(content, v)
 			case ToolCallBlock:
 				if kind != callSameEndpoint {
 					nid := normalizeCallID(v.ID, caps, target.Provider, kind)
 					if nid != v.ID {
 						rename[v.ID] = nid
 						v.ID = nid
+						content = takeBlocks(content, m.Content, j)
+						content = append(content, v)
+						continue
 					}
 				}
-				content = append(content, v)
+				content = keepBlock(content, v)
 			case ToolResultBlock:
-				if nid := rename[v.CallID]; nid != "" {
-					v.CallID = nid
+				nv, ch := ladderResult(v, rename)
+				if !ch {
+					content = keepBlock(content, v)
+					continue
 				}
-				content = append(content, applyPlaceholderLadder(v))
+				content = takeBlocks(content, m.Content, j)
+				content = append(content, nv)
 			default:
-				content = append(content, b)
+				content = keepBlock(content, b)
 			}
 		}
 
-		if len(content) == 0 {
-			continue // an emptied assistant message is dropped, as today
+		if content == nil {
+			if out != nil {
+				out = append(out, m) // untouched message shares the input's array
+			}
+			continue
 		}
-		m.Content = content
-		out = append(out, m)
+		fork(i)
+		if len(content) > 0 {
+			m.Content = content
+			out = append(out, m)
+		}
+		// else an emptied assistant message is dropped, as today
 	}
 
+	if out == nil {
+		return msgs
+	}
 	return out
 }
 
 // degradeForeignBlocks strips text signatures and normalizes tool-call ids on a
 // foreign message, recording rewrites in rename so its results follow. A
-// same-origin message keeps its blocks but still gets every result call id
-// mapped through rename and the placeholder ladder applied.
-func degradeForeignBlocks(m Message, caps Capabilities, target Origin, rename map[string]string) Message {
-	out := slices.Clone(m.Content)
+// same-origin message keeps its blocks. Both paths route every result through
+// applyLadderToResults, which owns call id mapping and the placeholder ladder.
+// Content clones only when a change lands; changed reports whether anything was
+// rewritten.
+func degradeForeignBlocks(m Message, caps Capabilities, target Origin, rename map[string]string) (Message, bool) {
 	if !originForeign(m.Origin, target) {
-		m.Content = out
 		return applyLadderToResults(m, rename)
 	}
 	kind := callKindFor(m.Origin, target)
-	for i, b := range out {
+
+	var content BlockList // rebuilt blocks once a change lands
+	for i, b := range m.Content {
 		switch v := b.(type) {
 		case TextBlock:
-			if v.Signature != "" {
-				v.Signature = ""
-				out[i] = v
+			if v.Signature == "" {
+				content = keepBlock(content, b)
+				continue
 			}
+			v.Signature = ""
+			content = takeBlocks(content, m.Content, i)
+			content = append(content, v)
 		case ToolCallBlock:
 			nid := normalizeCallID(v.ID, caps, target.Provider, kind)
-			if nid != v.ID {
-				rename[v.ID] = nid
-				v.ID = nid
-				out[i] = v
+			if nid == v.ID {
+				content = keepBlock(content, b)
+				continue
 			}
-		case ToolResultBlock:
-			if nid := rename[v.CallID]; nid != "" {
-				v.CallID = nid
-				out[i] = v
-			}
+			rename[v.ID] = nid
+			v.ID = nid
+			content = takeBlocks(content, m.Content, i)
+			content = append(content, v)
+		default:
+			content = keepBlock(content, b)
 		}
 	}
-	m.Content = out
-	return applyLadderToResults(m, rename)
+
+	if content != nil {
+		m.Content = content
+	}
+	laddered, ladderChanged := applyLadderToResults(m, rename)
+	return laddered, content != nil || ladderChanged
+}
+
+// ladderResult rewrites one tool result for the target: its call id through
+// rename and the placeholder ladder when no text survives. changed reports
+// whether either applied.
+func ladderResult(tr ToolResultBlock, rename map[string]string) (ToolResultBlock, bool) {
+	nid := rename[tr.CallID]
+	if nid == "" && trHasText(tr.Content) { // the ladder only pads when no text survives
+		return tr, false
+	}
+	if nid != "" {
+		tr.CallID = nid
+	}
+	return applyPlaceholderLadder(tr), true
 }
 
 // applyLadderToResults maps each result call id through the rename map and runs
-// the placeholder ladder over every tool result.
-func applyLadderToResults(m Message, rename map[string]string) Message {
+// the placeholder ladder over every tool result. Content clones only when a
+// change lands; changed reports whether anything was rewritten.
+func applyLadderToResults(m Message, rename map[string]string) (Message, bool) {
+	var content BlockList // rebuilt blocks once a change lands
 	for i, b := range m.Content {
-		if tr, ok := b.(ToolResultBlock); ok {
-			if nid := rename[tr.CallID]; nid != "" {
-				tr.CallID = nid
-			}
-			m.Content[i] = applyPlaceholderLadder(tr)
+		tr, ok := b.(ToolResultBlock)
+		if !ok {
+			content = keepBlock(content, b)
+			continue
 		}
+		nv, ch := ladderResult(tr, rename)
+		if !ch {
+			content = keepBlock(content, b)
+			continue
+		}
+		content = takeBlocks(content, m.Content, i)
+		content = append(content, nv)
 	}
-	return m
+	if content == nil {
+		return m, false
+	}
+	m.Content = content
+	return m, true
 }
 
 // callKind classifies how an id crossed into the request: same endpoint, a model
@@ -480,8 +587,18 @@ func trHasText(content BlockList) bool {
 // Empty ids drop and two calls sharing one id inside a batch keep only the
 // first, the only shapes that still cannot pair. An id a later exchange reuses
 // is renamed instead: distinct round trips are distinct history, and both ship.
+// A list needing none of those repairs passes through untouched. The id maps
+// stay eager: building them is the scan that detects a needed repair.
 func repairTurns(msgs []Message, caps Capabilities) []Message {
-	out := make([]Message, 0, len(msgs))
+	var out []Message // nil while every message passes through untouched
+	// fork copies the messages already passed through on the first change, so a
+	// clean pass returns the caller's slice and a dirty one owns its output
+	fork := func(i int) {
+		if out == nil {
+			out = slices.Clone(msgs[:i])
+		}
+	}
+
 	skippedCalls := map[string]struct{}{}
 	pending := map[string]ToolCallBlock{}
 	seenCalls := map[string]struct{}{} // every call id already emitted, answered or not
@@ -490,7 +607,7 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 	var order []string
 	var lastWasResults bool // whether the last emitted message was tool-results-only
 
-	flushPending := func() {
+	flushPending := func(i int) {
 		if len(order) == 0 {
 			return
 		}
@@ -508,45 +625,52 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 		}
 		order = nil
 		if len(content) > 0 {
+			fork(i)
 			out = append(out, Message{Role: RoleUser, Content: content})
 			lastWasResults = true // the synthesized results turn still needs a bridge
 		}
 	}
 
-	for _, m := range msgs {
+	for i, m := range msgs {
 		if m.Role == RoleAssistant && m.Stop == StopError {
 			for _, b := range m.Content {
 				if tc, ok := b.(ToolCallBlock); ok && tc.ID != "" {
 					skippedCalls[tc.ID] = struct{}{}
 				}
 			}
-			continue // the errored turn is dropped wholesale
+			fork(i) // the errored turn is dropped wholesale
+			continue
 		}
 
 		// a new turn boundary flushes any still-unanswered prior calls first
 		if m.Role == RoleAssistant || (m.Role == RoleUser && !OnlyToolResults(m.Content)) {
-			flushPending()
+			flushPending(i)
 		}
 
 		// some chat-completions providers need an assistant reply between a tool-result
 		// turn and the next user message. Every message recomputes whether it is one
 		if caps.RequiresAssistantAfterToolResult && lastWasResults && m.Role == RoleUser {
+			fork(i)
 			out = append(out, Text(RoleAssistant, processedTools))
 		}
 
-		content := make(BlockList, 0, len(m.Content))
-		for _, b := range m.Content {
+		var content BlockList // rebuilt blocks once a change lands in this message
+		for j, b := range m.Content {
 			if tr, ok := b.(ToolResultBlock); ok {
 				if tr.CallID == "" {
+					content = takeBlocks(content, m.Content, j)
 					continue // unpairable, dropped rather than sent dangling
 				}
 				if _, skip := skippedCalls[tr.CallID]; skip {
+					content = takeBlocks(content, m.Content, j)
 					continue // result of a skipped (errored) call
 				}
 				if nid := renamed[tr.CallID]; nid != "" {
 					tr.CallID = nid // a reused exchange reads under its renamed id
+					content = takeBlocks(content, m.Content, j)
 				}
 				if _, dup := answered[tr.CallID]; dup {
+					content = takeBlocks(content, m.Content, j)
 					continue // echo of an already-answered duplicate call
 				}
 				if c, inTurn := pending[tr.CallID]; inTurn {
@@ -554,19 +678,22 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 					answered[tr.CallID] = struct{}{}
 					if tr.ToolName == "" && c.Name != "" {
 						tr.ToolName = c.Name
+						content = takeBlocks(content, m.Content, j)
 					}
 				}
-				content = append(content, tr)
+				content = keepBlock(content, tr)
 				continue
 			}
 			if tc, ok := b.(ToolCallBlock); ok {
 				if tc.ID == "" {
+					content = takeBlocks(content, m.Content, j)
 					continue // unanswerable, dropped rather than sent dangling
 				}
 				// a live call re-owning the id frees an earlier errored turn's skip
 				delete(skippedCalls, tc.ID)
 				if _, dup := seenCalls[tc.ID]; dup {
 					if _, open := pending[tc.ID]; open {
+						content = takeBlocks(content, m.Content, j)
 						continue // same batch: two calls cannot pair under one id, first stands
 					}
 					// a later exchange reusing an id an earlier one spent: rename so
@@ -574,24 +701,41 @@ func repairTurns(msgs []Message, caps Capabilities) []Message {
 					nid := uniqueCallID(tc.ID, seenCalls)
 					renamed[tc.ID] = nid
 					tc.ID = nid
+					content = takeBlocks(content, m.Content, j)
 				}
 				seenCalls[tc.ID] = struct{}{}
 				pending[tc.ID] = tc
 				order = append(order, tc.ID)
-				content = append(content, tc)
+				content = keepBlock(content, tc)
 				continue
 			}
-			content = append(content, b)
+			content = keepBlock(content, b)
 		}
 
+		if content == nil && len(m.Content) == 0 {
+			fork(i)
+			continue // a message with nothing to send drops, as today
+		}
+		if content == nil {
+			if out != nil {
+				out = append(out, m) // untouched message shares the input's array
+			}
+			lastWasResults = m.Role == RoleUser && OnlyToolResults(m.Content)
+			continue
+		}
+		fork(i)
 		if len(content) == 0 {
 			continue // a message emptied by skipped results is dropped
 		}
 		lastWasResults = m.Role == RoleUser && OnlyToolResults(content)
-		out = append(out, Message{Role: m.Role, Content: content})
+		// Stop rides along so a rebuilt turn matches what a clean pass would emit
+		out = append(out, Message{Role: m.Role, Stop: m.Stop, Content: content})
 	}
 
-	flushPending()
+	flushPending(len(msgs))
+	if out == nil {
+		return msgs
+	}
 	return out
 }
 
