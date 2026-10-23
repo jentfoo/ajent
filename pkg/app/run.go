@@ -80,7 +80,9 @@ func Run(o RunOptions) int {
 	}
 	warnings = append(warnings, wregs...)
 
-	active := resolveActiveModel(o.Model, reg)
+	// -m already activated during the build: the flag layer folds into DefaultModel,
+	// so Active() names it, or the first-model fallback when the name does not resolve.
+	active := reg.Active()
 
 	// a one-shot run never opens a terminal; neither does a piped invocation.
 	// Both settle every permission ask without a dialog, so they share the
@@ -211,17 +213,6 @@ func routeStartup(prompt string, args []string, stdin, stdout *os.File) (startup
 // applies to decide whether a full-screen render is possible.
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(int(f.Fd()))
-}
-
-func resolveActiveModel(modelFlag string, reg *llm.Registry) llm.Model {
-	active := reg.Active()
-	if modelFlag != "" {
-		if m, rerr := reg.Resolve(modelFlag); rerr == nil {
-			reg.SetActive(m)
-			return m
-		}
-	}
-	return active
 }
 
 // registryFor loads the user models file and builds a Registry over it. It

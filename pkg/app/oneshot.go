@@ -141,7 +141,7 @@ func RunHeadless(o HeadlessOptions) int {
 			notify("resume: "+w, agent.LevelWarn)
 		}
 		if st.Model.ID != "" {
-			o.Reg.SetActive(st.Model) // the branch may name a model resolveActiveModel never saw
+			o.Reg.SetActive(st.Model) // the branch may pin a model startup never activated
 		}
 	}
 	if stats != nil {
