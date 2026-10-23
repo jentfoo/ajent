@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -155,4 +158,99 @@ func TestSteerEmptyNeverDelivered(t *testing.T) {
 	close(block)
 	require.NoError(t, <-errCh)
 	assert.Equal(t, 0, delivered) // nothing landed, so no confirmation
+}
+
+func TestPromptBehindDriverQueues(t *testing.T) {
+	t.Parallel()
+
+	// a mid-turn Prompt must queue behind the active driver and return at once;
+	// waiting on the drain would deadlock a callback running on the loop goroutine
+	block := make(chan struct{})
+	tool := &stubTool{name: "bash", result: "ok", block: block}
+	set := &mapSet{tools: map[string]Tool{"bash": tool}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: toolCallEvents("c1", "bash")}, // turn one, blocked on the tool
+		{Events: textOnly("one done")},
+		{Events: textOnly("two done")}, // the queued prompt's own reply
+	}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.Tools = set
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "one"}) }()
+	require.Eventually(t, func() bool {
+		return a.Running() && tool.callCount() > 0
+	}, defaultTimeout, pollInterval)
+
+	handoff := make(chan error, 1)
+	go func() { handoff <- a.Prompt(t.Context(), Input{Text: "two"}) }()
+	select {
+	case err := <-handoff:
+		require.NoError(t, err) // queued without waiting for delivery
+	case <-time.After(defaultTimeout):
+		t.Fatal("Prompt blocked behind the running turn instead of queueing")
+	}
+	assert.True(t, a.Running()) // turn one still owns the agent
+
+	close(block)
+	require.NoError(t, <-errCh)
+	assert.Equal(t, []string{"one done", "two done"}, assistantTexts(a.state.Messages))
+}
+
+func TestPromptReentrantFromCallback(t *testing.T) {
+	t.Parallel()
+
+	// a nested Prompt from the running turn's own OnMessage callback must queue
+	// behind the driver instead of waiting on it, which would deadlock the loop
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textOnly("one")},
+		{Events: textOnly("two")}, // the nested prompt's own reply
+	}}
+	a := newTestAgent(nil, p, nil)
+
+	var once sync.Once
+	var nested error
+	a.opts.OnMessage = append(a.opts.OnMessage, func(MessageInfo) {
+		once.Do(func() { nested = a.Prompt(t.Context(), Input{Text: "nested"}) })
+	})
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "start"}))
+	require.NoError(t, nested)
+	assert.Equal(t, []string{"one", "two"}, assistantTexts(a.state.Messages))
+}
+
+func TestPromptConcurrentClaimsDrain(t *testing.T) {
+	t.Parallel()
+
+	// racing prompts must all land exactly once: one claims the drain under the
+	// mutex, the rest seed behind it and its driver delivers everything queued
+	const runs = 16
+	turns := make([]llm.ScriptedTurn, 0, runs)
+	for range runs { // spare turns: prompts that fold together need fewer calls
+		turns = append(turns, llm.ScriptedTurn{Events: textOnly("ok")})
+	}
+	p := &llm.ScriptedProvider{Turns: turns}
+	a := newTestAgent(nil, p, nil)
+
+	errs := make([]error, runs)
+	var wg sync.WaitGroup
+	for i := range runs {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = a.Prompt(t.Context(), Input{Text: fmt.Sprintf("p%02d", i)})
+		}(i)
+	}
+	wg.Wait()
+	for _, err := range errs {
+		require.NoError(t, err)
+	}
+
+	got := userTexts(a.state.Messages)
+	slices.Sort(got) // delivery order follows claim order, not submission index
+	want := make([]string, 0, runs)
+	for i := range runs {
+		want = append(want, fmt.Sprintf("p%02d", i))
+	}
+	assert.Equal(t, want, got) // every prompt lands exactly once
 }

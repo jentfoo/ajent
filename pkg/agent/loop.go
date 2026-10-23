@@ -26,27 +26,61 @@ const (
 	contextInterval = 80 * time.Millisecond
 )
 
-// runTurns drains the steer and follow-up queues, running one turn per
-// message-carrying input until nothing is left. Prompt hands in a single
-// initial input. Steering and follow-ups arrive on the queues while it runs.
-// Seeding appends: a fresh prompt leads whatever is already queued, so an
-// accepted input is never wiped.
+// runTurns hands inputs to the drain: absent another driver it runs turns until
+// both queues are empty or ctx ends, while a batch handed in behind an active
+// driver only seeds there and returns at once (see PromptBatch).
 func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 	a.mu.Lock()
-	if a.running {
-		a.follow = append(a.follow, first...)
-	} else {
-		a.steer = slices.Concat(first, a.steer) // the initial message leads turn one
+	if a.draining || a.running { // never claim while a turn may own state
+		if a.running {
+			a.follow = append(a.follow, first...) // the in-flight turn delivers it next
+		} else {
+			a.steer = slices.Concat(first, a.steer) // between turns: the batch's head leads
+		}
+		a.mu.Unlock()
+		return nil // the active driver owns delivery; waiting would deadlock its callbacks
 	}
+	a.draining = true
+	a.steer = slices.Concat(first, a.steer) // the initial message leads turn one
 	a.mu.Unlock()
 
+	// Only a panicking drain reaches this with the claim still held: later callers
+	// only seed while draining is set, so nothing else can own it during unwind.
+	defer func() {
+		if r := recover(); r != nil {
+			a.mu.Lock()
+			a.draining = false
+			a.mu.Unlock()
+			panic(r)
+		}
+	}()
+
+	for {
+		err := a.drive(ctx)
+
+		// hand the claim back atomically with the empty check, so work seeded in
+		// this window either lands behind the still-claimed drain or starts its own
+		a.mu.Lock()
+		more := err == nil && (len(a.steer) > 0 || len(a.follow) > 0)
+		a.draining = more
+		a.mu.Unlock()
+		if !more {
+			return err
+		}
+	}
+}
+
+// drive drains the steer and follow-up queues, running one turn per
+// message-carrying input until nothing is left. Only runTurns may call it: its
+// claim makes popping exclusive, so popped inputs are never raced or dropped.
+func (a *Agent) drive(ctx context.Context) error {
 	for {
 		// pop the next turn's inputs: framing-only entries (Before, callbacks)
 		// fold into the turn the first message-carrying input starts, never
 		// getting one of their own
 		var leads []Input
 		var head Input
-		var have, idle bool
+		var have bool
 		for {
 			var next Input
 			var ok bool
@@ -61,7 +95,6 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 				a.follow = a.follow[1:]
 				ok = true
 			}
-			idle = !a.running
 			a.mu.Unlock()
 
 			if !ok {
@@ -77,14 +110,6 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 		}
 
 		if !have {
-			if !idle {
-				// unreachable under single ownership: hand the leads back so the
-				// running turn's next boundary (drainSteer) delivers them
-				a.mu.Lock()
-				a.steer = append(leads, a.steer...)
-				a.mu.Unlock()
-				continue
-			}
 			if len(leads) > 0 {
 				// framing with no message behind it still lands, so delivery and
 				// settled callbacks fire; no turn starts for context alone
@@ -98,24 +123,19 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 		// fires. Step boundaries fire it too, mid-turn. The per-turn state reset runs
 		// unconditionally so an errored turn cannot leave stalled/warned armed for the
 		// next one, but only the summariser call stays gated on a clean end.
-		a.mu.Lock()
-		idle = !a.running
-		a.mu.Unlock()
 		if a.opts.TurnBoundary != nil {
 			a.opts.TurnBoundary()
 		}
-		if err == nil && a.opts.Compact != nil && idle {
+		if err == nil && a.opts.Compact != nil {
 			_, _ = a.opts.Compact(ctx, CompactThreshold)
 		}
-		failed := err != nil
-		a.mu.Lock()
-		drained := len(a.steer) == 0 && len(a.follow) == 0
-		running := a.running
-		a.mu.Unlock()
-		if failed {
+		if err != nil {
 			return err // observers are not told about errored turns
 		}
-		if drained && !running {
+		a.mu.Lock()
+		drained := len(a.steer) == 0 && len(a.follow) == 0
+		a.mu.Unlock()
+		if drained {
 			// fully settled: notify observers, then re-read in case one queued work.
 			// An observer that always queues loops forever, like a self-queueing follow-up.
 			a.mu.Lock()
@@ -131,9 +151,8 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 			a.mu.Lock()
 			a.settling--
 			drained = len(a.steer) == 0 && len(a.follow) == 0
-			running = a.running
 			a.mu.Unlock()
-			if drained && !running {
+			if drained {
 				return nil
 			}
 		}
@@ -145,10 +164,6 @@ func (a *Agent) runTurns(ctx context.Context, first []Input) error {
 // prompt, leads are framing-only inputs that land ahead of it.
 func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 	a.mu.Lock()
-	if a.running {
-		a.mu.Unlock()
-		return nil // a turn owns the agent, queued inputs drain after it
-	}
 	a.running = true
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel

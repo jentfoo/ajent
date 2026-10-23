@@ -92,7 +92,8 @@ type Agent struct {
 
 	mu       sync.Mutex
 	running  bool
-	settling int // depth of OnSettled notification, observers may queue work while >0
+	draining bool // a runTurns loop owns queue draining, later callers only seed
+	settling int  // depth of OnSettled notification, observers may queue work while >0
 	steer    []Input
 	follow   []Input
 	cancel   context.CancelFunc
@@ -182,15 +183,18 @@ func (a *Agent) Interrupt() {
 }
 
 // Prompt runs input to completion, including any follow-up queued while it ran.
-// It returns when both queues are empty or the context ends.
+// It returns when both queues are empty or the context ends; handed in behind an
+// active driver it queues there instead and returns at once (see PromptBatch).
 func (a *Agent) Prompt(ctx context.Context, in Input) error {
 	return a.PromptBatch(ctx, []Input{in})
 }
 
-// PromptBatch queues inputs for the next turns: with the agent idle the first
+// PromptBatch hands inputs to the turn loop: with the agent idle the first
 // becomes the prompt and the rest land behind it as pre-start steering, while a
-// turn runs each input queues as its own follow-up turn. It returns when every
-// queue is empty or the context ends.
+// turn runs each input queues as its own follow-up turn. A batch handed in
+// behind an active driver queues there for that driver to deliver and returns
+// at once, so re-entrant calls from inside the running turn cannot deadlock.
+// The driving caller returns when every queue is empty or the context ends.
 func (a *Agent) PromptBatch(ctx context.Context, inputs []Input) error {
 	if len(inputs) == 0 {
 		return nil

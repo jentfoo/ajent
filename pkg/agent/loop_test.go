@@ -724,19 +724,7 @@ func TestLoopFollowUpRunsAfterTurn(t *testing.T) {
 	require.NoError(t, <-errCh)
 	// turn one: the tool-call assistant message and its closing reply
 	// turn two: the follow-up's own reply
-	var replies []string
-	for _, m := range a.state.Messages {
-		if m.Role != llm.RoleAssistant {
-			continue
-		}
-
-		for _, b := range m.Content {
-			if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
-				replies = append(replies, tb.Text)
-			}
-		}
-	}
-	assert.Equal(t, []string{"after tool", "reply two"}, replies)
+	assert.Equal(t, []string{"after tool", "reply two"}, assistantTexts(a.state.Messages))
 }
 
 func TestLoopSteerInjectsAtBoundary(t *testing.T) {
@@ -834,6 +822,22 @@ func userTexts(msgs []llm.Message) []string {
 		}
 		for _, b := range m.Content {
 			if tb, ok := b.(llm.TextBlock); ok {
+				out = append(out, tb.Text)
+			}
+		}
+	}
+	return out
+}
+
+// assistantTexts returns the non-empty text blocks of every assistant message.
+func assistantTexts(msgs []llm.Message) []string {
+	var out []string
+	for _, m := range msgs {
+		if m.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, b := range m.Content {
+			if tb, ok := b.(llm.TextBlock); ok && tb.Text != "" {
 				out = append(out, tb.Text)
 			}
 		}
