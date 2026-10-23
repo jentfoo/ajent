@@ -4,11 +4,9 @@ import (
 	"context"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/go-analyze/bulk"
 
@@ -26,8 +24,6 @@ const (
 	maxUnits     = 24    // upper bound on the paths named across every slice
 	maxExpands   = 8     // how many times an oversized directory may be opened up
 	maxWalkFiles = 20000 // bound on the non-git fallback walk
-
-	gitTimeout = 5 * time.Second // matches the plan workflow's git calls
 )
 
 // ownedElsewhere names the root files /init itself reads or the build agent
@@ -225,50 +221,11 @@ func isFile(path string) bool {
 // where git can answer so ignored trees never inflate a slice.
 func repoFiles(ctx context.Context, cwd string) []string {
 	if tools.IsGitRepo(ctx, cwd) {
-		if out := gitLsFiles(ctx, cwd); len(out) > 0 {
+		if out := tools.GitTrackedFiles(ctx, cwd); len(out) > 0 {
 			return out
 		}
 	}
 	return walkFiles(ctx, cwd)
-}
-
-// gitLsFiles returns tracked and untracked non-ignored paths under cwd, or nil
-// on failure.
-func gitLsFiles(ctx context.Context, cwd string) []string {
-	dctx, cancel := context.WithTimeout(ctx, gitTimeout)
-	defer cancel()
-	var out strings.Builder
-	// The "." pathspec keeps ls-files to cwd's subtree. Raw -z framing: text
-	// output quotes non-ASCII names (core.quotePath) and a whole-output trim eats
-	// the first record's leading whitespace.
-	cmd := exec.CommandContext(dctx, "git", "-C", cwd,
-		"ls-files", "-co", "--exclude-standard", "-z", "--", ".")
-	cmd.Stdout = &out
-	if cmd.Run() != nil {
-		return nil
-	}
-	parts := strings.Split(out.String(), "\x00")
-	files := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, f := range parts {
-		if f == "" { // the trailing separator always yields one empty element
-			continue
-		}
-		p := filepath.Join(cwd, f)
-		if _, ok := tools.WithinRoot(cwd, p); !ok { // older git still emits ../, never leave scope
-			continue
-		}
-		// -c lists deleted-but-tracked files; Lstat drops symlinks like pkg/tools' walk
-		if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
-			continue
-		}
-		if _, dup := seen[f]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
-			continue
-		}
-		seen[f] = struct{}{}
-		files = append(files, f)
-	}
-	return files
 }
 
 // walkFiles is the non-repository fallback: a bounded walk skipping VCS and

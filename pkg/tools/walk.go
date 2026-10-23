@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/go-analyze/bulk"
 )
 
 // IsGitRepo reports whether root is inside a git work tree.
@@ -24,6 +26,40 @@ func IsSkippedDir(path string) bool {
 		}
 	}
 	return false
+}
+
+// GitTrackedFiles returns tracked and untracked non-ignored regular files under
+// root as slash paths relative to root. The result is empty when git cannot
+// answer: outside a work tree, on failure, or with nothing listed.
+// Deleted-but-tracked entries drop out and an unmerged path lists once.
+func GitTrackedFiles(ctx context.Context, root string) []string {
+	// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
+	// lists parent or sibling files as "../". Raw output: in -z framing the
+	// leading whitespace of the first name is name content, trimming mangles
+	// or drops it.
+	out := runQuietRaw(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
+	parts := strings.Split(out, "\x00")
+	names := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, f := range parts {
+		if f == "" { // the trailing separator always yields one empty element
+			continue
+		}
+		p := filepath.Join(root, f)
+		if _, ok := WithinRoot(root, p); !ok { // older git still emits ../, never leave scope
+			continue
+		}
+		// -c lists deleted-but-tracked files; Lstat drops symlinks like rg's no-follow walk
+		if fi, err := os.Lstat(p); err != nil || !fi.Mode().IsRegular() {
+			continue
+		}
+		if _, dup := seen[f]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
+			continue
+		}
+		seen[f] = struct{}{}
+		names = append(names, f)
+	}
+	return names
 }
 
 // allWalk returns every regular file under root, skipping VCS and dependency
@@ -54,39 +90,12 @@ func allWalk(ctx context.Context, root string) []string {
 }
 
 // repoFiles lists regular files under root with .gitignore semantics inside a
-// repo via git ls-files -z (quoting disabled, so non-ASCII names stay usable),
-// falling back to allWalk otherwise or when git yields nothing. Entries missing
-// on disk and symlinks are dropped, so neither engine follows a link out of root.
+// repo via GitTrackedFiles joined onto root, falling back to allWalk otherwise
+// or when git yields nothing.
 func repoFiles(ctx context.Context, root string) []string {
-	var entries []string
 	if IsGitRepo(ctx, root) {
-		// The "." pathspec keeps ls-files to root's subtree, so a nested cwd never
-		// lists parent or sibling files as "../". Raw output: in -z framing the
-		// leading whitespace of the first name is name content, trimming mangles
-		// or drops it.
-		out := runQuietRaw(ctx, "git", "-C", root, "ls-files", "-co", "--exclude-standard", "-z", "--", ".")
-		parts := strings.Split(out, "\x00")
-		seen := make(map[string]struct{}, len(parts))
-		entries = make([]string, 0, len(parts))
-		for _, f := range parts {
-			if f == "" { // the trailing separator always yields one empty element
-				continue
-			}
-			p := filepath.Join(root, f)
-			if _, ok := WithinRoot(root, p); !ok { // older git still emits ../, never leave scope
-				continue
-			}
-			// -c lists deleted-but-tracked files; Lstat drops symlinks like rg's no-follow walk
-			if fi, err := os.Lstat(p); err == nil && fi.Mode().IsRegular() {
-				if _, dup := seen[p]; dup { // unmerged entries repeat, git --deduplicate is 2.31+
-					continue
-				}
-				seen[p] = struct{}{}
-				entries = append(entries, p)
-			}
-		}
-		if len(entries) > 0 {
-			return entries
+		if names := GitTrackedFiles(ctx, root); len(names) > 0 {
+			return bulk.SliceTransform(func(n string) string { return filepath.Join(root, n) }, names)
 		}
 	}
 	return allWalk(ctx, root)

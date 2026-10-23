@@ -1,9 +1,7 @@
 package projinit
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -292,78 +290,27 @@ func TestLargest(t *testing.T) {
 	assert.Equal(t, 1, largest([]unit{{count: 2}, {count: 9}, {count: 9}})) // first of a tie
 }
 
-func TestGitLsFiles(t *testing.T) {
+func TestRepoFiles(t *testing.T) {
 	t.Parallel()
 
 	// paths arrive cwd-relative with .gitignore honoured, so ignored trees never
-	// inflate a slice
-	t.Run("honours_gitignore_relative", func(t *testing.T) {
+	// inflate a slice and names read the way the walk fallback spells them
+	t.Run("git_repo_relative_names", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "pkg/a.go")
 		require.NoError(t, os.WriteFile(filepath.Join(dir, ".gitignore"), []byte("*.log\n"), 0o644))
 		writeTree(t, dir, "junk.log")
 		gitInit(t, dir)
 
-		assert.ElementsMatch(t, []string{".gitignore", "main.go", "pkg/a.go"}, gitLsFiles(t.Context(), dir))
+		assert.ElementsMatch(t, []string{".gitignore", "main.go", "pkg/a.go"}, repoFiles(t.Context(), dir))
 	})
 
-	// -z framing must keep whitespace as name content: a whole-output trim mangles
-	// the first entry's leading run or drops an all-whitespace one
-	t.Run("leading_and_trailing_space_kept", func(t *testing.T) {
+	// outside a repository the bounded walk supplies the names
+	t.Run("non_git_walk_fallback", func(t *testing.T) {
 		dir := t.TempDir()
-		writeTree(t, dir, " y", "z ", "z.txt") // leading space sorts first in the index
-		gitInit(t, dir)
+		writeTree(t, dir, "main.go", "pkg/a.go")
 
-		assert.Equal(t, []string{" y", "z ", "z.txt"}, gitLsFiles(t.Context(), dir))
-	})
-
-	// text framing quotes non-ASCII names (core.quotePath), so -z must keep them raw
-	t.Run("non_ascii_name_unquoted", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTree(t, dir, "café.go", "z.txt")
-		gitInit(t, dir)
-
-		assert.Equal(t, []string{"café.go", "z.txt"}, gitLsFiles(t.Context(), dir))
-	})
-
-	// -c lists deleted-but-tracked files; only paths a sub-agent could read count
-	t.Run("deleted_tracked_dropped", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTree(t, dir, "a.go", "gone.go")
-		gitInit(t, dir)
-		require.NoError(t, os.Remove(filepath.Join(dir, "gone.go")))
-
-		assert.Equal(t, []string{"a.go"}, gitLsFiles(t.Context(), dir))
-	})
-
-	t.Run("tracked_symlink_dropped", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTree(t, dir, "a.go")
-		require.NoError(t, os.Symlink("a.go", filepath.Join(dir, "link.go")))
-		gitInit(t, dir)
-
-		assert.Equal(t, []string{"a.go"}, gitLsFiles(t.Context(), dir))
-	})
-
-	// an unmerged path is listed once per stage, so the survey must not count it twice
-	t.Run("unmerged_entries_deduplicated", func(t *testing.T) {
-		dir := t.TempDir()
-		writeTree(t, dir, "conflict.txt", "z.txt")
-		gitInit(t, dir)
-
-		// restage conflict.txt as an unmerged path, the way a conflicted merge leaves it
-		sha, err := exec.CommandContext(t.Context(), "git", "-C", dir,
-			"hash-object", "-w", "conflict.txt").Output()
-		require.NoError(t, err)
-		var info strings.Builder
-		for _, stage := range []int{1, 2, 3} {
-			fmt.Fprintf(&info, "100644 %s %d\tconflict.txt\n", strings.TrimSpace(string(sha)), stage)
-		}
-		idx := exec.CommandContext(t.Context(), "git", "-C", dir, "update-index", "--index-info")
-		idx.Stdin = strings.NewReader(info.String())
-		require.NoError(t, idx.Run())
-
-		assert.Equal(t, []string{"conflict.txt", "z.txt"}, gitLsFiles(t.Context(), dir))
+		assert.ElementsMatch(t, []string{"main.go", "pkg/a.go"}, repoFiles(t.Context(), dir))
 	})
 }
 
