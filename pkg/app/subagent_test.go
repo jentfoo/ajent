@@ -65,7 +65,7 @@ func TestChildToolSource(t *testing.T) {
 	// every registered tool survives under its own name, now wrapped
 	assert.Equal(t, namesOf(reg.All()), namesOf(src.All()))
 	assert.True(t, src.ReadOnly("mcp_shot"))
-	assert.False(t, src.ReadOnly("read"))
+	assert.True(t, src.ReadOnly("read")) // Builtins marks its readers read-only
 
 	all := src.All()
 	wrapped := all[len(all)-1]

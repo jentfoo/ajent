@@ -25,8 +25,8 @@ const (
 	ToolGitDiff   = "git_diff"
 )
 
-// ReadOnlyBuiltins names the built-in tools that only read. pkg/subagent keeps
-// its own copy (readOnlyBuiltins) because it may not import this package.
+// ReadOnlyBuiltins names the built-in tools that only read. Builtins marks each
+// one read-only at registration, so consumers trust registry metadata alone.
 var ReadOnlyBuiltins = []string{ToolRead, ToolGrep, ToolFind, ToolLs,
 	ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff}
 
@@ -82,6 +82,9 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&askUserTool{ask: opts.Ask}, false)
 	// a question changes nothing on disk, so it never needs approval
 	reg.MarkReadOnly([]string{ToolAskUser})
+	// the readers share that explicit grant, one mark serving every consumer:
+	// the permit barrier, the sub-agent filter and the headless scope
+	reg.MarkReadOnly(ReadOnlyBuiltins)
 	return reg, nil
 }
 

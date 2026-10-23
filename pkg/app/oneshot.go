@@ -360,7 +360,7 @@ func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) [
 		}
 		switch scope {
 		case ToolScopeReadOnly:
-			return slices.Contains(tools.ReadOnlyBuiltins, name) || reg.ReadOnly(name)
+			return reg.ReadOnly(name) // built-in readers carry the mark from Builtins
 		case ToolScopeAuto:
 			// core writers have no unattended path: never offered rather than refused
 			return !permit.IsCoreWriter(name)

@@ -49,7 +49,7 @@ type fakeSource struct {
 func (s *fakeSource) All() []agent.Tool         { return s.tools }
 func (s *fakeSource) ReadOnly(name string) bool { return s.readOnly[name] }
 
-// roTool builds a fake tool marked read-only in the source.
+// roTool builds a fake tool for a name the source reports read-only.
 func roTool(name string) agent.Tool { return &fakeTool{name: name} }
 
 // scripted returns a Provider func over one ScriptedProvider and that provider.

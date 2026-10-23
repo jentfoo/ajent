@@ -9,7 +9,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 )
 
-// fullSource is the parent-like registry view: every tool, some read-only.
+// fullSource is the parent-like registry view: every tool, with the read-only
+// marks Builtins' construction-time grant would produce.
 func fullSource() *fakeSource {
 	return &fakeSource{
 		tools: []agent.Tool{
@@ -25,7 +26,9 @@ func fullSource() *fakeSource {
 			roTool("agent_start"),    // must be barred structurally even if reported read-only
 			roTool("ask_user"),       // read-only but interactive: barred like agent_*
 		},
-		readOnly: map[string]bool{"mcp_search": true, "agent_start": true, "ask_user": true},
+		readOnly: map[string]bool{"read": true, "grep": true, "find": true, "ls": true,
+			"git_log": true, "git_diff": true,
+			"mcp_search": true, "agent_start": true, "ask_user": true},
 	}
 }
 
@@ -41,8 +44,11 @@ func TestChildTools(t *testing.T) {
 		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list", "ask_user"}, name))
 	}
 
-	src = &fakeSource{tools: []agent.Tool{&fakeTool{name: "bash"}, roTool("read")}}
-	// read is builtin-read-only so it survives, bash does not
+	src = &fakeSource{
+		tools:    []agent.Tool{&fakeTool{name: "bash"}, roTool("read")},
+		readOnly: map[string]bool{"read": true},
+	}
+	// read is marked read-only so it survives, bash does not
 	assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))
 }
 
@@ -77,7 +83,7 @@ func TestIsChildBarred(t *testing.T) {
 		src := &fakeSource{
 			tools: []agent.Tool{&fakeTool{name: "read"},
 				roTool("dev_implement"), roTool("dev_review"), roTool("dev_revise"), roTool("dev_complete")},
-			readOnly: map[string]bool{"dev_implement": true, "dev_review": true,
+			readOnly: map[string]bool{"read": true, "dev_implement": true, "dev_review": true,
 				"dev_revise": true, "dev_complete": true},
 		}
 		assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))

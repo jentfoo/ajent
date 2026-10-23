@@ -39,11 +39,12 @@ func TestClassify(t *testing.T) {
 	t.Parallel()
 
 	cases := []classifyCase{
-		// read-only built-ins run without a prompt regardless of registry metadata
-		{"read tool", "read", `{"path":"a.txt"}`, nil, VerdictAllow},
-		{"grep tool", "grep", `{}`, nil, VerdictAllow},
-		{"find tool", "find", `{}`, nil, VerdictAllow},
-		{"ls tool", "ls", `{}`, nil, VerdictAllow},
+		// read-only built-ins allow through the same metadata path as an MCP hint:
+		// Builtins marks them at construction, so the registry stub reports it here
+		{"read tool", "read", `{"path":"a.txt"}`, []string{"read"}, VerdictAllow},
+		{"grep tool", "grep", `{}`, []string{"grep"}, VerdictAllow},
+		{"find tool", "find", `{}`, []string{"find"}, VerdictAllow},
+		{"ls tool", "ls", `{}`, []string{"ls"}, VerdictAllow},
 		// registry-marked read-only MCP tools
 		{"ro mcp tool", "mcp__list", `{}`, []string{"mcp__list"}, VerdictAllow},
 		{"unannotated mcp prompts", "mcp__create", `{}`, nil, VerdictPrompt},
@@ -84,8 +85,8 @@ func TestClassify(t *testing.T) {
 		{"input fd prefix network prompts", "", "cat 0</dev/tcp/h/p", nil, VerdictPrompt},
 		{"read write network prompts", "", "cat <> /dev/tcp/h/p", nil, VerdictPrompt},
 		{"output network prompts", "", "cat > /dev/tcp/h/p", nil, VerdictPrompt},
-		// find unsafe actions prompt even though find is read-only by name
-		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow}, // tool form, shell handled below
+		// tool-form find allows on its mark; unsafe actions are a bash concern below
+		{"find -delete prompts", "find", `{}`, []string{"find"}, VerdictAllow},
 	}
 
 	for _, c := range cases {
@@ -213,9 +214,15 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// write marked read-only must still prompt, only declared metadata for non-built-in names trusted
-	t.Run("ignores_read_only_mark_for_builtins_not_in_list", func(t *testing.T) {
+	// a core write tool prompts even when metadata claims read-only, so no
+	// config glob or annotation can ever auto-allow one
+	t.Run("core_writer_metadata_still_prompts", func(t *testing.T) {
 		assert.Equal(t, VerdictPrompt, Classify(call("write", `{}`), roSet([]string{"write"})))
+	})
+
+	// an unmarked name fails closed: metadata is the sole allow path
+	t.Run("unmarked_reader_prompts", func(t *testing.T) {
+		assert.Equal(t, VerdictPrompt, Classify(call("read", `{}`), noRO))
 	})
 
 	// a redirect writes, so the read-only verdict never covers one wherever it

@@ -284,13 +284,28 @@ func TestGitToolsRegisteredDisabled(t *testing.T) {
 	for _, name := range []string{ToolGitStatus, ToolGitLog, ToolGitShow, ToolGitDiff} {
 		assert.NotContains(t, reg.Names(), name) // off by default like find and grep
 		assert.Contains(t, ReadOnlyBuiltins, name)
-		assert.False(t, reg.ReadOnly(name)) // matched by name, not metadata
+		assert.True(t, reg.ReadOnly(name)) // disabled yet marked read-only at construction
 	}
 
 	reg.SetEnabled([]string{ToolGitLog})
 	assert.Contains(t, reg.Names(), ToolGitLog)
 	_, ok := reg.Get(ToolGitLog)
 	assert.True(t, ok)
+}
+
+func TestBuiltinsReadOnlyMetadata(t *testing.T) {
+	t.Parallel()
+
+	reg, err := Builtins(Options{Cwd: t.TempDir(), SessionID: "test"})
+	require.NoError(t, err)
+	// the drift guard for the construction-time mark: a reader renamed or dropped
+	// from the registry fails here instead of silently losing its read-only grant
+	for _, name := range ReadOnlyBuiltins {
+		assert.True(t, reg.ReadOnly(name), name)
+	}
+	for _, name := range []string{"write", "edit", ToolBash} { // never marked by construction
+		assert.False(t, reg.ReadOnly(name), name)
+	}
 }
 
 func TestRegistryUnitsCollapsesGroup(t *testing.T) {

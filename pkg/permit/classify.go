@@ -17,10 +17,6 @@ const (
 	VerdictPrompt                // needs approval or model classification
 )
 
-// builtinReadOnly are core tools that only ever read. Registry.ReadOnly is false
-// for them today (only MCP calls MarkReadOnly), so they match by name here.
-var builtinReadOnly = bulk.SliceToSet(tools.ReadOnlyBuiltins)
-
 // coreWriteTools always mutate and never auto-allow on declared metadata, even if
 // a config glob or annotation were to mark them read-only by mistake.
 var coreWriteTools = bulk.SliceToSet([]string{"write", "edit"})
@@ -49,14 +45,12 @@ func bashCommand(input json.RawMessage) string {
 // line from the read-only verdict: it writes, and only the write-scope and
 // configured-safe paths verify where.
 func Classify(call agent.ToolCall, ro func(string) bool) Verdict {
-	if _, ok := builtinReadOnly[call.Name]; ok {
-		return VerdictAllow
-	}
-	// declared metadata only ever auto-allows non-built-in (MCP/extension) tools,
-	// a core write tool prompting regardless of what the registry claims.
+	// declared metadata is the sole allow path: built-in readers marked at
+	// construction, MCP hints and config globs. A core write tool prompts
+	// regardless of what the registry claims.
 	_, isWrite := coreWriteTools[call.Name]
 	if !isWrite && ro != nil && ro(call.Name) {
-		return VerdictAllow // MCP readOnlyHint or config globs
+		return VerdictAllow
 	}
 	if call.Name == tools.ToolBash {
 		command := bashCommand(call.Input)

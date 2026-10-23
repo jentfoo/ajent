@@ -273,6 +273,27 @@ func TestGuardModeMatrix(t *testing.T) {
 	}
 }
 
+func TestGuardMarkedReadOnlyTool(t *testing.T) {
+	t.Parallel()
+
+	// Builtins marks its readers, so production passes that mark as ro: a
+	// tool-form read runs free under allow-read on metadata alone.
+	ro := roSet([]string{"read"})
+	inert := Options{
+		Notice:     func(string) {},
+		DryRun:     func(agent.ToolCall) error { return nil },
+		Classifier: func(context.Context, Subject) Class { return ClassUnsure },
+	}
+
+	d := NewBarrier(ro, inert).Guard()(t.Context(), call("read", `{}`))
+	assert.Equal(t, tools.ActionAllow, d.Action)
+
+	// block-all still asks on the same mark: metadata feeds the verdict,
+	// it is not an approval of its own
+	d = NewBarrier(ro, withMode(inert, ModeBlockAll)).Guard()(t.Context(), call("read", `{}`))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+}
+
 func TestGuardSafeCommandsOverridePromptButNotRejectOrBlockAll(t *testing.T) {
 	t.Parallel()
 
