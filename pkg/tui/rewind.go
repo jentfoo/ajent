@@ -14,6 +14,14 @@ func (u *UI) SetOnRewind(cb func()) {
 	u.onRewind = cb
 }
 
+// Idle reports whether the UI last saw the agent at rest awaiting input.
+func (u *UI) Idle() bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return u.idle
+}
+
 // SetIdle marks whether the agent is at rest awaiting input. The double-Esc
 // rewind gesture is only recognized while idle, so mid-turn Esc keeps its
 // interrupt role unchanged. Leaving the prompt cancels any half-armed rewind.

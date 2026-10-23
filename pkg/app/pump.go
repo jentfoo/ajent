@@ -242,6 +242,8 @@ func (d *drainWaiter) wait(timeout time.Duration) {
 
 // startDrain runs inputs as the turn goroutine, its exit observable on drain.
 func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, starts *startState, hooks planHooks, drain *drainWaiter) {
+	// stamped before idle drops so a stale exit skips rather than races this write
+	gen := q.nextGen()
 	ui.SetIdle(false)
 	starts.dispatched.mark() // record the dispatched prompt, committing the tool block with it
 	starts.committed.mark()
@@ -274,7 +276,7 @@ func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent
 			inputs = next
 		}
 		if recording {
-			ui.SetIdle(true)
+			q.settleIdle(gen, ui.SetIdle) // skipped once a newer dispatch owns the idle write
 		}
 	})
 }

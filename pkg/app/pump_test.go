@@ -272,6 +272,46 @@ func TestStartDrainParkedGate(t *testing.T) {
 	})
 }
 
+func TestStartDrainIdle(t *testing.T) {
+	t.Parallel()
+
+	t.Run("restores_when_recording", func(t *testing.T) {
+		ui := newPumpTestUI(t)
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("done")}}}
+		ag, _ := scriptedAgent(p)
+
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		starts := newStartState(false)
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		var drain drainWaiter
+		startDrain(ctx, ui, true, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+
+		assert.False(t, ui.Idle()) // the dispatch owns Esc's interrupt role at once
+
+		drain.wait(5 * time.Second)
+		assert.True(t, ui.Idle()) // the exit restores the double-Esc rewind gesture
+	})
+
+	t.Run("no_restore_when_unrecorded", func(t *testing.T) {
+		ui := newPumpTestUI(t)
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("done")}}}
+		ag, _ := scriptedAgent(p)
+
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		starts := newStartState(false)
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		var drain drainWaiter
+		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+
+		drain.wait(5 * time.Second)
+		assert.False(t, ui.Idle()) // recording off: Esc never returns to rewind
+	})
+}
+
 func TestRunPumpParkedHold(t *testing.T) {
 	t.Parallel()
 

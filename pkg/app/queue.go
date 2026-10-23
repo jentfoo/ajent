@@ -36,6 +36,7 @@ type steerQueue struct {
 	mu       sync.Mutex
 	items    []steerItem // oldest first
 	draining bool        // a goroutine is running turns and will drain us
+	gen      uint64      // bumped per dispatch, so a late drain exit knows it was superseded
 }
 
 // steerItem is one queued prompt: its expanded input, the typed line shown in
@@ -63,6 +64,28 @@ func (s *steerQueue) offer(in agent.Input, label string, est int) bool {
 	s.items = append(s.items, steerItem{input: in, label: label, est: est})
 	s.refreshLocked()
 	return true
+}
+
+// nextGen stamps a new dispatch with a generation. The drain exit carries it
+// back to settleIdle, which restores idle only while no newer stamp exists.
+func (s *steerQueue) nextGen() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.gen++
+	return s.gen
+}
+
+// settleIdle runs set(true) unless a newer dispatch took over since gen was
+// stamped. The compare and the write share q.mu with nextGen, so a stale exit
+// either restores before the next dispatch reads the queue or is skipped.
+func (s *steerQueue) settleIdle(gen uint64, set func(bool)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if gen == s.gen {
+		set(true)
+	}
 }
 
 // hold queues an item while no drain runs: a parked-gate input the gate did not

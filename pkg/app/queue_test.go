@@ -74,6 +74,48 @@ func TestSteerQueue(t *testing.T) {
 		assert.False(t, q.drainLive())
 	})
 
+	t.Run("idle_restored_when_current", func(t *testing.T) {
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+
+		var writes []bool
+		q.settleIdle(q.nextGen(), func(idle bool) { writes = append(writes, idle) })
+
+		assert.Equal(t, []bool{true}, writes)
+	})
+
+	t.Run("idle_skipped_after_newer", func(t *testing.T) {
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+
+		stale := q.nextGen()
+		q.nextGen() // a newer dispatch stamps before its own SetIdle(false)
+
+		var writes []bool
+		q.settleIdle(stale, func(idle bool) { writes = append(writes, idle) })
+
+		assert.Empty(t, writes)
+	})
+
+	t.Run("restore_holds_queue_lock", func(t *testing.T) {
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+
+		gen := q.nextGen()
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		go func() {
+			q.settleIdle(gen, func(bool) {
+				close(entered)
+				<-release
+			})
+		}()
+		<-entered // the restore is mid-write
+
+		require.False(t, q.mu.TryLock()) // the write shares q.mu with nextGen's stamp
+		close(release)
+	})
+
 	t.Run("offer_queues_while_draining", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var subs []int
