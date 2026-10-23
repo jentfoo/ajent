@@ -212,18 +212,22 @@ stays off unless `--allow-tools` names it.
 offered set asks nothing until `--allow-tools` re-offers a call). Nobody can
 answer a dialog there, so the asker takes the model classification as final: an
 allow runs the call (an "auto allowed" notice reaches stderr), while a deny, a
-failed or an unsure review all refuse with `permission not given`. A shell line
-static analysis cannot parse (substitution, unnameable head) never reaches the
-model unattended: no grant could cover it either, so it refuses outright
-instead of leaning on a model reading raw text. A redirect line is unnameable
-only in the read-only modes, because the model's allow verdict means "no side
-effects" there, and a redirect writes. Under `auto+write` a redirect whose
-targets all resolve inside the roots may reach the model like any other
-nameable line. Core writers are never
-classified, so plain `--allow-auto` withholds them at the registry rather than
-offering guaranteed refusals. Under `--allow-autowrite` workspace-confined
-writes pass statically, and one outside the roots refuses with the same
-`permission not given`, never a missing-UI message.
+failed or an unsure review all refuse with `permission not given`. The two auto
+modes differ in what may reach the model. `auto+write` classifies exactly what
+the dialog path classifies: the workspace consent already covers the verdict's
+blast radius, so substitution, loops and other lines static analysis cannot
+name are judged by the rule set rather than refused structurally, the classifier
+prompts judging compound constructs by the commands they actually run. Plain
+`--allow-auto` promises no writes, so its unattended gate stays structural: a
+line static analysis cannot fully name (substitution, unnameable head, any
+redirect) refuses without a model call, since a read-only allow verdict must
+never bless what the barrier cannot place. Session grants stay nameability-
+gated in every mode and an unattended allow is always this-call-only, so no
+grant ever covers an unnameable line. Core writers are never classified, so
+plain `--allow-auto` withholds them at the registry rather than offering
+guaranteed refusals. Under `--allow-autowrite` workspace-confined writes pass
+statically, and one outside the roots refuses with the same `permission not
+given`, never a missing-UI message.
 
 Every scope installs the interactive barrier's decision inputs, classifier
 included, so a call is judged by one rule set and only the dialog differs.

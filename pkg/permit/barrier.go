@@ -19,8 +19,8 @@ import (
 )
 
 // unattendedDenyReason is the one refusal for an offered call nobody approved:
-// a denied or failed review, an unparseable shell line and a prompter that
-// cannot open all read the same, so a script never parses why.
+// a denied or failed review, a prompter that cannot open, and an unnameable
+// shell line under plain auto all read the same, so a script never parses why.
 const unattendedDenyReason = "permission not given"
 
 // maxClassifierArgs bounds a non-bash call's payload sent to auto classification,
@@ -227,10 +227,8 @@ func (b *Barrier) Guard() tools.Guard {
 }
 
 // Prefetch starts background classification for every call in calls that would
-// reach the model classifier at ask time (the unattended ask's filter: auto-mode
-// bash lines static analysis can name and non-write extension calls whose
-// static verdict is Ask and not already session-allowed), so a later approval
-// dialog consumes a ready verdict instead of waiting on a fresh request.
+// reach the model classifier at ask time, so a later approval dialog consumes a
+// ready verdict instead of waiting on a fresh request.
 // Identical subjects share one request, launched goroutines observe ctx so an
 // abort stops them, and answering the dialog a request fronts cancels it.
 // Never blocks.
@@ -240,10 +238,9 @@ func (b *Barrier) Prefetch(ctx context.Context, calls []agent.ToolCall) {
 		if !b.classifyCall(g.mode, call.Name) {
 			continue // core writer or non-auto mode: never classified at ask time either
 		}
-		if call.Name == tools.ToolBash {
-			if !nameableForModel(bashCommand(call.Input), call.Input, g.scope, g.mode.allowsWrites()) {
-				continue // unparseable line: the unattended ask refuses it, never the model
-			}
+		if call.Name == tools.ToolBash && !g.mode.allowsWrites() &&
+			!nameableForModel(bashCommand(call.Input)) {
+			continue // plain auto refuses unnameable lines, never the model
 		}
 		if g.staticVerdict(ctx, call).Action != tools.ActionAsk {
 			continue // statically resolved (read-only, config safe/deny, write scope): no model
@@ -454,8 +451,10 @@ func (b *Barrier) Asker() tools.Asker {
 }
 
 // unattendedAsk decides a prompted call with no UI: the auto modes take the
-// model verdict as final, every other mode has nobody to decide. The live gate
-// is snapshotted so a mode change since the asker entered still applies.
+// model verdict as final, every other mode has nobody to decide. auto+write
+// judges every bash call the dialog path would, plain auto only nameable lines.
+// The live gate is snapshotted so a mode change since the asker entered still
+// applies.
 func (b *Barrier) unattendedAsk(ctx context.Context, call agent.ToolCall) tools.Decision {
 	g := b.gateNow()
 	if g.staticVerdict(ctx, call).Action == tools.ActionAllow {
@@ -470,13 +469,11 @@ func (b *Barrier) unattendedAsk(ctx context.Context, call agent.ToolCall) tools.
 	if !b.classifyCall(m, call.Name) {
 		return tools.Deny(unattendedDenyReason)
 	}
-	// a line static analysis cannot parse (redirect, substitution, unnameable
-	// head) never matches a grant either, so unattended it refuses outright
-	// rather than leaning on a model reading raw text
-	if call.Name == tools.ToolBash {
-		if !nameableForModel(bashCommand(call.Input), call.Input, g.scope, m.allowsWrites()) {
-			return tools.Deny(unattendedDenyReason)
-		}
+	// plain auto's read-only verdict never blesses a line the barrier cannot
+	// name, auto+write's write consent covering the model instead
+	if call.Name == tools.ToolBash && !m.allowsWrites() &&
+		!nameableForModel(bashCommand(call.Input)) {
+		return tools.Deny(unattendedDenyReason)
 	}
 	switch b.classifier.Classify(ctx, classifySubject(m, call)) {
 	case ClassAllow:

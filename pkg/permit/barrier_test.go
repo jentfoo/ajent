@@ -704,13 +704,37 @@ func TestAskerUnattendedAuto(t *testing.T) {
 		assert.Equal(t, unattendedDenyReason, d.Reason)
 	})
 
-	// a redirect line is unparseable by static analysis: no grant could ever cover
-	// it, so unattended it refuses outright, the model never judging raw text
-	t.Run("redirect_line_refuses_without_model", func(t *testing.T) {
-		cl := &fakeClassifier{verdict: ClassAllow}
+	// auto+write judges an out-of-scope redirect by verdict, a deny refusing it
+	t.Run("autowrite_redirect_takes_verdict", func(t *testing.T) {
+		cl := &fakeClassifier{verdict: ClassDeny}
 		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl.Classify})
 
 		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"echo hi > out.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.EqualValues(t, 1, cl.calls.Load())
+	})
+
+	// a substitution loop names no heads yet auto+write runs it on an allow verdict
+	t.Run("autowrite_substitution_allow_runs", func(t *testing.T) {
+		cl := &fakeClassifier{verdict: ClassAllow}
+		n := &noticeRecorder{}
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAutoWrite, ModeSet: true, Classifier: cl.Classify, Notice: n.record})
+
+		cmd := `for d in pkg/*/; do printf "%s %d\n" "$d" $(cat "$d"*.go | wc -l); done`
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":`+strconvQuote(cmd)+`}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.EqualValues(t, 1, cl.calls.Load())
+		require.Eventually(t, func() bool { return len(n.all()) == 1 }, time.Second, 10*time.Millisecond)
+	})
+
+	// plain auto never sends an unnameable line to the model
+	t.Run("auto_substitution_refuses_without_model", func(t *testing.T) {
+		cl := &fakeClassifier{verdict: ClassAllow}
+		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: cl.Classify})
+
+		cmd := `for d in pkg/*/; do printf "%s %d\n" "$d" $(cat "$d"*.go | wc -l); done`
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":`+strconvQuote(cmd)+`}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Equal(t, unattendedDenyReason, d.Reason)
 		assert.Zero(t, cl.calls.Load())
@@ -1989,6 +2013,10 @@ func TestPrefetch(t *testing.T) {
 		{"single_call_prefetched", ModeAuto, []agent.ToolCall{bashCall("ls -la"), bashCall("rm f")}, nil, 1},
 		// identical commands are one subject: one request serves both dialogs
 		{"identical_commands_share_call", ModeAuto, []agent.ToolCall{bashCall("rm -rf build"), bashCall("rm -rf build")}, nil, 1},
+		// auto+write defers unnameable lines to the model, so they warm too
+		{"autowrite_unnameable_prefetched", ModeAutoWrite, []agent.ToolCall{bashCall("echo hi > out.txt")}, nil, 1},
+		// plain auto refuses unnameable lines, no model call
+		{"auto_unnameable_skipped", ModeAuto, []agent.ToolCall{bashCall("echo hi > out.txt")}, nil, 0},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

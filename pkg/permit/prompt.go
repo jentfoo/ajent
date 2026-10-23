@@ -2,7 +2,6 @@ package permit
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -151,19 +150,12 @@ func sessionNames(command string) ([]string, bool) {
 }
 
 // nameableForModel reports whether a bash line may reach the unattended model
-// classifier: session names exist, and any redirect target verifies in scope
-// so an allow verdict can never bless a write the barrier could not place.
-// writesOK is the mode's say: plain auto is read-only, so a redirect is never
-// nameable there, while auto+write judges in-scope writes by verdict.
-func nameableForModel(command string, input json.RawMessage, scope writeScope, writesOK bool) bool {
+// classifier under plain auto, where an allow verdict promises no side effects
+func nameableForModel(command string) bool {
 	if _, ok := sessionNames(command); !ok {
 		return false
 	}
-	s := scanCommand(command)
-	if len(s.Redirects) == 0 {
-		return true
-	}
-	return writesOK && scope.redirectsInScope(input, s)
+	return len(scanCommand(command).Redirects) == 0
 }
 
 // compoundGoverningHeads returns the distinct non-readonly segment head keys of
