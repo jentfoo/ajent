@@ -115,15 +115,7 @@ func (o *completionOverlay) detailRows(t Theme, width, maxRows int) ([]string, i
 	n, more := fitRows(len(o.items), maxRows, 1)
 	rows := make([]string, 0, maxRows)
 	for i, c := range o.items[:n] {
-		marker, style := selectIndent, t.Dim
-		if o.menu && i == o.cursor {
-			marker, style = selectMarker, t.Accent
-		}
-		line := style.Wrap(marker + c.Label)
-		if c.Detail != "" {
-			line += t.Dim.Wrap("  " + c.Detail)
-		}
-		rows = append(rows, truncateDisplay(line, width))
+		rows = append(rows, listRow(t, o.menu && i == o.cursor, "", c.Label, c.Detail, width))
 	}
 	return rows, more
 }

@@ -451,7 +451,7 @@ func newResponsesStream(ctx context.Context, resp *http.Response, provider strin
 		items:            make(map[int]*respOpenItem),
 		emittedReasoning: make(map[string]respEmittedThink),
 	}
-	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	s.streamPump = newStreamPump(ctx, resp.Body, s.readFrame)
 	return s
 }
 
@@ -669,28 +669,12 @@ func respStopReason(status string, sawToolCall bool, incompleteReason string) St
 	}
 }
 
+// finish emits the one terminal EventDone carrying stop reason and usage.
 func (s *responsesStream) finish(cause error) []Event {
-	if s.done {
-		return nil
-	}
-	s.done = true
+	return s.terminal(cause, s.status != "", s.inferStop, s.usage)
+}
 
-	stop := respStopReason(s.status, s.sawTool, s.incomplete)
-	var streamErr error
-	switch {
-	case cause != nil && !errors.Is(cause, io.EOF):
-		streamErr = cause
-		stop = StopError
-		s.err = cause
-	case s.status == "":
-		// EOF with no terminal frame is a truncated stream unless the caller
-		// deliberately closed or cancelled it.
-		if s.ctx.Err() != nil || s.isClosed() {
-			return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage}}
-		}
-		streamErr = ErrStreamTruncated
-		stop = StopError
-		s.err = streamErr
-	}
-	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
+// inferStop maps the terminal response status, never returning unknown.
+func (s *responsesStream) inferStop() StopReason {
+	return respStopReason(s.status, s.sawTool, s.incomplete)
 }

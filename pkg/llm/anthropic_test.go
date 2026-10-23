@@ -1445,7 +1445,7 @@ func TestAnthropicStreamFinish(t *testing.T) {
 
 	t.Run("terminal_frame_is_clean", func(t *testing.T) {
 		s := bareStream(t)
-		s.terminal = true
+		s.terminated = true
 
 		events := s.finish(io.EOF)
 		done := events[len(events)-1]

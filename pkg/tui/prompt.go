@@ -139,8 +139,9 @@ type selectState struct {
 }
 
 func (s *selectState) rows(t Theme, width, maxRows int) ([]string, int, int) {
-	list := listSection(t, s.cursor, len(s.options), maxRows-1,
-		func(i int) string { return optionRow(t, s.options[i], i == s.cursor, width) })
+	list := listSection(t, s.cursor, len(s.options), maxRows-1, func(i int) string {
+		return listRow(t, i == s.cursor, "", s.options[i].Label, s.options[i].Detail, width)
+	})
 	rows := make([]string, 0, len(list)+1)
 	rows = append(rows, t.Accent.Wrap(s.prompt))
 	return append(rows, list...), 0, 0
@@ -191,11 +192,7 @@ func (s *inputState) echo() string {
 
 func (s *inputState) rows(t Theme, width, _ int) ([]string, int, int) {
 	echo := s.echo()
-	shown := echo
-	if shown == "" && s.placeholder != "" {
-		shown = t.Dim.Wrap(s.placeholder)
-	}
-	line := t.Accent.Wrap(s.label+" ") + shown
+	line := t.Accent.Wrap(s.label+" ") + filterEcho(t, echo, s.placeholder)
 	return []string{truncateDisplay(line, width)}, 0,
 		displayWidth(t.Accent.Wrap(s.label+" ")) + displayWidth(echo)
 }
@@ -282,11 +279,7 @@ func bestScore(it PickItem, filter string, score func(text, query string) (int, 
 func (s *pickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	header := t.Accent.Wrap(s.prompt) + t.Dim.Wrap("  "+strconv.Itoa(len(s.matches))+
 		" of "+strconv.Itoa(len(s.items)))
-	shown := s.filter
-	if shown == "" && s.placeholder != "" {
-		shown = t.Dim.Wrap(s.placeholder)
-	}
-	filterRow := t.User.Wrap(userMarker) + shown
+	filterRow := t.User.Wrap(userMarker) + filterEcho(t, s.filter, s.placeholder)
 	lay := pickLayout{tagCol: tagColumn(s.items), marked: hasMarks(s.items)}
 	list := listSection(t, s.cursor, len(s.matches), maxRows-pickerChrome, func(i int) string {
 		return pickItemRow(t, s.items[s.matches[i]], i == s.cursor, width, lay)
@@ -305,17 +298,6 @@ func (s *pickState) key(k key) (bool, error) {
 		s.cursor = max(0, s.cursor-pickPage)
 	case keyPageDown:
 		s.cursor = min(max(len(s.matches)-1, 0), s.cursor+pickPage)
-	case keyRune, keyPaste:
-		s.filter += filterInput(k.text)
-		s.refilter()
-	case keyBackspace:
-		if s.filter != "" {
-			s.filter = trimLastCluster(s.filter)
-			s.refilter()
-		}
-	case keyKillLine:
-		s.filter = ""
-		s.refilter()
 	case keyEnter:
 		if len(s.matches) == 0 {
 			return false, nil
@@ -324,6 +306,8 @@ func (s *pickState) key(k key) (bool, error) {
 		return true, nil
 	case keyEscape, keyInterrupt:
 		return true, ErrCancelled
+	default:
+		applyFilterKey(k, &s.filter, s.refilter)
 	}
 	return false, nil
 }
@@ -337,15 +321,32 @@ func (s *pickState) summary(t Theme) string {
 
 const pickPage = 5
 
-// optionRow renders one list row, marked when it is the cursor.
-func optionRow(t Theme, o Option, selected bool, width int) string {
-	marker, style := selectIndent, t.Dim
-	if selected {
-		marker, style = selectMarker, t.Accent
+// filterEcho returns the text an editable field shows: its value, or the dim
+// placeholder while the value is empty.
+func filterEcho(t Theme, value, placeholder string) string {
+	if value == "" && placeholder != "" {
+		return t.Dim.Wrap(placeholder)
 	}
-	line := style.Wrap(marker + o.Label)
-	if o.Detail != "" {
-		line += t.Dim.Wrap("  " + o.Detail)
+	return value
+}
+
+// cursorStyle returns the leading marker of a list row with its style: the
+// cursor's arrow in accent, the plain indent dimmed.
+func cursorStyle(t Theme, selected bool) (string, Style) {
+	if selected {
+		return selectMarker, t.Accent
+	}
+	return selectIndent, t.Dim
+}
+
+// listRow renders one list row: marker, infix (a checkbox or option number)
+// and label share the selection style, an optional dim detail trails, all
+// elided to width.
+func listRow(t Theme, selected bool, infix, label, detail string, width int) string {
+	marker, style := cursorStyle(t, selected)
+	line := style.Wrap(marker + infix + label)
+	if detail != "" {
+		line += t.Dim.Wrap("  " + detail)
 	}
 	return truncateDisplay(line, width)
 }
@@ -353,10 +354,7 @@ func optionRow(t Theme, o Option, selected bool, width int) string {
 // optionRows renders one list row wrapped to width rather than clipped, with
 // continuations aligned under the label.
 func optionRows(t Theme, o Option, selected bool, width int) []string {
-	marker, style := selectIndent, t.Dim
-	if selected {
-		marker, style = selectMarker, t.Accent
-	}
+	marker, style := cursorStyle(t, selected)
 	body := style.Wrap(o.Label)
 	if o.Detail != "" {
 		body += t.Dim.Wrap("  " + o.Detail)
@@ -532,6 +530,28 @@ func trimLastCluster(s string) string {
 	return s[:cut]
 }
 
+// applyFilterKey applies one editing key to a live filter text: runes and
+// pastes append normalized, backspace trims one cluster, killLine clears.
+// refilter runs only when the text changed, so a backspace on an empty filter
+// leaves the cursor alone. It reports whether the key was a filter key.
+func applyFilterKey(k key, s *string, refilter func()) bool {
+	switch k.typ {
+	case keyRune, keyPaste:
+		*s += filterInput(k.text)
+	case keyBackspace:
+		if *s == "" {
+			return true // consumed, though nothing changed
+		}
+		*s = trimLastCluster(*s)
+	case keyKillLine:
+		*s = ""
+	default:
+		return false
+	}
+	refilter()
+	return true
+}
+
 // pickRow is one navigable MultiPick row: a real item (item >= 0) or a synthetic
 // group header (Group set, item < 0). Headers are first-class so a whole group can
 // be toggled in one keypress.
@@ -581,11 +601,7 @@ func buildRows(items []PickItem, filter string) []pickRow {
 func (s *multiPickState) rows(t Theme, width, maxRows int) ([]string, int, int) {
 	header := t.Accent.Wrap(s.prompt) + t.Dim.Wrap("  "+strconv.Itoa(len(s.selected))+
 		" selected · "+strconv.Itoa(len(s.picks))+" of "+strconv.Itoa(len(s.items)))
-	shown := s.filter
-	if shown == "" && s.placeholder != "" {
-		shown = t.Dim.Wrap(s.placeholder)
-	}
-	filterRow := t.User.Wrap(userMarker) + shown
+	filterRow := t.User.Wrap(userMarker) + filterEcho(t, s.filter, s.placeholder)
 	list := listSection(t, s.cursor, len(s.picks), maxRows-pickerChrome, func(i int) string {
 		r := s.picks[i]
 		if r.item < 0 { // group header row
@@ -633,6 +649,10 @@ func groupTri(members []int, selected map[int]struct{}) int {
 }
 
 func (s *multiPickState) key(k key) (bool, error) {
+	if k.typ == keyRune && k.text == " " {
+		s.toggleCurrent() // space selects/deselects, it never narrows the filter
+		return false, nil
+	}
 	switch k.typ {
 	case keyUp:
 		s.cursor = wrapIndex(s.cursor-1, len(s.picks))
@@ -642,23 +662,6 @@ func (s *multiPickState) key(k key) (bool, error) {
 		s.cursor = max(0, s.cursor-pickPage)
 	case keyPageDown:
 		s.cursor = min(max(len(s.picks)-1, 0), s.cursor+pickPage)
-	case keyRune:
-		if k.text == " " {
-			s.toggleCurrent() // space selects/deselects, it never narrows the filter
-			return false, nil
-		}
-		fallthrough // any other rune joins the filter, normalized like a paste
-	case keyPaste:
-		s.filter += filterInput(k.text)
-		s.refilter()
-	case keyBackspace:
-		if s.filter != "" {
-			s.filter = trimLastCluster(s.filter)
-			s.refilter()
-		}
-	case keyKillLine:
-		s.filter = ""
-		s.refilter()
 	case keyTab:
 		s.toggleCurrent()
 	case keyEnter:
@@ -670,6 +673,9 @@ func (s *multiPickState) key(k key) (bool, error) {
 		return true, nil
 	case keyEscape, keyInterrupt:
 		return true, ErrCancelled
+	default:
+		// any other rune joins the filter, normalized like a paste
+		applyFilterKey(k, &s.filter, s.refilter)
 	}
 	return false, nil
 }
@@ -719,15 +725,7 @@ func multiPickRow(t Theme, it PickItem, selected, checked bool, width int) strin
 	if checked {
 		box = "[x] "
 	}
-	marker, style := selectIndent, t.Dim
-	if selected {
-		marker, style = selectMarker, t.Accent
-	}
-	line := style.Wrap(marker + box + it.Label)
-	if it.Detail != "" {
-		line += t.Dim.Wrap("  " + it.Detail)
-	}
-	return truncateDisplay(line, width)
+	return listRow(t, selected, box, it.Label, it.Detail, width)
 }
 
 // multiPickHeaderRow renders a group header as a navigable tri-state checkbox:
@@ -740,10 +738,7 @@ func multiPickHeaderRow(t Theme, group string, tri int, cursor bool, width int) 
 	case 0:
 		box = "[~] " // partial selection within the group
 	}
-	marker, style := selectIndent, t.Dim
-	if cursor {
-		marker, style = selectMarker, t.Accent
-	}
+	marker, style := cursorStyle(t, cursor)
 	line := style.Wrap(marker+box) + t.Dim.Wrap(group)
 	return truncateDisplay(line, width)
 }

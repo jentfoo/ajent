@@ -218,13 +218,5 @@ func (s *decisionState) summary(t Theme) string { return "" }
 // numberedOptionRow renders one option with a leading number, marked when it is
 // the cursor. n is the option's one-based display position.
 func numberedOptionRow(t Theme, o Option, n int, selected bool, width int) string {
-	marker, style := selectIndent+strconv.Itoa(n)+" ", t.Dim
-	if selected {
-		marker, style = "> "+strconv.Itoa(n)+" ", t.Accent
-	}
-	line := style.Wrap(marker + o.Label)
-	if o.Detail != "" {
-		line += t.Dim.Wrap("  " + o.Detail)
-	}
-	return truncateDisplay(line, width)
+	return listRow(t, selected, strconv.Itoa(n)+" ", o.Label, o.Detail, width)
 }

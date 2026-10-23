@@ -603,9 +603,9 @@ type anthropicStream struct {
 	blocks map[int]*antOpenBlock
 	usage  Usage
 	stop   StopReason
-	// terminal records that a terminal frame arrived, since a clean body EOF
+	// terminated records that a terminal frame arrived, since a clean body EOF
 	// is indistinguishable from message_stop at the read layer
-	terminal bool
+	terminated bool
 }
 
 // antOpenBlock is a content block being streamed.
@@ -624,7 +624,7 @@ func newAnthropicStream(ctx context.Context, resp *http.Response, provider strin
 		sse:    NewSSEReader(resp.Body, 0),
 		blocks: make(map[int]*antOpenBlock),
 	}
-	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	s.streamPump = newStreamPump(ctx, resp.Body, s.readFrame)
 	return s
 }
 
@@ -652,7 +652,7 @@ func (s *anthropicStream) readFrame() []Event {
 	case "message_delta":
 		return s.onMessageDelta(ev)
 	case "message_stop":
-		s.terminal = true
+		s.terminated = true
 		return s.finish(io.EOF)
 	case "error":
 		msg, typ := "stream error", ""
@@ -772,37 +772,16 @@ func (s *anthropicStream) onMessageDelta(ev antEvent) []Event {
 	return []Event{{Type: EventUsage, Usage: s.usage}}
 }
 
-// finish emits the one terminal EventDone carrying stop reason and usage. A
-// non-EOF cause becomes its error with StopError, and an EOF without a terminal
-// frame reports ErrStreamTruncated unless the caller closed or cancelled. Open
+// finish emits the one terminal EventDone carrying stop reason and usage. Open
 // blocks are dropped without end events.
 func (s *anthropicStream) finish(cause error) []Event {
-	if s.done {
-		return nil
-	}
-	s.done = true
+	return s.terminal(cause, s.terminated, s.inferStop, s.usage)
+}
 
-	stop := s.stop
-	var streamErr error
-	switch {
-	case cause != nil && !errors.Is(cause, io.EOF):
-		streamErr = cause
-		stop = StopError
-		s.err = cause
-	case !s.terminal:
-		// EOF with no terminal frame is a truncated stream unless the caller
-		// deliberately closed or cancelled it.
-		if s.isClosed() || s.ctx.Err() != nil {
-			if stop == StopUnknown {
-				stop = StopEndTurn
-			}
-			return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage}}
-		}
-		streamErr = ErrStreamTruncated
-		stop = StopError
-		s.err = streamErr
-	case stop == StopUnknown:
-		stop = StopEndTurn
+// inferStop returns the terminal stop reason, promoting unknown to end turn.
+func (s *anthropicStream) inferStop() StopReason {
+	if s.stop == StopUnknown {
+		return StopEndTurn
 	}
-	return []Event{{Type: EventDone, StopReason: stop, Usage: s.usage, Err: streamErr}}
+	return s.stop
 }

@@ -62,6 +62,34 @@ func TestShadeRow(t *testing.T) {
 	})
 }
 
+func TestCappedRows(t *testing.T) {
+	t.Parallel()
+
+	u := newTestUI(t, newVT(80, 12), strings.NewReader(""))
+	label := func(i int) string { return "row-" + strconv.Itoa(i) }
+
+	tests := []struct {
+		name   string
+		total  int
+		budget int
+		want   []string
+	}{
+		{"empty_renders_nothing", 0, 5, nil},
+		{"no_budget_renders_nothing", 4, 0, nil},
+		{"under_the_cap_lists_all", 3, 5, []string{"row-0", "row-1", "row-2"}},
+		{"single_overflow_takes_the_indicator_line", 5, 5,
+			[]string{"row-0", "row-1", "row-2", "row-3", "row-4"}},
+		{"two_overflow_counts_the_hidden", 6, 5,
+			[]string{"row-0", "row-1", "row-2", "row-3", "+2 more"}},
+		{"budget_truncates_without_an_indicator", 3, 2, []string{"row-0", "row-1"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, u.cappedRows(tc.total, maxActivityRows, 80, tc.budget, label))
+		})
+	}
+}
+
 func TestUIActivity(t *testing.T) {
 	t.Parallel()
 

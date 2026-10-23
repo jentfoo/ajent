@@ -1,7 +1,11 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/go-analyze/bulk"
@@ -518,6 +522,76 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		stop, err := collectStop(t, "compat/content_filter.sse", flavorDefaults[FlavorLMStudio].caps)
 		require.NoError(t, err)
 		assert.Equal(t, StopIncomplete, stop)
+	})
+}
+
+func TestCompatStreamFinish(t *testing.T) {
+	t.Parallel()
+
+	// bareStream returns a stream over an empty body, so finish can be driven
+	// directly without a server.
+	bareStream := func(t *testing.T, caps Capabilities) *compatStream {
+		t.Helper()
+
+		return newCompatStream(t.Context(),
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, caps, compatProfile{})
+	}
+
+	// caps builds lmstudio defaults with an explicit finish-reason declaration,
+	// since the truncated case hinges on the provider claiming to send one
+	caps := func(finish bool) Capabilities {
+		c := flavorDefaults[FlavorLMStudio].caps
+		c.SupportsFinishReason = finish
+		return c
+	}
+
+	t.Run("terminal_frame_is_clean", func(t *testing.T) {
+		s := bareStream(t, caps(true))
+		s.st.stop = StopEndTurn
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason)
+	})
+
+	t.Run("clean_eof_without_finish_is_truncation", func(t *testing.T) {
+		s := bareStream(t, caps(true))
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.ErrorIs(t, done.Err, ErrStreamTruncated)
+		assert.Equal(t, StopError, done.StopReason)
+	})
+
+	t.Run("deliberate_close_stays_clean", func(t *testing.T) {
+		s := bareStream(t, caps(true))
+		require.NoError(t, s.Close())
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason) // unknown stop infers end turn
+	})
+
+	t.Run("cancelled_context_stays_clean", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		s := newCompatStream(ctx,
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, caps(true), compatProfile{})
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+	})
+
+	t.Run("no_finish_support_infers_clean", func(t *testing.T) {
+		s := bareStream(t, caps(false))
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason)
 	})
 }
 

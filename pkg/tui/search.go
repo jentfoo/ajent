@@ -56,20 +56,6 @@ func (s *searchOverlay) refilter() {
 // key applies one overlay key and reports what the UI should do with it.
 func (s *searchOverlay) key(k key) searchAction {
 	switch k.typ {
-	case keyRune, keyPaste:
-		s.query += filterInput(k.text)
-		s.refilter()
-		return searchStay
-	case keyBackspace:
-		if s.query != "" {
-			s.query = trimLastCluster(s.query)
-			s.refilter()
-		}
-		return searchStay
-	case keyKillLine:
-		s.query = ""
-		s.refilter()
-		return searchStay
 	case keyReverseSearch:
 		s.cursor = wrapIndex(s.cursor+1, len(s.matches)) // older match
 		return searchStay
@@ -83,6 +69,9 @@ func (s *searchOverlay) key(k key) searchAction {
 	case keyInterrupt:
 		return searchClose
 	default:
+		if applyFilterKey(k, &s.query, s.refilter) {
+			return searchStay
+		}
 		// a caret key takes the match so the prompt is editable on the same press
 		if caretMotionKeys[k.typ] {
 			if _, ok := s.current(); ok {

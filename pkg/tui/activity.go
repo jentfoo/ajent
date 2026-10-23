@@ -111,16 +111,16 @@ func sortActivity(rows []activityRow) {
 	})
 }
 
-// activityRows renders the ordered activity rows into at most budget rows, each
-// full-width shaded (never wrapped) and followed by a dim "+N more" line when two
-// or more stay hidden. A single overflow row takes the indicator's line instead,
-// so it is listed rather than elided. Caller holds the lock.
-func (u *UI) activityRows(w, budget int) []string {
-	if len(u.activity) == 0 || budget <= 0 {
+// cappedRows renders up to listCap of the labels as full-width shaded rows
+// (never wrapped) into at most budget rows, then a dim "+N more" overflow row
+// when two or more stay hidden. A single overflow row takes the indicator's
+// line instead, so it is listed rather than elided. Caller holds the lock.
+func (u *UI) cappedRows(total, listCap, w, budget int, label func(i int) string) []string {
+	if total == 0 || budget <= 0 {
 		return nil
 	}
-	n := min(len(u.activity), maxActivityRows)
-	if len(u.activity)-n == 1 { // one hidden row takes the indicator's line: list it instead
+	n := min(total, listCap)
+	if total-n == 1 { // one hidden row takes the indicator's line: list it instead
 		n++
 	}
 	var rows []string
@@ -129,42 +129,34 @@ func (u *UI) activityRows(w, budget int) []string {
 			break
 		}
 		// never wrap: a wrapped row breaks exact row accounting
-		rows = append(rows, shadeRow(u.theme.Activity, u.activity[i].text, w))
+		rows = append(rows, shadeRow(u.theme.Activity, label(i), w))
 	}
-	extra := len(u.activity) - len(rows)
-	if extra > 0 && len(rows) < budget {
+	if extra := total - len(rows); extra > 0 && len(rows) < budget {
 		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(extra)+" more"))
 	}
 	return rows
 }
 
-// queuedRows renders the ordered pending-prompt labels into at most budget dim
-// shaded rows (oldest first), each prefixed with the user marker and showing only
-// its first line, then a dim "+N more" overflow row when two or more stay hidden.
-// A single overflow row takes the indicator's line instead. Caller holds the lock.
+// activityRows renders the ordered activity rows capped and shaded by
+// cappedRows. Caller holds the lock.
+func (u *UI) activityRows(w, budget int) []string {
+	return u.cappedRows(len(u.activity), maxActivityRows, w, budget,
+		func(i int) string { return u.activity[i].text })
+}
+
+// queuedRows renders the ordered pending-prompt labels capped and shaded by
+// cappedRows, each prefixed with the user marker and showing only its first
+// line. Caller holds the lock.
 func (u *UI) queuedRows(w, budget int) []string {
-	if len(u.queued) == 0 || budget <= 0 {
-		return nil
+	return u.cappedRows(len(u.queued), maxQueuedRows, w, budget,
+		func(i int) string { return userMarker + firstLine(u.queued[i]) })
+}
+
+// firstLine returns s up to its first line break. A queued message can be
+// multi-line, so only its first line fits one shaded row.
+func firstLine(s string) string {
+	if first, _, ok := strings.Cut(s, "\n"); ok {
+		return first
 	}
-	n := min(len(u.queued), maxQueuedRows)
-	if len(u.queued)-n == 1 { // one hidden row takes the indicator's line: list it instead
-		n++
-	}
-	var rows []string
-	for i := range n {
-		if len(rows) >= budget {
-			break
-		}
-		label := u.queued[i]
-		// a queued message can be multi-line, so only its first line fits one shaded row
-		if first, _, ok := strings.Cut(label, "\n"); ok {
-			label = first
-		}
-		rows = append(rows, shadeRow(u.theme.Activity, userMarker+label, w))
-	}
-	extra := len(u.queued) - len(rows)
-	if extra > 0 && len(rows) < budget {
-		rows = append(rows, u.theme.Dim.Wrap("+"+strconv.Itoa(extra)+" more"))
-	}
-	return rows
+	return s
 }

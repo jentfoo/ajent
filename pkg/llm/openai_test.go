@@ -1,7 +1,10 @@
 package llm
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -339,6 +342,59 @@ func TestResponsesStreamTruncated(t *testing.T) {
 		// a non-token incompletion must not be retried as output truncation
 		stop := collectIncompleteStop(t, "openai/incomplete_content_filter.sse")
 		assert.Equal(t, StopIncomplete, stop)
+	})
+}
+
+func TestResponsesStreamFinish(t *testing.T) {
+	t.Parallel()
+
+	// bareStream returns a stream over an empty body, so finish can be driven
+	// directly without a server.
+	bareStream := func(t *testing.T) *responsesStream {
+		t.Helper()
+
+		return newResponsesStream(t.Context(),
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, "openai")
+	}
+
+	t.Run("terminal_frame_is_clean", func(t *testing.T) {
+		s := bareStream(t)
+		s.status = "completed"
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason)
+	})
+
+	t.Run("clean_eof_without_terminal_is_truncation", func(t *testing.T) {
+		s := bareStream(t)
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.ErrorIs(t, done.Err, ErrStreamTruncated)
+		assert.Equal(t, StopError, done.StopReason)
+	})
+
+	t.Run("deliberate_close_stays_clean", func(t *testing.T) {
+		s := bareStream(t)
+		require.NoError(t, s.Close())
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
+		assert.Equal(t, StopEndTurn, done.StopReason) // absent status infers end turn
+	})
+
+	t.Run("cancelled_context_stays_clean", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		s := newResponsesStream(ctx,
+			&http.Response{Body: io.NopCloser(strings.NewReader(""))}, "openai")
+
+		events := s.finish(io.EOF)
+		done := events[len(events)-1]
+		require.NoError(t, done.Err)
 	})
 }
 

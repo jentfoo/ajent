@@ -180,10 +180,10 @@ Every `usage` frame carries **the whole response so far**, never an increment,
 so a consumer may replace on each one. A frame reporting no numbers at all is
 absent, not zero: the ledger's mid-stream snapshot must never go backwards.
 
-A stream that ends without its terminal frame is truncated, not clean: both
-adapters leave `ErrStreamTruncated` so the turn loop retries instead of
-committing a partial answer. A deliberate `Close()` or cancelled context stays
-clean (invariant 3).
+A stream that ends without its terminal frame is truncated, not clean:
+`ErrStreamTruncated` makes the turn loop retry instead of committing a partial
+answer. A deliberate `Close()` or cancelled context stays clean. The triage is
+one shared ladder across dialects, so the rule cannot drift between them.
 
 `Index` is the content block index, pairing a start with its deltas and its end.
 An `Accumulator` builds the final `Message`, falling back to concatenating

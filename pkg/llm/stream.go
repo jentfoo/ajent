@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"slices"
 	"sync"
@@ -184,6 +185,8 @@ type streamPump struct {
 	pending []Event
 	done    bool
 	err     error
+	// ctx backs the closed-or-cancelled triage in terminal
+	ctx context.Context
 
 	mu     sync.Mutex
 	closed bool
@@ -193,8 +196,8 @@ type streamPump struct {
 }
 
 // newStreamPump returns a pump that reads frames through read and closes body.
-func newStreamPump(body io.ReadCloser, read func() []Event) *streamPump {
-	return &streamPump{body: body, read: read}
+func newStreamPump(ctx context.Context, body io.ReadCloser, read func() []Event) *streamPump {
+	return &streamPump{ctx: ctx, body: body, read: read}
 }
 
 // Next returns the next event, or false at end of stream. A close abandons
@@ -239,6 +242,35 @@ func (p *streamPump) isClosed() bool {
 	defer p.mu.Unlock()
 
 	return p.closed
+}
+
+// terminal emits the stream's final EventDone, or nil when already finished.
+// A non-EOF cause becomes its error with StopError. An EOF without sawTerminal
+// reports ErrStreamTruncated unless the caller closed or cancelled. infer
+// resolves the stop reason and never returns StopUnknown.
+func (p *streamPump) terminal(cause error, sawTerminal bool,
+	infer func() StopReason, usage Usage) []Event {
+	if p.done {
+		return nil
+	}
+	p.done = true
+
+	stop := infer()
+	var streamErr error
+	switch {
+	case cause != nil && !errors.Is(cause, io.EOF):
+		streamErr = cause
+		stop = StopError
+		p.err = cause
+	case !sawTerminal:
+		// EOF without a terminal frame is truncation unless closed or cancelled
+		if !p.isClosed() && p.ctx.Err() == nil {
+			streamErr = ErrStreamTruncated
+			stop = StopError
+			p.err = streamErr
+		}
+	}
+	return []Event{{Type: EventDone, StopReason: stop, Usage: usage, Err: streamErr}}
 }
 
 // SliceStream is a Stream over a fixed event slice, for tests and fakes. The loop

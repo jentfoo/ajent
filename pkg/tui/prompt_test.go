@@ -11,6 +11,109 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestListRow(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(ColorNone, DefaultPalette())
+
+	tests := []struct {
+		name     string
+		selected bool
+		infix    string
+		label    string
+		detail   string
+		width    int
+		want     string
+	}{
+		{"cursor_row_is_marked", true, "", "read", "", 40, "> read"},
+		{"plain_row_is_indented", false, "", "read", "", 40, "  read"},
+		{"infix_sits_inside_the_marker", true, "[x] ", "read", "", 40, "> [x] read"},
+		{"numbered_marker_keeps_the_cursor_width", false, "10 ", "opt", "", 40, "  10 opt"},
+		{"detail_trails_two_spaces", true, "", "read", "a file", 40, "> read  a file"},
+		{"long_rows_elide_to_width", false, "", strings.Repeat("x", 50), "", 10, "  xxxxxxxx"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, listRow(th, tc.selected, tc.infix, tc.label, tc.detail, tc.width))
+		})
+	}
+
+	t.Run("selection_style_wraps_marker_and_label", func(t *testing.T) {
+		th := NewTheme(Color256, DefaultPalette())
+
+		assert.Equal(t, th.Accent.Wrap("> read")+th.Dim.Wrap("  a file"),
+			listRow(th, true, "", "read", "a file", 40))
+		assert.Equal(t, th.Dim.Wrap("  read"), listRow(th, false, "", "read", "", 40))
+	})
+}
+
+func TestFilterEcho(t *testing.T) {
+	t.Parallel()
+
+	th := NewTheme(Color256, DefaultPalette())
+
+	tests := []struct {
+		name        string
+		value       string
+		placeholder string
+		want        string
+	}{
+		{"value_shown_verbatim", "abc", "hint", "abc"},
+		{"empty_shows_the_placeholder", "", "hint", th.Dim.Wrap("hint")},
+		{"empty_without_placeholder", "", "", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, filterEcho(th, tc.value, tc.placeholder))
+		})
+	}
+}
+
+func TestApplyFilterKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("paste_appends_normalized", func(t *testing.T) {
+		s, calls := "al", 0
+
+		assert.True(t, applyFilterKey(key{typ: keyPaste, text: "\r\nph\x00a"}, &s, func() { calls++ }))
+		assert.Equal(t, "alpha", s)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("backspace_trims_one_cluster", func(t *testing.T) {
+		s, calls := "a\U0001F44D", 0
+
+		assert.True(t, applyFilterKey(key{typ: keyBackspace}, &s, func() { calls++ }))
+		assert.Equal(t, "a", s)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("backspace_on_empty_stays_consumed", func(t *testing.T) {
+		s, calls := "", 0
+
+		assert.True(t, applyFilterKey(key{typ: keyBackspace}, &s, func() { calls++ }))
+		assert.Empty(t, s)
+		assert.Zero(t, calls) // no refilter, so a moved cursor keeps its place
+	})
+
+	t.Run("kill_line_clears", func(t *testing.T) {
+		s, calls := "abc", 0
+
+		assert.True(t, applyFilterKey(key{typ: keyKillLine}, &s, func() { calls++ }))
+		assert.Empty(t, s)
+		assert.Equal(t, 1, calls)
+	})
+
+	t.Run("other_keys_pass_through", func(t *testing.T) {
+		s, calls := "abc", 0
+
+		assert.False(t, applyFilterKey(key{typ: keyUp}, &s, func() { calls++ }))
+		assert.False(t, applyFilterKey(key{typ: keyTab}, &s, func() { calls++ }))
+		assert.Equal(t, "abc", s)
+		assert.Zero(t, calls)
+	})
+}
+
 func TestRefilterMatches(t *testing.T) {
 	t.Parallel()
 

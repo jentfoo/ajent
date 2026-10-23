@@ -477,7 +477,7 @@ func newCompatStream(ctx context.Context, resp *http.Response, caps Capabilities
 			textIdx:  -1,
 		},
 	}
-	s.streamPump = newStreamPump(resp.Body, s.readFrame)
+	s.streamPump = newStreamPump(ctx, resp.Body, s.readFrame)
 	return s
 }
 
@@ -662,10 +662,9 @@ func (s *compatStream) finish(cause error) []Event {
 	if s.done {
 		return nil
 	}
-	s.done = true
 
-	var events []Event
 	st := s.st
+	var events []Event
 	if st.caps.ThinkOpen != "" {
 		// the withheld tail rides the same emit path as a delta so it reaches the
 		// end blocks, opening a fresh block when the tag never produced content
@@ -674,26 +673,18 @@ func (s *compatStream) finish(cause error) []Event {
 	}
 	events = append(events, s.closeBlocks()...)
 
-	stop := st.stop
-	var streamErr error
-	if cause != nil && !errors.Is(cause, io.EOF) {
-		streamErr = cause
-		stop = StopError
-		s.err = cause
-	} else if stop == StopUnknown {
-		// no finish reason arrived: infer for providers that never send one or an
-		// interrupted stream. Otherwise a truncated stream is surfaced as an error.
-		if !st.caps.SupportsFinishReason || s.ctx.Err() != nil {
-			if st.tools != nil {
-				stop = StopToolUse
-			} else {
-				stop = StopEndTurn
-			}
-		} else {
-			streamErr = ErrStreamTruncated
-			stop = StopError
-			s.err = streamErr
-		}
+	return append(events, s.terminal(cause,
+		st.stop != StopUnknown || !st.caps.SupportsFinishReason, s.inferStop, st.usage)...)
+}
+
+// inferStop returns the received finish reason, else one inferred from the
+// accumulated blocks.
+func (s *compatStream) inferStop() StopReason {
+	if s.st.stop != StopUnknown {
+		return s.st.stop
 	}
-	return append(events, Event{Type: EventDone, StopReason: stop, Usage: st.usage, Err: streamErr})
+	if s.st.tools != nil {
+		return StopToolUse
+	}
+	return StopEndTurn
 }
