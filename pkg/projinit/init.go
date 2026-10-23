@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -48,34 +47,25 @@ type Options struct {
 	Started func(id string)
 }
 
+// initPrefix leads every survey call id in the transcript. Package-local and
+// given to the run sequencer at construction.
+const initPrefix = "init-"
+
 // Runner performs project surveys.
 type Runner struct {
 	opts Options
-	runs atomic.Int64 // call ids carry it, so a second survey must not reuse the first's
+	seq  *agent.RunSequencer // numbers each survey, so a second never reuses the first's ids
 }
 
 // New returns a Runner over opts.
-func New(opts Options) *Runner { return &Runner{opts: opts} }
+func New(opts Options) *Runner {
+	return &Runner{opts: opts, seq: agent.NewRunSequencer(initPrefix)}
+}
 
 // Seed raises the run counter above every /init id already in msgs, so a fresh
 // runner's first survey after a resume cannot mint ids the transcript holds.
 func (r *Runner) Seed(msgs []llm.Message) {
-	var high int64
-	for _, m := range msgs {
-		for _, blk := range m.Content {
-			if call, ok := blk.(llm.ToolCallBlock); ok {
-				if n := runOf(call.ID); n > high {
-					high = n
-				}
-			}
-		}
-	}
-	for {
-		cur := r.runs.Load()
-		if cur >= high || r.runs.CompareAndSwap(cur, high) {
-			return
-		}
-	}
+	r.seq.Seed(msgs)
 }
 
 // Survey reads the project's README files, fans the build and the codebase out to
@@ -96,7 +86,7 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 	if !r.opts.Registry.IsEnabled("agent_start") || !r.opts.Registry.IsEnabled("agent_poll") {
 		return agent.Input{}, ErrSubAgentsDisabled
 	}
-	run := r.runs.Add(1)
+	run := r.seq.Next()
 
 	before, existing, err := r.readDocs(ctx, read, run)
 	if err != nil {
@@ -148,7 +138,7 @@ func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]ll
 	var agentsRes agent.ToolResult
 	for i, p := range paths {
 		input, _ := json.Marshal(map[string]any{"path": p})
-		call := agent.ToolCall{ID: callID(run, "read", strconv.Itoa(i+1)), Name: "read", Input: input}
+		call := agent.ToolCall{ID: r.seq.CallID(run, "read-"+strconv.Itoa(i+1)), Name: "read", Input: input}
 		msgs, res := agent.InjectPair(ctx, tool, r.opts.Sink, call, "read "+p)
 		out = append(out, msgs...)
 		if p == agentsFile {
@@ -176,7 +166,7 @@ func (r *Runner) startAll(ctx context.Context, tool agent.Tool, tasks []surveyTa
 			break
 		}
 		input, _ := json.Marshal(map[string]any{"task": task.text})
-		call := agent.ToolCall{ID: callID(run, "start", strconv.Itoa(i+1)), Name: "agent_start", Input: input}
+		call := agent.ToolCall{ID: r.seq.CallID(run, "start-"+strconv.Itoa(i+1)), Name: "agent_start", Input: input}
 		pair, res := agent.InjectPair(ctx, tool, r.opts.Sink, call, tool.Label(call))
 		msgs = append(msgs, pair...)
 
@@ -220,7 +210,7 @@ func (r *Runner) pollOne(ctx context.Context, tool agent.Tool, id string, run in
 	input, _ := json.Marshal(map[string]any{"id": id})
 	for attempt := 1; ctx.Err() == nil; attempt++ {
 		call := agent.ToolCall{
-			ID:    callID(run, "poll", id+"-"+strconv.Itoa(attempt)),
+			ID:    r.seq.CallID(run, "poll-"+id+"-"+strconv.Itoa(attempt)),
 			Name:  "agent_poll",
 			Input: input,
 		}
@@ -246,32 +236,6 @@ func terminal(res agent.ToolResult) bool {
 	default:
 		return true
 	}
-}
-
-// initPrefix leads every survey call id, so Seed can recover its run number.
-const initPrefix = "init-"
-
-// callID names one survey call. The run number keeps a second /init from reusing
-// the first's ids, since Input.Before stays in State and a repeated tool_use 400s later requests.
-func callID(run int64, stage, suffix string) string {
-	return fmt.Sprintf("%s%d-%s-%s", initPrefix, run, stage, suffix)
-}
-
-// runOf returns the run number encoded in a survey call id, or 0 for other ids.
-func runOf(id string) int64 {
-	rest, ok := strings.CutPrefix(id, initPrefix)
-	if !ok {
-		return 0
-	}
-	digits, _, ok := strings.Cut(rest, "-")
-	if !ok {
-		return 0
-	}
-	n, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
 }
 
 // detail reads one key from a tool result's Details map, empty when absent or

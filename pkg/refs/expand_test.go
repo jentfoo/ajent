@@ -660,8 +660,10 @@ func TestExpanderSeed(t *testing.T) {
 	assert.Equal(t, []string{"ref-5-r-a.go"}, toolCallIDs(injected(t, x.Expand("@a.go"))))
 }
 
-func TestCallID(t *testing.T) {
+func TestInjectedIDs(t *testing.T) {
 	t.Parallel()
+
+	seq := agent.NewRunSequencer(idPrefix)
 
 	// the invariant that keeps a written path from imitating another kind's id:
 	// any kind prefixed by another admits a colliding path
@@ -678,12 +680,7 @@ func TestCallID(t *testing.T) {
 
 	t.Run("read_and_ls_never_collide", func(t *testing.T) {
 		// the todo's exact pair must differ however the paths are chosen
-		assert.NotEqual(t, callID(1, readKind, "ls-src"), callID(1, lsKind, "src"))
-	})
-
-	t.Run("run_survives_digit_led_paths", func(t *testing.T) {
-		// a path starting with digits must not read as a second run number
-		assert.Equal(t, int64(42), runOf(callID(42, readKind, "7-x")))
+		assert.NotEqual(t, seq.CallID(1, readKind+"ls-src"), seq.CallID(1, lsKind+"src"))
 	})
 }
 

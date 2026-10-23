@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
-	"sync/atomic"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -15,7 +13,8 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// idPrefix leads every injected @ reference call id.
+// idPrefix leads every injected @ reference call id, passed to the run
+// sequencer at construction so the transcript format stays package-local.
 const idPrefix = "ref-"
 
 // call id kinds, one per injected tool. The path half of an id is namespaced by
@@ -50,9 +49,9 @@ type injection struct {
 
 // newInjection plans one call, marshalling its arguments now so the reserve and
 // the landed pair are sized from exactly the same call.
-func newInjection(run int64, name, idKind, path, full string, body int64) injection {
+func (x *Expander) newInjection(run int64, name, idKind, path, full string, body int64) injection {
 	input, _ := json.Marshal(map[string]any{"path": path})
-	return injection{name: name, id: callID(run, idKind, path), path: path,
+	return injection{name: name, id: x.seq.CallID(run, idKind+path), path: path,
 		full: full, input: input, body: body}
 }
 
@@ -63,7 +62,7 @@ type Expander struct {
 	sink    agent.Sink
 	policy  tools.PathPolicy
 	tracker *tools.Tracker
-	run     atomic.Int64 // numbers each Expand so its call ids stay unique
+	seq     *agent.RunSequencer // numbers each Expand so its call ids stay unique
 	// vision reports whether the active model reads images. Image references
 	// are only injected when it does, nil meaning never.
 	vision func() bool
@@ -78,48 +77,15 @@ func NewExpander(reg *tools.Registry, sink agent.Sink, policy tools.PathPolicy, 
 	if reg != nil {
 		tracker = reg.Tracker()
 	}
-	return &Expander{reg: reg, sink: sink, policy: policy, tracker: tracker, vision: vision}
+	return &Expander{reg: reg, sink: sink, policy: policy, tracker: tracker,
+		seq: agent.NewRunSequencer(idPrefix), vision: vision}
 }
 
 // Seed raises the run counter above every @ reference id already in msgs. Call
 // it whenever the context is rebuilt (resume, rewind, fork) so a later Expand
 // never mints an id the context already holds.
 func (x *Expander) Seed(msgs []llm.Message) {
-	var high int64
-	for _, m := range msgs {
-		for _, blk := range m.Content {
-			call, ok := blk.(llm.ToolCallBlock)
-			if !ok {
-				continue
-			}
-			if n := runOf(call.ID); n > high {
-				high = n
-			}
-		}
-	}
-	for {
-		cur := x.run.Load()
-		if cur >= high || x.run.CompareAndSwap(cur, high) {
-			return
-		}
-	}
-}
-
-// runOf returns the run number encoded in an injected call id, or 0.
-func runOf(id string) int64 {
-	rest, ok := strings.CutPrefix(id, idPrefix)
-	if !ok {
-		return 0
-	}
-	digits, _, ok := strings.Cut(rest, "-")
-	if !ok {
-		return 0
-	}
-	n, err := strconv.ParseInt(digits, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return n
+	x.seq.Seed(msgs)
 }
 
 // noteEdit says how one mention's written form lands in the rewritten text.
@@ -151,7 +117,7 @@ func (x *Expander) Expand(text string) Result {
 	if len(refs) == 0 || x.reg == nil {
 		return Result{Text: text}
 	}
-	run := x.run.Add(1)
+	run := x.seq.Next()
 	var (
 		plan    []injection
 		notices []string
@@ -190,7 +156,7 @@ func (x *Expander) Expand(text string) Result {
 			// choosing what to read. Patterns never resolve, dedupe as written.
 			if tools.HasGlob(ref.Path) {
 				if keep("ls:" + ref.Path) {
-					plan = append(plan, lsCall(run, ref.Path, ""))
+					plan = append(plan, x.lsCall(run, ref.Path, ""))
 				}
 				continue
 			}
@@ -208,7 +174,7 @@ func (x *Expander) Expand(text string) Result {
 				continue
 			}
 			if keep("ls:" + full) {
-				plan = append(plan, lsCall(run, path, full))
+				plan = append(plan, x.lsCall(run, path, full))
 			}
 		case m.Kind == tools.KindImage:
 			// a vision model gets the picture itself through the read tool, a
@@ -231,7 +197,7 @@ func (x *Expander) Expand(text string) Result {
 				notices = append(notices, "@"+ref.Path+" "+budgetRefusal)
 				continue
 			}
-			plan = append(plan, newInjection(run, "read", readKind, path, full, imageNominalBytes))
+			plan = append(plan, x.newInjection(run, "read", readKind, path, full, imageNominalBytes))
 			spent += imageNominalBytes
 		default:
 			if m.Kind != tools.KindText {
@@ -264,7 +230,7 @@ func (x *Expander) Expand(text string) Result {
 			edits[i].note = noteStripped
 			// the tool returns line-numbered text, so what lands is the file plus a
 			// prefix per line, not its raw size
-			plan = append(plan, newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))
+			plan = append(plan, x.newInjection(run, "read", readKind, path, full, tools.ReadBytes(m)))
 			spent += int(m.Bytes)
 		}
 	}
@@ -373,15 +339,8 @@ func (x *Expander) measureOne(path string) (string, tools.Measurement, error) {
 // lsCall plans the directory listing for a glob or directory reference. dir is
 // the resolved path when it names one directory (so Run can re-check it), empty
 // for a glob.
-func lsCall(run int64, path, dir string) injection {
-	return newInjection(run, "ls", lsKind, path, dir, lsNominalBytes)
-}
-
-// callID names one injected reference. The run number keeps a later reference to
-// the same path from reusing an id the context already holds. Kind keeps two
-// references within one run from colliding.
-func callID(run int64, kind, path string) string {
-	return fmt.Sprintf("%s%d-%s%s", idPrefix, run, kind, path)
+func (x *Expander) lsCall(run int64, path, dir string) injection {
+	return x.newInjection(run, "ls", lsKind, path, dir, lsNominalBytes)
 }
 
 // annotate returns the replacement text for a large/non-text reference: the
