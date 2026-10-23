@@ -154,10 +154,15 @@ func (c *initController) abort() bool {
 	return true
 }
 
-// done releases the in-flight slot so a later /init may run.
+// done releases the in-flight slot so a later /init may run. Every path out of
+// start cancels its survey context, completion no less than abort.
 func (c *initController) done() {
 	c.mu.Lock()
+	cancel := c.cancel
 	c.cancel = nil
+	if cancel != nil { // abort may have fired it already, a repeat is a no-op
+		cancel() // held under the lock so release never outruns the unwind
+	}
 	c.mu.Unlock()
 }
 

@@ -124,6 +124,36 @@ func TestInitControllerStart(t *testing.T) {
 		assert.Empty(t, h.pump) // an aborted survey never reaches the model
 	})
 
+	t.Run("done_cancels_stored_context", func(t *testing.T) {
+		h := newInitHarness(t)
+		ctx, cancel := context.WithCancel(t.Context())
+		h.ctl.mu.Lock()
+		h.ctl.cancel = cancel
+		h.ctl.mu.Unlock()
+
+		h.ctl.done() // releases the slot even though nothing aborted
+
+		assert.False(t, h.ctl.running())
+		assert.ErrorIs(t, ctx.Err(), context.Canceled) // never dropped uninvoked
+	})
+
+	t.Run("completion_unwinds_survey_context", func(t *testing.T) {
+		h := newInitHarness(t)
+		h.ctxs = make(chan context.Context, 8)
+
+		h.ctl.start(t.Context())
+		line := h.awaitPump(t)
+		require.NotNil(t, line.input)
+		require.Eventually(t, func() bool { return !h.ctl.running() }, 5*time.Second, time.Millisecond)
+
+		select {
+		case ctx := <-h.ctxs: // the happy path unwinds its child too, not just aborts
+			require.ErrorIs(t, ctx.Err(), context.Canceled)
+		case <-time.After(5 * time.Second):
+			t.Fatal("survey never reached a tool call")
+		}
+	})
+
 	t.Run("second_run_reuses_no_ids", func(t *testing.T) {
 		h := newInitHarness(t)
 		h.ctl.start(t.Context())
@@ -367,6 +397,9 @@ type initHarness struct {
 	polling chan struct{}
 	once    sync.Once
 
+	// ctxs, when set, captures each tool-call context for post-run assertions.
+	ctxs chan context.Context
+
 	mu   sync.Mutex
 	msgs []string
 }
@@ -404,6 +437,12 @@ func newInitHarness(t *testing.T) *initHarness {
 		}
 	}}, true)
 	reg.RegisterFrom(tools.SourceBuiltin, &initStub{name: "agent_poll", run: func(ctx context.Context, call agent.ToolCall) agent.ToolResult {
+		if h.ctxs != nil {
+			select {
+			case h.ctxs <- ctx:
+			default:
+			}
+		}
 		h.once.Do(func() { close(h.polling) })
 		if h.held != nil {
 			select {
