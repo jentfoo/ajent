@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/go-analyze/bulk"
 )
 
 // IsGitRepo reports whether root is inside a git work tree.
@@ -95,7 +93,11 @@ func allWalk(ctx context.Context, root string) []string {
 func repoFiles(ctx context.Context, root string) []string {
 	if IsGitRepo(ctx, root) {
 		if names := GitTrackedFiles(ctx, root); len(names) > 0 {
-			return bulk.SliceTransform(func(n string) string { return filepath.Join(root, n) }, names)
+			paths := make([]string, len(names))
+			for i, n := range names {
+				paths[i] = filepath.Join(root, n)
+			}
+			return paths
 		}
 	}
 	return allWalk(ctx, root)
