@@ -1,6 +1,7 @@
 package command
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -77,5 +78,33 @@ func TestUsageCommand(t *testing.T) {
 		assert.Contains(t, c.prints[0], "# Usage")
 		assert.Contains(t, c.prints[0], "input")
 		assert.Contains(t, c.prints[0], "output")
+	})
+
+	// a fused delimiter row stops GFM parsing the block as a table at all
+	t.Run("table_rows_stay_on_own_lines", func(t *testing.T) {
+		c := newFakeConsole(t)
+		a := tokens.New(llm.Model{ID: "alpha", Provider: "test"})
+
+		// two model keys fill the by-model table, a child spends, one turn estimates
+		a.Response("test/alpha", llm.Usage{Input: 1000, Output: 200}, 900, true)
+		child := a.Child()
+		child.Response("test/beta", llm.Usage{Input: 300, Output: 50}, 250, true)
+		a.EstimatedTurn("test/alpha")
+		c.state.Tokens = a
+
+		err := usageCommand(t.Context(), "", c)
+		require.NoError(t, err)
+
+		require.Len(t, c.prints, 1)
+		lines := strings.Split(strings.TrimSuffix(c.prints[0], "\n"), "\n")
+		assert.Contains(t, lines, "| turns | input | output |")
+		assert.Contains(t, lines, "|------:|------:|-------:|")
+		total := a.Total()
+		want := fmt.Sprintf("| %d | %s | %s |", a.TurnsCount(),
+			strutil.FormatTokens(total.Input), strutil.FormatTokens(total.Output))
+		assert.Contains(t, lines, want)
+		assert.Contains(t, lines, "|-------|------:|-------:|")
+		assert.Contains(t, lines, "| test/alpha | 1k | 200 |")
+		assert.Contains(t, lines, "| test/beta | 300 | 50 |")
 	})
 }

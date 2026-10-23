@@ -46,7 +46,7 @@ func usageCommand(_ context.Context, _ string, c Console) error {
 	}
 
 	b.WriteString("\n| turns | input | output |\n")
-	b.WriteString("|------:|------:|-------:|")
+	b.WriteString("|------:|------:|-------:|\n")
 
 	total := t.Total()
 	n := t.TurnsCount()
