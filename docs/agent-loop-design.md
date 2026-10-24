@@ -19,10 +19,14 @@ including the pending steer/follow queues and the interrupt cancel func, sits
 under that same lock.
 
 `Prompt(ctx, input)` runs `input` to completion including any follow-up queued
-while it ran, and returns when both queues are empty or the context ends. It is
-single-owner: only one goroutine drives turns at a time (the interactive message
-loop drives them). Mid-turn input goes through `Steer` / `FollowUp`, never a
-concurrent second `Prompt`.
+while it ran, and returns when both queues are empty or the context ends.
+Draining is single-owner: one `runTurns` loop claims exclusive popping for its
+lifetime (the interactive message loop drives it). A concurrent or re-entrant
+call (a second goroutine mid-turn, an input callback submitting from inside the
+running turn) seeds behind that driver instead and returns at once. It queues
+as `follow` while a turn runs and ahead of existing steering between turns,
+and the driver delivers everything seeded. Waiting to drive would deadlock
+callbacks on the loop goroutine.
 
 ## The sink, not the UI
 
@@ -136,6 +140,9 @@ queue ahead of whatever is already there, so a fresh prompt leads the next turn
 and accepted input is never wiped. A nested `PromptBatch` from an `OnSettled`
 observer folds behind steering a sibling observer queued, and the leftovers of
 an errored turn (which returns without draining) fold behind the next prompt.
+The drain claim is handed back in the same critical section that re-reads both
+queues, so a batch seeding exactly as one driver finishes either lands behind
+the still-claimed drain or starts its own, never stranded between the two.
 
 Only an input carrying the message (text, blocks, or `After`) can start a turn.
 Framing-only inputs (only `Before` and delivery callbacks) pop as leads that

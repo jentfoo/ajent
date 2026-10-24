@@ -646,9 +646,13 @@ on git_diff and git_show selects the `log` form, the child's commit subjects
 between the pointers, or the `diff` form, the child's own patch with paths
 prefixed by the submodule's. Both read the child through its checkout and
 fall back to git's uninitialized wording when no checkout holds the objects.
-The forms relate the two pointers with a bounded two-sided walk that ends
-where the histories meet, so the read cost tracks the distance between the
-pointers rather than the child's history depth. Rename detection cannot carry gitlinks because the change sides skip their
+The forms relate the two pointers with a bounded two-sided walk. Both waves
+keep descending past the point where the histories meet, marking that ancestry
+for both sides, so it never surfaces as one side's exclusive commits. Each
+commit counts once toward the bound, and a capped walk claims no relation
+while saying its listing stopped.
+
+Rename detection cannot carry gitlinks because the change sides skip their
 entries, so the tree entries themselves carry the mode.
 Unified hunks are rendered by the same go-udiff engine the `edit` tool's change
 preview uses (`unidiff.go`), not go-git's encoder, so both surfaces produce one
