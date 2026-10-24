@@ -959,11 +959,12 @@ type submoduleDelta struct {
 // full-history read on a slow filesystem.
 var gitSubmoduleWalkMax = 512
 
-// walkSubmoduleDelta walks both pointer histories in lockstep until the waves
-// meet at a common ancestor, collecting the commits each side alone holds and
-// how the pointers relate. Cost tracks the distance between the pointers, not
-// the child's history depth. capped reports the visit bound cutting the walk
-// short, which leaves the relation unknown and the listing without its tail.
+// walkSubmoduleDelta walks both pointer histories in lockstep, collecting the
+// commits each side alone holds and how the pointers relate. Both waves keep
+// descending through shared history, so no common ancestor ends with a
+// one-sided mark. Each commit counts once toward the visit bound; capped
+// reports the bound cutting the walk short, which leaves the relation unknown
+// and the listing without its tail.
 // A commit that fails to load reads as unresolved, never as absent history.
 func walkSubmoduleDelta(r *git.Repository, from, to plumbing.Hash) (d submoduleDelta, capped, ok bool) {
 	const (
@@ -992,19 +993,22 @@ func walkSubmoduleDelta(r *git.Repository, from, to plumbing.Hash) (d submoduleD
 		if marks[h]&v.side != 0 {
 			continue // this side already walked the commit
 		}
+		if marks[h] == 0 { // each commit counts once toward the read bound
+			visited++
+			if visited > gitSubmoduleWalkMax {
+				capped = true
+				break
+			}
+		}
 		marks[h] |= v.side
-		visited++
-		if visited > gitSubmoduleWalkMax {
-			capped = true
-			break
-		}
-		if marks[h] == sideFrom|sideTo {
-			continue // a common ancestor: everything past it is both sides'
-		}
-		if v.side == sideFrom {
-			d.oldOnly = append(d.oldOnly, v.c)
-		} else {
-			d.newOnly = append(d.newOnly, v.c)
+		// a common commit still descends: everything past it is shared, and
+		// each wave must reach that ancestry or it keeps a one-sided mark
+		if marks[h] != sideFrom|sideTo {
+			if v.side == sideFrom {
+				d.oldOnly = append(d.oldOnly, v.c)
+			} else {
+				d.newOnly = append(d.newOnly, v.c)
+			}
 		}
 		for _, p := range v.c.ParentHashes {
 			pc, err := r.CommitObject(p)

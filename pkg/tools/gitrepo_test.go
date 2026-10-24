@@ -187,20 +187,27 @@ func newSubmoduleRepo(t *testing.T) *submoduleRepo {
 	}
 }
 
-// point restages the gitlink at hash without committing, an uncommitted
-// pointer move.
-func (g *submoduleRepo) point(t *testing.T, hash string) {
+// retargetGitlink rewrites one named entry's hash in dir's index, staging a
+// pointer move with no work-tree change.
+func retargetGitlink(t *testing.T, dir, name, hash string) {
 	t.Helper()
-	r, err := git.PlainOpen(g.dir)
+	r, err := git.PlainOpen(dir)
 	require.NoError(t, err)
 	idx, err := r.Storer.Index()
 	require.NoError(t, err)
 	for _, e := range idx.Entries {
-		if e.Name == "sub" {
+		if e.Name == name {
 			e.Hash = plumbing.NewHash(hash)
 		}
 	}
 	require.NoError(t, r.Storer.SetIndex(idx))
+}
+
+// point restages the gitlink at hash without committing, an uncommitted
+// pointer move.
+func (g *submoduleRepo) point(t *testing.T, hash string) {
+	t.Helper()
+	retargetGitlink(t, g.dir, "sub", hash)
 }
 
 // stageGitlink index-stages a new gitlink at path with no checkout and no
@@ -271,6 +278,51 @@ func newSubmoduleSweepRepo(t *testing.T, n int) (dir, from, to string) {
 	sweep(child2)
 	to = commit("sweep bump")
 	return dir, from, to
+}
+
+// forkedChildRepo is an open child repository with a linear history of four
+// commits plus one side commit forked from the second: the shapes a submodule
+// pointer walk must classify.
+//
+//	one --- two --- three --- four   (master)
+//	         \----- five          (side)
+type forkedChildRepo struct {
+	dir   string
+	r     *git.Repository
+	chain [4]string // master commits oldest first
+	side  string    // the side tip commit
+}
+
+// newForkedChildRepo builds the fixture in a temp directory.
+func newForkedChildRepo(t *testing.T) *forkedChildRepo {
+	t.Helper()
+
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	commit := func(word string) string {
+		t.Helper()
+		require.NoError(t, os0Write(dir, "lib.txt", word+"\n"))
+		_, err = w.Add(".")
+		require.NoError(t, err)
+		h, err := w.Commit("child "+word, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		when = when.Add(time.Minute)
+		return h.String()
+	}
+
+	g := &forkedChildRepo{dir: dir, r: r}
+	g.chain[0] = commit("one")
+	g.chain[1] = commit("two")
+	require.NoError(t, w.Checkout(&git.CheckoutOptions{Branch: "refs/heads/side", Create: true}))
+	g.side = commit("five")
+	require.NoError(t, w.Checkout(&git.CheckoutOptions{Branch: "refs/heads/master"}))
+	g.chain[2] = commit("three")
+	g.chain[3] = commit("four")
+	return g
 }
 
 // checkoutRepo is a parent whose "sub" path is a real submodule checkout:

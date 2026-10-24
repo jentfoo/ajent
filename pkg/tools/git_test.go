@@ -659,6 +659,61 @@ func TestGitStatusLines(t *testing.T) {
 	})
 }
 
+func TestWalkSubmoduleDelta(t *testing.T) {
+	t.Parallel()
+
+	g := newForkedChildRepo(t)
+	subjects := func(cs []*object.Commit) []string {
+		out := make([]string, 0, len(cs))
+		for _, c := range cs {
+			out = append(out, commitSubject(c))
+		}
+		return out
+	}
+
+	// a pure rewind whose meeting point has shared ancestors below it, the
+	// shape that leaked one-sided marks
+	t.Run("rewind_lists_old_tip_alone", func(t *testing.T) {
+		d, capped, ok := walkSubmoduleDelta(g.r,
+			plumbing.NewHash(g.chain[3]), plumbing.NewHash(g.chain[2]))
+		require.True(t, ok)
+		assert.False(t, capped)
+		assert.Equal(t, []string{"child four"}, subjects(d.oldOnly))
+		assert.Empty(t, d.newOnly)
+		assert.True(t, d.rewind)
+		assert.False(t, d.fastForward)
+	})
+
+	t.Run("forward_lists_new_commits", func(t *testing.T) {
+		d, capped, ok := walkSubmoduleDelta(g.r,
+			plumbing.NewHash(g.chain[1]), plumbing.NewHash(g.chain[3]))
+		require.True(t, ok)
+		assert.False(t, capped)
+		assert.Empty(t, d.oldOnly)
+		assert.Equal(t, []string{"child four", "child three"}, subjects(d.newOnly))
+		assert.True(t, d.fastForward)
+		assert.False(t, d.rewind)
+	})
+
+	t.Run("diverged_skips_common_ancestors", func(t *testing.T) {
+		d, capped, ok := walkSubmoduleDelta(g.r,
+			plumbing.NewHash(g.side), plumbing.NewHash(g.chain[3]))
+		require.True(t, ok)
+		assert.False(t, capped)
+		assert.Equal(t, []string{"child five"}, subjects(d.oldOnly))
+		assert.Equal(t, []string{"child four", "child three"}, subjects(d.newOnly))
+		assert.False(t, d.fastForward)
+		assert.False(t, d.rewind)
+
+		d, capped, ok = walkSubmoduleDelta(g.r,
+			plumbing.NewHash(g.chain[3]), plumbing.NewHash(g.side))
+		require.True(t, ok)
+		assert.False(t, capped)
+		assert.Equal(t, []string{"child four", "child three"}, subjects(d.oldOnly))
+		assert.Equal(t, []string{"child five"}, subjects(d.newOnly))
+	})
+}
+
 func TestCommitSubject(t *testing.T) {
 	t.Parallel()
 

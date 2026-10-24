@@ -553,6 +553,66 @@ func TestGitDiffSubmoduleStyles(t *testing.T) {
 	})
 }
 
+func TestGitDiffSubmoduleLogExclusive(t *testing.T) {
+	t.Parallel()
+
+	g := newCheckoutRepo(t)
+	// grow the child's history two commits past the pointer both sides hold,
+	// so every move between these tips crosses common ancestors
+	child, err := git.PlainOpen(filepath.Join(g.dir, "sub"))
+	require.NoError(t, err)
+	w, err := child.Worktree()
+	require.NoError(t, err)
+	when := time.Date(2026, 9, 1, 14, 0, 0, 0, time.UTC)
+	commitChild := func(word string) string {
+		t.Helper()
+		require.NoError(t, os0Write(filepath.Join(g.dir, "sub"), "lib.txt", word+"\n"))
+		_, err = w.Add(".")
+		require.NoError(t, err)
+		h, err := w.Commit("child "+word, &git.CommitOptions{Author: gitAuthor(when)})
+		require.NoError(t, err)
+		when = when.Add(time.Minute)
+		return h.String()
+	}
+	third := commitChild("three")
+	fourth := commitChild("four")
+
+	t.Run("fast_forward_lists_new_only", func(t *testing.T) {
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(g.second))+".."+shortHash(plumbing.NewHash(fourth))+":\n"+
+			"  > child four\n  > child three")
+		assert.NotContains(t, out, "  < ")
+		assert.NotContains(t, out, "child one") // common ancestry stays unnamed
+	})
+
+	t.Run("rewind_lists_old_only", func(t *testing.T) {
+		// commit the parent pointer at fourth, then move the checkout back:
+		// two shared ancestors trail below where the waves first turn common
+		retargetGitlink(t, g.dir, "sub", fourth)
+		r, err := git.PlainOpen(g.dir)
+		require.NoError(t, err)
+		pw, err := r.Worktree()
+		require.NoError(t, err)
+		_, err = pw.Commit("bump submodule", &git.CommitOptions{
+			Author: gitAuthor(time.Date(2026, 9, 1, 15, 0, 0, 0, time.UTC)),
+		})
+		require.NoError(t, err)
+		g.checkout(t, third)
+
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"to":"worktree","submodule":"log"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "Submodule sub "+
+			shortHash(plumbing.NewHash(fourth))+".."+shortHash(plumbing.NewHash(third))+
+			" (rewind):\n  < child four")
+		assert.NotContains(t, out, "  > ")
+		assert.NotContains(t, out, "child two") // common ancestry stays unnamed
+	})
+}
+
 // TestGitDiffSubmoduleWalkCap narrows the pointer-walk bound, so it runs in
 // the sequential phase rather than parallel with the style readers: a capped
 // walk must claim no relation it did not finish exploring, and the listing
@@ -560,10 +620,10 @@ func TestGitDiffSubmoduleStyles(t *testing.T) {
 func TestGitDiffSubmoduleWalkCap(t *testing.T) {
 	orig := gitSubmoduleWalkMax
 	t.Cleanup(func() { gitSubmoduleWalkMax = orig })
-	gitSubmoduleWalkMax = 2
+	gitSubmoduleWalkMax = 1
 
 	g := newCheckoutRepo(t)
-	g.checkout(t, g.first) // second..first meets after three visits
+	g.checkout(t, g.first) // the rewind walk reads both child commits
 	out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
 		`{"to":"worktree","submodule":"log"}`)
 	assert.False(t, isErr)
