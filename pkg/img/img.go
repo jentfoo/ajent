@@ -68,6 +68,11 @@ type Result struct {
 // Resized reports whether the pixel dimensions changed from the source.
 func (r Result) Resized() bool { return r.Width != r.SrcWidth || r.Height != r.SrcHeight }
 
+// tooManyPixels reports whether a header claim of w by h pixels exceeds the
+// decode budget. Both must be positive: their product can overflow int, so the
+// budget is compared by division.
+func tooManyPixels(w, h int) bool { return w > maxDecodePixels/h }
+
 // Prepare fits data to the inline limits: at most MaxPixels per axis and a
 // base64 encoding no longer than MaxBase64Bytes. An image already within both
 // passes through unchanged, everything else is downscaled and re-encoded until
@@ -84,7 +89,7 @@ func Prepare(data []byte) (Result, error) {
 	if !ok || cfg.Width <= 0 || cfg.Height <= 0 {
 		return Result{}, ErrUnsupported
 	}
-	if cfg.Width*cfg.Height > maxDecodePixels {
+	if tooManyPixels(cfg.Width, cfg.Height) {
 		return Result{}, ErrTooLarge
 	}
 	animated := animatedPNG(data, mediaType)

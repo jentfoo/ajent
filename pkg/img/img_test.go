@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+	"math"
 	"math/rand"
 	"testing"
 
@@ -265,24 +267,74 @@ func TestPrepareConvertsAnimatedPNG(t *testing.T) {
 	assert.False(t, animatedPNG(pngBytes(t, solid(4, 4)), typePNG)) // plain png untouched
 }
 
-func TestPrepareRejectsVastDimensions(t *testing.T) {
-	t.Parallel()
+// ihdrPng returns a png whose IHDR claims w by h pixels, spliced in place of
+// the header of an otherwise valid one-by-one image.
+func ihdrPng(t *testing.T, w, h uint32) []byte {
+	t.Helper()
 
-	// a valid header claiming far more pixels than any decode may allocate
-	// for is refused before the bytes are ever decoded
 	src := pngBytes(t, solid(1, 1))
 	ihdr := make([]byte, 13)
-	binary.BigEndian.PutUint32(ihdr, 30000)
-	binary.BigEndian.PutUint32(ihdr[4:], 30000)
+	binary.BigEndian.PutUint32(ihdr, w)
+	binary.BigEndian.PutUint32(ihdr[4:], h)
 	ihdr[8] = 8 // bit depth
 	ihdr[9] = 6 // RGBA, matching the source pixel
 	var b bytes.Buffer
 	b.Write(src[:8])
 	b.Write(pngChunk("IHDR", ihdr))
 	b.Write(src[33:]) // everything after the original IHDR
+	return b.Bytes()
+}
 
-	_, err := Prepare(b.Bytes())
-	require.ErrorIs(t, err, ErrTooLarge)
+func TestPrepareRejectsVastDimensions(t *testing.T) {
+	t.Parallel()
+
+	// a header claiming far more pixels than any decode may allocate for is
+	// refused before the bytes are ever decoded, however small the file
+	for _, c := range []struct {
+		name string
+		w, h uint32
+	}{
+		{"vast_square", 30000, 30000},
+		{"int32_max_claims", math.MaxInt32, 536870911}, // DecodeConfig accepts these
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := Prepare(ihdrPng(t, c.w, c.h))
+			require.ErrorIs(t, err, ErrTooLarge)
+		})
+	}
+
+	// claims saturating the wire's uint32 width fields are malformed on top of
+	// vast: current decoders refuse them outright while older ones reported
+	// such raw values to the caller, so either refusal sentinel pins that no
+	// decode may begin
+	t.Run("uint32_saturated", func(t *testing.T) {
+		_, err := Prepare(ihdrPng(t, math.MaxUint32, math.MaxUint32))
+		require.Error(t, err)
+		assert.True(t, errors.Is(err, ErrTooLarge) || errors.Is(err, ErrUnsupported))
+	})
+}
+
+func TestTooManyPixels(t *testing.T) {
+	t.Parallel()
+
+	for _, c := range []struct {
+		name       string
+		w, h       int
+		wantReject bool
+	}{
+		{"within_budget", 9000, 9000, false},
+		{"exactly_at_limit", 10000, 10000, false},
+		{"one_over_the_limit", 10001, 10000, true},
+		{"wide_short_at_limit", maxDecodePixels, 1, false},
+		{"tall_thin_over_limit", 1, maxDecodePixels + 1, true},
+		{"int32_max_claims", math.MaxInt32, math.MaxInt32, true},
+		// the product wraps a signed int negative, which once skipped the guard
+		{"signed_product_wraps", math.MaxUint32, math.MaxUint32, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.wantReject, tooManyPixels(c.w, c.h))
+		})
+	}
 }
 
 func TestPrepareRejectsGarbage(t *testing.T) {
