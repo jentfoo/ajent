@@ -501,22 +501,18 @@ func gitDiffTreeText(ctx context.Context, from, to *object.Tree, file string, su
 			d.skipped++
 			continue
 		}
-		// Files() yields nils for gitlink sides, so modes come from the entries
+		// pure gitlink moves render through their own forms, not as blobs
 		if ch.From.TreeEntry.Mode == filemode.Submodule || ch.To.TreeEntry.Mode == filemode.Submodule {
 			if err := renderTreeGitlink(ctx, d, sub, ch); err != nil {
 				return err
 			}
 			continue
 		}
-		fromFile, toFile, err := ch.Files()
+		from, err := changeSide(&ch.From)
 		if err != nil {
 			return err
 		}
-		from, err := fileSide(fromFile)
-		if err != nil {
-			return err
-		}
-		to, err := fileSide(toFile)
+		to, err := changeSide(&ch.To)
 		if err != nil {
 			return err
 		}
@@ -531,9 +527,9 @@ type gitlinkRef struct {
 	base, idx plumbing.Hash
 }
 
-// renderTreeGitlink emits one tree-diff gitlink change: a pure pointer change
-// renders in the chosen style, while a file-to-gitlink mode flip keeps the
-// short form, the blob side's real content beside the synthesized one.
+// renderTreeGitlink emits one tree-diff gitlink change: a pure pointer move
+// renders in the chosen style, while a mode flip to or from a blob renders as
+// one block, each side's real content beside the synthesized Subproject line.
 func renderTreeGitlink(ctx context.Context, d *gitDiffOut, sub submoduleRender, ch *object.Change) error {
 	from, to := ch.From.TreeEntry, ch.To.TreeEntry
 	pure := (from.Mode == filemode.Submodule || from.Mode == filemode.Empty) &&
@@ -541,26 +537,36 @@ func renderTreeGitlink(ctx context.Context, d *gitDiffOut, sub submoduleRender, 
 	if pure {
 		return renderGitlink(ctx, d, sub, changePath(ch), from.Hash, to.Hash)
 	}
-	fromFile, toFile, err := ch.Files()
+	fs, err := changeSide(&ch.From)
 	if err != nil {
 		return err
 	}
-	fs, err := fileSide(fromFile)
+	ts, err := changeSide(&ch.To)
 	if err != nil {
 		return err
-	}
-	ts, err := fileSide(toFile)
-	if err != nil {
-		return err
-	}
-	if from.Mode == filemode.Submodule {
-		fs = gitlinkSide(from.Name, from.Hash)
-	}
-	if to.Mode == filemode.Submodule {
-		ts = gitlinkSide(to.Name, to.Hash)
 	}
 	d.Block(fs, ts)
 	return nil
+}
+
+// changeSide materializes one side of a tree change into a gitSide: nil for an
+// absent entry, content for blob and symlink modes, the synthesized Subproject
+// pseudo-blob for a gitlink (it references a commit, not a blob). Per-entry
+// reads are used over Change.Files(), which drops whole sides whenever any
+// mode is not a file. A broken object errors so it never renders as empty.
+func changeSide(e *object.ChangeEntry) (*gitSide, error) {
+	switch e.TreeEntry.Mode {
+	case filemode.Empty:
+		return nil, nil
+	case filemode.Submodule:
+		return gitlinkSide(e.Name, e.TreeEntry.Hash), nil
+	default:
+		f, err := e.Tree.TreeEntryFile(&e.TreeEntry)
+		if err != nil {
+			return nil, err
+		}
+		return fileSide(f)
+	}
 }
 
 // gitDiffWorktreeText renders committed state at base against the files on
@@ -796,27 +802,19 @@ func renderChildDiff(ctx context.Context, d *gitDiffOut, r *git.Repository, path
 			d.skipped++
 			continue
 		}
-		fromFile, toFile, err := ch.Files()
+		from, err := changeSide(&ch.From)
 		if err != nil {
 			return err
 		}
-		from, err := fileSide(fromFile)
+		to, err := changeSide(&ch.To)
 		if err != nil {
 			return err
 		}
-		to, err := fileSide(toFile)
-		if err != nil {
-			return err
-		}
-		// Files() yields nils for gitlink sides, so those synthesize
-		if ch.From.TreeEntry.Mode == filemode.Submodule {
-			from = gitlinkSide(path+"/"+ch.From.Name, ch.From.TreeEntry.Hash)
-		} else if from != nil {
+		// the child names paths relative to itself; render beneath its gitlink
+		if from != nil {
 			from.path = path + "/" + from.path
 		}
-		if ch.To.TreeEntry.Mode == filemode.Submodule {
-			to = gitlinkSide(path+"/"+ch.To.Name, ch.To.TreeEntry.Hash)
-		} else if to != nil {
+		if to != nil {
 			to.path = path + "/" + to.path
 		}
 		d.Block(from, to)

@@ -6,12 +6,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 
+	"github.com/go-analyze/bulk"
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/format/index"
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/plumbing/storer"
 	"github.com/stretchr/testify/assert"
@@ -267,6 +270,83 @@ func TestWalkTreePaths(t *testing.T) {
 		_, err = collect(s, tree)
 		assert.ErrorIs(t, err, object.ErrMaxTreeDepth)
 	})
+}
+
+func TestChangeSide(t *testing.T) {
+	t.Parallel()
+
+	g := newSubmoduleRepo(t)
+	r, err := git.PlainOpen(g.dir)
+	require.NoError(t, err)
+	entryOf := func(commitRef, name string) object.ChangeEntry {
+		c, err := gitCommit(r, commitRef)
+		require.NoError(t, err)
+		tree, err := c.Tree()
+		require.NoError(t, err)
+		e, err := tree.FindEntry(name)
+		require.NoError(t, err)
+		return object.ChangeEntry{Name: name, Tree: tree, TreeEntry: *e}
+	}
+
+	t.Run("blob_side_reads_content", func(t *testing.T) {
+		e := entryOf(g.filed, "sub")
+		s, err := changeSide(&e)
+		require.NoError(t, err)
+		assert.Equal(t, filemode.Regular, s.mode)
+		assert.Equal(t, "tracked\n", s.data)
+	})
+
+	// the gitlink synthesizes from the entry alone: the child commit need not
+	// exist in this repository at all
+	t.Run("gitlink_side_synthesizes", func(t *testing.T) {
+		e := entryOf(g.bump, "sub")
+		s, err := changeSide(&e)
+		require.NoError(t, err)
+		assert.Equal(t, filemode.Submodule, s.mode)
+		assert.Equal(t, plumbing.NewHash(g.child2), s.hash)
+		assert.Equal(t, "Subproject commit "+g.child2+"\n", s.data)
+	})
+
+	t.Run("absent_side_is_nil", func(t *testing.T) {
+		s, err := changeSide(&object.ChangeEntry{})
+		require.NoError(t, err)
+		assert.Nil(t, s)
+	})
+}
+
+func TestRenderChildDiff(t *testing.T) {
+	t.Parallel()
+
+	when := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	r, err := git.PlainInit(dir, false)
+	require.NoError(t, err)
+	w, err := r.Worktree()
+	require.NoError(t, err)
+	require.NoError(t, os0Write(dir, "lib.txt", "one\n"))
+	_, err = w.Add(".")
+	require.NoError(t, err)
+	c1, err := w.Commit("child file", &git.CommitOptions{Author: gitAuthor(when)})
+	require.NoError(t, err)
+
+	// the nested pointer names a commit-shaped hash no renderer resolves
+	idx, err := r.Storer.Index()
+	require.NoError(t, err)
+	idx.Entries = bulk.SliceFilter(func(e *index.Entry) bool { return e.Name != "lib.txt" }, idx.Entries)
+	idx.Entries = append(idx.Entries, &index.Entry{Name: "lib.txt", Hash: c1, Mode: filemode.Submodule})
+	require.NoError(t, r.Storer.SetIndex(idx))
+	c2, err := w.Commit("child flips lib to gitlink",
+		&git.CommitOptions{Author: gitAuthor(when.Add(time.Minute))})
+	require.NoError(t, err)
+
+	d := newGitDiffOut("", ToolGitDiff)
+	t.Cleanup(func() { _ = d.close() })
+	require.NoError(t, renderChildDiff(t.Context(), d, r, "sub", c1, c2))
+	out := d.Text("")
+	assert.Contains(t, out, "diff --git a/sub/lib.txt b/sub/lib.txt")
+	assert.Contains(t, out, "new mode 160000")
+	assert.Contains(t, out, "-one") // the flipped-out blob survives
+	assert.Contains(t, out, "+Subproject commit ")
 }
 
 // loopStorer answers every object request with one fixed self-nesting tree.

@@ -113,10 +113,12 @@ func childRepo(t *testing.T) (dir, first, second string) {
 // the pointer is the only submodule state that exists.
 //
 //	pre (a.txt) --- base (sub @ child1) --- bump (sub @ child2)
+//	                                         \--- filed (sub = blob) --- linked (sub @ child2)
 type submoduleRepo struct {
 	dir             string
 	pre, base, bump string // parent commits around the pointer moves
 	child1, child2  string // child commits the pointer moves between
+	filed, linked   string // sub flipped to a blob, then back to a gitlink
 }
 
 // newSubmoduleRepo builds the fixture in temp directories.
@@ -131,24 +133,26 @@ func newSubmoduleRepo(t *testing.T) *submoduleRepo {
 	require.NoError(t, err)
 	w, err := r.Worktree()
 	require.NoError(t, err)
-	setGitlink := func(hash string) {
+	// setIndex stages one entry for the next commit without touching the work
+	// tree; gitlinks name child commits no parent object needs to hold
+	setIndex := func(name string, mode filemode.FileMode, hash plumbing.Hash) {
 		t.Helper()
 		idx, err := r.Storer.Index()
 		require.NoError(t, err)
 		var seen bool
 		for _, e := range idx.Entries {
-			if e.Name == "sub" {
-				e.Hash = plumbing.NewHash(hash)
+			if e.Name == name {
+				e.Mode = mode
+				e.Hash = hash
 				seen = true
 			}
 		}
 		if !seen {
-			idx.Entries = append(idx.Entries, &index.Entry{
-				Name: "sub", Hash: plumbing.NewHash(hash), Mode: filemode.Submodule,
-			})
+			idx.Entries = append(idx.Entries, &index.Entry{Name: name, Mode: mode, Hash: hash})
 		}
 		require.NoError(t, r.Storer.SetIndex(idx))
 	}
+	setGitlink := func(hash string) { setIndex("sub", filemode.Submodule, plumbing.NewHash(hash)) }
 	parentCommit := func(msg string) string {
 		t.Helper()
 		h, err := w.Commit(msg, &git.CommitOptions{Author: gitAuthor(when)})
@@ -165,7 +169,22 @@ func newSubmoduleRepo(t *testing.T) *submoduleRepo {
 	base := parentCommit("add submodule")
 	setGitlink(child2)
 	bump := parentCommit("bump submodule")
-	return &submoduleRepo{dir: dir, pre: pre, base: base, bump: bump, child1: child1, child2: child2}
+
+	// sub swaps to a plain blob and back: both directions of the mode flip
+	obj := &plumbing.MemoryObject{}
+	obj.SetType(plumbing.BlobObject)
+	_, err = obj.Write([]byte("tracked\n"))
+	require.NoError(t, err)
+	blobHash, err := r.Storer.SetEncodedObject(obj)
+	require.NoError(t, err)
+	setIndex("sub", filemode.Regular, blobHash)
+	filed := parentCommit("file over gitlink")
+	setGitlink(child2)
+	linked := parentCommit("gitlink back")
+	return &submoduleRepo{
+		dir: dir, pre: pre, base: base, bump: bump, child1: child1, child2: child2,
+		filed: filed, linked: linked,
+	}
 }
 
 // point restages the gitlink at hash without committing, an uncommitted

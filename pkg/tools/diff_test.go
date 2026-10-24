@@ -287,6 +287,28 @@ func TestGitDiff(t *testing.T) {
 		assert.Contains(t, out, "-Subproject commit "+g.child2)
 	})
 
+	// a file-to-gitlink mode flip at one path keeps both sides: the blob's
+	// real content beside the synthesized Subproject line, either direction
+	t.Run("gitlink_flip_keeps_both_sides", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.bump+`","to":"`+g.filed+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "diff --git a/sub b/sub")
+		assert.Contains(t, out, "old mode 160000")
+		assert.Contains(t, out, "new mode 100644")
+		assert.Contains(t, out, "-Subproject commit "+g.child2)
+		assert.Contains(t, out, "+tracked")
+
+		out, isErr = runGitTool(t, &gitDiffTool{policy: g.policy()},
+			`{"from":"`+g.filed+`","to":"`+g.linked+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "old mode 100644")
+		assert.Contains(t, out, "new mode 160000")
+		assert.Contains(t, out, "-tracked")
+		assert.Contains(t, out, "+Subproject commit "+g.child2)
+	})
+
 	t.Run("submodule_scope_filters_note", func(t *testing.T) {
 		g := newSubmoduleRepo(t)
 		out, isErr := runGitTool(t, &gitDiffTool{policy: g.policy()},

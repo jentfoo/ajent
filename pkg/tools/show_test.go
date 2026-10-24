@@ -21,6 +21,17 @@ func TestGitShow(t *testing.T) {
 		assert.NotContains(t, out, "(no changes)")
 	})
 
+	// a commit that replaced the gitlink by a file shows both sides
+	t.Run("flip_commit_keeps_both_sides", func(t *testing.T) {
+		g := newSubmoduleRepo(t)
+		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+g.filed+`"}`)
+		assert.False(t, isErr)
+		assert.Contains(t, out, "old mode 160000")
+		assert.Contains(t, out, "new mode 100644")
+		assert.Contains(t, out, "-Subproject commit "+g.child2)
+		assert.Contains(t, out, "+tracked")
+	})
+
 	t.Run("metadata_plus_patch", func(t *testing.T) {
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitShowTool{policy: g.policy()},
