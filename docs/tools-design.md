@@ -958,11 +958,15 @@ blocks-out seam: the only package that touches an imaging codec. The rules:
 - **Fit, don't reject.** User-supplied images are transformed to fit the inline
   pixel and encoded-size ceilings rather than refused, converting foreign
   formats to png. Anything whose pixels change (a re-encode, EXIF orientation,
-  flattening an animated png to its first frame) gets a coordinate-mapping note
-  beside it so spatial answers stay correct against the source. Refusal is left
-  for what no transform can rescue and for headers claiming more pixels than
-  decoding may allocate, checked on the header alone so a small file cannot
-  promise gigabytes.
+  flattening an animation to its first frame) gets a coordinate-mapping note
+  beside it so spatial answers stay correct against the source. Animation never
+  survives: inline image endpoints document still images only, so every
+  animated source is flattened to its first frame before the fit decision and
+  the loss is disclosed in the note with the frame count. An animated source
+  with no extractable frame is refused like any other undecodable input.
+  Refusal is left for what no transform can rescue and for headers claiming
+  more pixels than decoding may allocate, checked on the header alone so a
+  small file cannot promise gigabytes.
 - **Normalize once, at history's door.** The registry guard wrapper is the one
   path every tool result takes, so tool-produced images are fitted there before
   session history persists them. The transcript replays blocks verbatim forever,

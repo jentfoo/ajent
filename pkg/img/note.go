@@ -8,8 +8,9 @@ import (
 // Note returns the coordinate-mapping text that accompanies a fitted image:
 // the original dimensions, the sent dimensions and the scale factor between
 // them, so the model's spatial answers stay correct against the source pixels.
-// It also names a format conversion or animation flattening, provenance the
-// model should know. An empty string when nothing changed.
+// It also names a format conversion or animation flattening, with the frame
+// count when known: provenance the model should know. An empty string when
+// nothing changed.
 func (r Result) Note() string {
 	if !r.Resized() && !r.Converted && !r.Flattened {
 		return ""
@@ -25,7 +26,16 @@ func (r Result) Note() string {
 		clauses = append(clauses, "format converted to "+r.MediaType)
 	}
 	if r.Flattened {
-		clauses = append(clauses, "animated PNG flattened to its first frame")
+		clauses = append(clauses, flattenNote(r.Frames))
 	}
 	return "[Image: " + strings.Join(clauses, "; ") + "]"
+}
+
+// flattenNote describes the animation loss, with the frame count when known:
+// dropping many frames differs from dropping one.
+func flattenNote(frames int) string {
+	if frames >= 2 {
+		return fmt.Sprintf("flattened a %d-frame animation to its first frame", frames)
+	}
+	return "animated image flattened to its first frame"
 }

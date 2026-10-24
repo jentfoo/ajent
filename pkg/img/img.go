@@ -63,6 +63,7 @@ type Result struct {
 	SrcHeight int    // source pixel height, after EXIF orientation
 	Converted bool   // the media type differs from the source format
 	Flattened bool   // the source was animated and one frame was kept
+	Frames    int    // frames an animated source showed or announced, 1 when unknown
 }
 
 // Resized reports whether the pixel dimensions changed from the source.
@@ -78,8 +79,13 @@ func tooManyPixels(w, h int) bool { return w > maxDecodePixels/h }
 // passes through unchanged, everything else is downscaled and re-encoded until
 // it fits, with decode-only formats such as bmp or tiff always converted. EXIF
 // orientation is applied whenever an image is re-encoded, so a camera shot that
-// needed fitting comes out upright. An animated png loses its animation to the
-// re-encode, keeping the first frame.
+// needed fitting comes out upright.
+//
+// Animation never survives: every animated source is reduced to its first
+// frame before the fit decision, whatever the limits say, because the inline
+// endpoints document still images only (OpenAI asks for non-animated gif;
+// Anthropic renders first frames; Google lists no gif at all). The loss is
+// disclosed through Flattened and Frames.
 //
 // Returns ErrUnsupported when no decoder accepts the bytes, ErrTooLarge when
 // the header claims more pixels than may ever be decoded however small the
@@ -92,8 +98,33 @@ func Prepare(data []byte) (Result, error) {
 	if tooManyPixels(cfg.Width, cfg.Height) {
 		return Result{}, ErrTooLarge
 	}
-	animated := animatedPNG(data, mediaType)
-	if !animated && cfg.Width <= MaxPixels && cfg.Height <= MaxPixels && base64Fits(len(data)) {
+	// animation never rides through: providers document still images only,
+	// so every animated source is reduced to frame one before the fit check
+	var frames int // frames in the source, 0 for a still
+	var frame []byte
+	switch mediaType {
+	case typePNG:
+		if n, ok := apngFrames(data); ok {
+			frames = n
+		}
+	case typeGIF:
+		// an unwalkable tail may hide frames past the ones counted
+		if n, complete := scanGIF(data); n >= 2 || (!complete && n > 0) {
+			frames = n
+		}
+	case typeWebP:
+		frames, frame = webpAnimation(data)
+	}
+	if frame != nil { // leading frame rides on as a plain still
+		mt, c2, ok := sniff(frame)
+		if !ok || c2.Width <= 0 || c2.Height <= 0 {
+			return Result{}, ErrUnsupported
+		}
+		data, mediaType, cfg = frame, mt, c2
+	}
+	flattened := frames > 0
+
+	if !flattened && cfg.Width <= MaxPixels && cfg.Height <= MaxPixels && base64Fits(len(data)) {
 		switch mediaType {
 		case typePNG, typeJPEG, typeGIF, typeWebP: // provider-accepted as-is
 			return Result{Data: data, MediaType: mediaType,
@@ -117,7 +148,8 @@ func Prepare(data []byte) (Result, error) {
 		return Result{}, ErrIrreducible
 	}
 	return Result{Data: out, MediaType: mt, Width: w, Height: h,
-		SrcWidth: sw, SrcHeight: sh, Converted: mt != mediaType, Flattened: animated,
+		SrcWidth: sw, SrcHeight: sh, Converted: mt != mediaType,
+		Flattened: flattened, Frames: frames,
 	}, nil
 }
 
@@ -293,29 +325,6 @@ func toNRGBA(src image.Image) *image.NRGBA {
 	dst := image.NewNRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
 	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
 	return dst
-}
-
-// animatedPNG reports whether data is a png carrying an animation control
-// chunk. Left alone such a file would ride to the provider verbatim and some
-// reject the whole request over it, so it is re-encoded to its first frame.
-func animatedPNG(data []byte, mediaType string) bool {
-	if mediaType != typePNG || len(data) < 8 {
-		return false
-	}
-	for i := 8; i+8 <= len(data); {
-		n := binary.BigEndian.Uint32(data[i : i+4])
-		typ := string(data[i+4 : i+8])
-		switch typ {
-		case "acTL":
-			return true
-		case "IDAT": // animation controls precede the first frame
-			return false
-		case "IEND":
-			return false
-		}
-		i += 12 + int(n) // length, type, data, crc
-	}
-	return false
 }
 
 // encodeFit returns an encoding of src, whose dimensions are w and h, that fits

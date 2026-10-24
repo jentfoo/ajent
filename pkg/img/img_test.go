@@ -236,35 +236,25 @@ func pngChunk(typ string, data []byte) []byte {
 	return out
 }
 
-// apngBytes wraps a png's bytes with an animation control chunk, the way an
-// APNG encoder would: acTL rides between IHDR and the first IDAT.
-func apngBytes(t *testing.T, m image.Image) []byte {
-	t.Helper()
-
-	src := pngBytes(t, m)
-	var out bytes.Buffer
-	out.Write(src[:8]) // signature
-	out.Write(pngChunk("acTL", make([]byte, 8)))
-	out.Write(src[8:])
-	return out.Bytes()
-}
-
 func TestPrepareConvertsAnimatedPNG(t *testing.T) {
 	t.Parallel()
 
 	// an animated png within the limits must not ride to the provider
 	// verbatim: it is re-encoded to its first frame, with the flattening
 	// disclosed in the note so the model knows it sees one frame
-	src := apngBytes(t, solid(40, 30))
+	src := apngBytes(t, solid(40, 30), 1)
 	res, err := Prepare(src)
 	require.NoError(t, err)
 	assert.Equal(t, typePNG, res.MediaType)
 	assert.Equal(t, 40, res.Width)
 	assert.Equal(t, 30, res.Height)
 	assert.True(t, res.Flattened)
-	assert.Contains(t, res.Note(), "flattened to its first frame")
-	assert.False(t, animatedPNG(res.Data, res.MediaType))
-	assert.False(t, animatedPNG(pngBytes(t, solid(4, 4)), typePNG)) // plain png untouched
+	assert.Equal(t, 1, res.Frames)
+	assert.Contains(t, res.Note(), "animated image flattened to its first frame")
+	_, ok := apngFrames(res.Data)
+	assert.False(t, ok)
+	_, ok = apngFrames(pngBytes(t, solid(4, 4))) // plain png untouched
+	assert.False(t, ok)
 }
 
 // ihdrPng returns a png whose IHDR claims w by h pixels, spliced in place of
@@ -283,6 +273,83 @@ func ihdrPng(t *testing.T, w, h uint32) []byte {
 	b.Write(pngChunk("IHDR", ihdr))
 	b.Write(src[33:]) // everything after the original IHDR
 	return b.Bytes()
+}
+
+// withGCT splices a two-entry global color table into a gif, the way an
+// encoder that shares one palette across frames would write it.
+func withGCT(data []byte) []byte {
+	out := make([]byte, 0, len(data)+6)
+	out = append(out, data[:13]...)
+	out[10] |= 0x80                     // global color table follows the logical screen descriptor
+	out = append(out, 0, 0, 0, 0, 0, 0) // two black entries
+	return append(out, data[13:]...)
+}
+
+// gifFrames encodes n solid frames of w by h as a gif, the way an animation
+// export would: one image descriptor per frame.
+func gifFrames(t *testing.T, w, h, n int) []byte {
+	t.Helper()
+
+	var g gif.GIF
+	for range n {
+		m := image.NewPaletted(image.Rect(0, 0, w, h), color.Palette{color.Black})
+		g.Image = append(g.Image, m)
+		g.Delay = append(g.Delay, 10)
+	}
+	var b bytes.Buffer
+	require.NoError(t, gif.EncodeAll(&b, &g))
+	return b.Bytes()
+}
+
+func TestPrepareConvertsAnimatedGIF(t *testing.T) {
+	t.Parallel()
+
+	// an animated gif over the pixel ceiling is re-encoded to its first frame:
+	// the note must name that loss, not only the resize and format conversion
+	res, err := Prepare(gifFrames(t, 2200, 100, 3))
+	require.NoError(t, err)
+	assert.Equal(t, typePNG, res.MediaType)
+	assert.LessOrEqual(t, res.Width, MaxPixels)
+	assert.True(t, res.Flattened)
+	assert.Equal(t, 3, res.Frames)
+	assert.Contains(t, res.Note(), "flattened a 3-frame animation to its first frame")
+}
+
+func TestPrepareFlattensFittingAnimatedGIF(t *testing.T) {
+	t.Parallel()
+
+	// providers document still images only: a fitting animated gif is flattened
+	// too, so what reaches history matches what any endpoint will render
+	res, err := Prepare(gifFrames(t, 40, 30, 3))
+	require.NoError(t, err)
+	assert.Equal(t, typePNG, res.MediaType)
+	assert.True(t, res.Flattened)
+	assert.Equal(t, 3, res.Frames)
+	assert.Contains(t, res.Note(), "flattened a 3-frame animation to its first frame")
+}
+
+func TestPrepareStaticGIFPassthrough(t *testing.T) {
+	t.Parallel()
+
+	// a fitting single-frame gif rides through verbatim with no note
+	src := gifFrames(t, 40, 30, 1)
+	res, err := Prepare(src)
+	require.NoError(t, err)
+	assert.Equal(t, typeGIF, res.MediaType)
+	assert.Equal(t, src, res.Data)
+	assert.False(t, res.Flattened)
+	assert.Empty(t, res.Note())
+}
+
+func TestPrepareStaticGIFNotFlattened(t *testing.T) {
+	t.Parallel()
+
+	// a re-encoded single-frame gif has no animation to lose and must not claim one
+	res, err := Prepare(gifFrames(t, 2200, 100, 1))
+	require.NoError(t, err)
+	assert.Equal(t, typePNG, res.MediaType)
+	assert.False(t, res.Flattened)
+	assert.Contains(t, res.Note(), "format converted")
 }
 
 func TestPrepareRejectsVastDimensions(t *testing.T) {
