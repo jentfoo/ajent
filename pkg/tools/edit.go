@@ -319,14 +319,24 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 	// plus how far each span moved everything below it
 	beforeStarts := lineStarts(strings.Split(buf, "\n"))
 	afterStarts := lineStarts(strings.Split(after, "\n"))
-	edited := make([]lineRange, 0, len(written))
+	var edited []lineRange
 	var shifts []lineShift
 	for i, w := range written {
-		wrote := spanLines(afterStarts, after, w[0], w[1])
-		took := spanLines(beforeStarts, buf, spans[i].s, spans[i].e)
-		edited = append(edited, wrote)
-		if d := (wrote.to - wrote.from) - (took.to - took.from); d != 0 {
-			shifts = append(shifts, lineShift{at: took.to, delta: d})
+		sp := spans[i]
+		if w[1] > w[0] { // a deletion writes nothing, so it records no lines
+			edited = append(edited, spanLines(afterStarts, after, w[0], w[1]))
+		}
+		took := strings.Count(buf[sp.s:sp.e], "\n")
+		// shift is the newline delta: how far everything below the span moves.
+		// A span reaching EOF leaves nothing below it, so no shift applies
+		if d := strings.Count(sp.repl, "\n") - took; d != 0 && sp.e < len(buf) {
+			// first moved line: a mid-line span merges its last line downward,
+			// while a pure insertion keeps its own line's number
+			at := lineOf(beforeStarts, sp.e)
+			if took == 0 {
+				at++
+			}
+			shifts = append(shifts, lineShift{at: at, delta: d})
 		}
 	}
 

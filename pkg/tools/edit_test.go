@@ -413,6 +413,108 @@ func TestEditPiNonCascadeCase(t *testing.T) {
 	assert.Equal(t, "foo bar\nBAR\nbaz\n", string(data))
 }
 
+func TestApplyEditsDeletionBookkeeping(t *testing.T) {
+	t.Parallel()
+
+	// pins the shifts and written-line ranges deletion ops record, which remap
+	// the edited-line guard's protection: a deletion writes nothing and moves
+	// lines by its newline delta only
+	cases := []struct {
+		name       string
+		buf        string
+		old, new   string
+		wantAfter  string
+		wantShifts []lineShift
+		wantEdited []lineRange // nil for every pure deletion
+	}{
+		// removes a whole line's text but not its newline: an empty line remains,
+		// so no line below moves and any shift would walk earlier protection
+		{"mid_line_no_count_change", "alpha\nbeta\ngamma = 1024\ndelta\n",
+			"beta", "", "alpha\n\ngamma = 1024\ndelta\n", nil, nil},
+		// the file's first bytes go with their newline: everything below moves up
+		{"first_line_with_newline", "alpha\nbeta\ngamma = 1024\ndelta\n",
+			"alpha\n", "", "beta\ngamma = 1024\ndelta\n", []lineShift{{at: 1, delta: -1}}, nil},
+		{"whole_line_mid_file", "alpha\nbeta\ngamma\n",
+			"beta\n", "", "alpha\ngamma\n", []lineShift{{at: 2, delta: -1}}, nil},
+		// the removed newline joined two lines into one below
+		{"separator_swallow_merges_below", "x beta\ny\nz\n",
+			"beta\n", "", "x y\nz\n", []lineShift{{at: 1, delta: -1}}, nil},
+		// an unterminated final line vanishes with nothing below it
+		{"tail_line_at_eof", "alpha\nbeta",
+			"beta", "", "alpha\n", nil, nil},
+		// the same arithmetic holds for a replacement that drops a separator
+		{"replacement_swallows_separator", "x beta\ny\nz\n",
+			"beta\n", "B", "x By\nz\n", []lineShift{{at: 1, delta: -1}}, []lineRange{{0, 1}}},
+		// a deletion ending mid-line still moves its merged tail and lines below
+		{"ends_mid_line_merges_tail", "alpha\nbeta\ngamma = 1024\ndelta\n",
+			"beta\ngam", "", "alpha\nma = 1024\ndelta\n", []lineShift{{at: 2, delta: -1}}, nil},
+		// a deletion running to EOF leaves nothing below it, so no shift applies
+		{"deletes_through_eof", "alpha\nbeta\ngamma\n",
+			"gamma\n", "", "alpha\nbeta\n", nil, nil},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := applyEdits(editTarget{Path: "a.go"}, tc.buf,
+				[]editOp{{OldText: tc.old, NewText: tc.new}})
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantAfter, string(o.final))
+			assert.Equal(t, tc.wantShifts, o.shifts)
+			assert.Equal(t, tc.wantEdited, o.edited)
+		})
+	}
+}
+
+func TestEditGuardsEarlierEditsAfterDeletion(t *testing.T) {
+	t.Parallel()
+
+	// the fuzzy guard's line ranges must survive a deletion: every line below it
+	// changes number, and a phantom or lost shift points protection at lines a
+	// later heal can then revert
+	const src = "package p\n\nconst (\n\tqueueDepth      = 1024\n\tbatchSize       = 512\n)\n"
+	const bump = `{"path":"c.go","edits":[{"oldText":"queueDepth      = 1024","newText":"queueDepth      = 4096"}]}`
+	const heal = `{"path":"c.go","edits":[{"oldText":"batchSize       = 512","newText":"batchSize       = 8192"}]}`
+
+	t.Run("refuses_after_count_neutral_deletion", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("c.go", src)
+		res := e.editExec(t.Context(),
+			`{"path":"c.go","edits":[{"oldText":"batchSize       = 512","newText":"batchSize       = 256"}]}`)
+		require.False(t, res.IsError, textOf(res))
+
+		// empties the line above without touching its newline: no shift may result
+		res = e.editExec(t.Context(),
+			`{"path":"c.go","edits":[{"oldText":"\tqueueDepth      = 1024","newText":""}]}`)
+		require.False(t, res.IsError, textOf(res))
+
+		res = e.editExec(t.Context(), heal)
+		assert.True(t, res.IsError) // the emptied line must not unprotect the written one
+
+		data, err := os.ReadFile(filepath.Join(e.cwd, "c.go"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "batchSize       = 256") // the first edit stands
+	})
+
+	t.Run("refuses_after_first_line_deleted", func(t *testing.T) {
+		e := newToolEnv(t.TempDir())
+		e.writeFile("c.go", src)
+		require.False(t, e.editExec(t.Context(), bump).IsError)
+
+		res := e.editExec(t.Context(),
+			`{"path":"c.go","edits":[{"oldText":"package p\n","newText":""}]}`)
+		require.False(t, res.IsError, textOf(res))
+
+		// the guarded line moved up one; a stale range would guard the wrong line
+		res = e.editExec(t.Context(),
+			`{"path":"c.go","edits":[{"oldText":"queueDepth      = 256","newText":"queueDepth      = 8192"}]}`)
+		assert.True(t, res.IsError)
+
+		data, err := os.ReadFile(filepath.Join(e.cwd, "c.go"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "queueDepth      = 4096") // the first edit stands
+	})
+}
+
 // TestEditGuardsEarlierEditsAfterLinesMove covers the fuzzy guard's line ranges
 // surviving an edit that moved them. Unremapped they name unrelated lines, and a
 // heal then silently reverts work this session already did.
