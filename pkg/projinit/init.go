@@ -130,10 +130,13 @@ func (r *Runner) Survey(ctx context.Context) (agent.Input, error) {
 }
 
 // readDocs does one real read per README and any existing AGENTS.md, reporting
-// whether that file was found. A found one whose read failed fails the survey:
-// the update prompt would correct content no one saw.
+// whether that file was found. A directory listing or an AGENTS.md read that
+// fails stops the survey: /init must not draft from less than it can see.
 func (r *Runner) readDocs(ctx context.Context, tool agent.Tool, run int64) ([]llm.Message, bool, error) {
-	paths, existing := docFiles(r.opts.Cwd)
+	paths, existing, err := docFiles(r.opts.Cwd)
+	if err != nil {
+		return nil, false, err
+	}
 	out := make([]llm.Message, 0, 2*len(paths))
 	var agentsRes agent.ToolResult
 	for i, p := range paths {

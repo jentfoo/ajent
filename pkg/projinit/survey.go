@@ -35,20 +35,26 @@ var ownedElsewhere = bulk.SliceToSet([]string{
 
 // docFiles returns the relative names of the files /init reads for itself (every
 // README plus any existing AGENTS.md) and whether that AGENTS.md was among them.
-func docFiles(cwd string) ([]string, bool) {
-	matches, _ := filepath.Glob(filepath.Join(cwd, "README*"))
-	slices.Sort(matches)
-	out := make([]string, 0, len(matches))
-	for _, m := range matches {
-		if isFile(m) {
-			out = append(out, filepath.Base(m))
+// An unlistable directory is an error, not a silent empty result.
+func docFiles(cwd string) ([]string, bool, error) {
+	names, err := os.ReadDir(cwd)
+	if err != nil {
+		return nil, false, err
+	}
+	out := make([]string, 0, len(names))
+	for _, e := range names { // ReadDir sorts by name, so the READMEs stay alphabetical
+		// literal prefix test: a glob here reads cwd's own metacharacters as pattern syntax
+		if !strings.HasPrefix(e.Name(), "README") || !isFile(filepath.Join(cwd, e.Name())) {
+			continue
 		}
+		out = append(out, e.Name())
 	}
 	// the existing file lands last, nearest the instruction that corrects it
-	if agents := filepath.Join(cwd, agentsFile); isFile(agents) {
-		return append(out, agentsFile), true
+	existing := isFile(filepath.Join(cwd, agentsFile))
+	if existing {
+		out = append(out, agentsFile)
 	}
-	return out, false
+	return out, existing, nil
 }
 
 // surveyTask is one sub-agent assignment. The label names it in a refusal

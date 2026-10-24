@@ -17,7 +17,8 @@ func TestDocFiles(t *testing.T) {
 	t.Run("readmes_sorted", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.rst", "README.md", "CONTRIBUTING.md", "main.go")
-		paths, existing := docFiles(dir)
+		paths, existing, err := docFiles(dir)
+		require.NoError(t, err)
 		assert.Equal(t, []string{"README.md", "README.rst"}, paths)
 		assert.False(t, existing)
 	})
@@ -25,7 +26,8 @@ func TestDocFiles(t *testing.T) {
 	t.Run("agents_file_last", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "README.md", "AGENTS.md")
-		paths, existing := docFiles(dir)
+		paths, existing, err := docFiles(dir)
+		require.NoError(t, err)
 		assert.Equal(t, []string{"README.md", "AGENTS.md"}, paths)
 		assert.True(t, existing)
 	})
@@ -33,15 +35,33 @@ func TestDocFiles(t *testing.T) {
 	t.Run("directory_is_not_a_doc", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "READMEs"), 0o755))
-		paths, existing := docFiles(dir)
+		paths, existing, err := docFiles(dir)
+		require.NoError(t, err)
 		assert.Empty(t, paths)
 		assert.False(t, existing)
 	})
 
 	t.Run("empty_project", func(t *testing.T) {
-		paths, existing := docFiles(t.TempDir())
+		paths, existing, err := docFiles(t.TempDir())
+		require.NoError(t, err)
 		assert.Empty(t, paths)
 		assert.False(t, existing)
+	})
+
+	// glob matching read the cwd itself as pattern syntax; these names must be taken literally
+	t.Run("metacharacters_in_cwd", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "proj[v2]")
+		writeTree(t, dir, "README.md", "AGENTS.md")
+		paths, existing, err := docFiles(dir)
+		require.NoError(t, err)
+		assert.Equal(t, []string{"README.md", "AGENTS.md"}, paths)
+		assert.True(t, existing)
+	})
+
+	t.Run("missing_dir_is_an_error", func(t *testing.T) {
+		paths, _, err := docFiles(filepath.Join(t.TempDir(), "gone"))
+		require.Error(t, err)
+		assert.Empty(t, paths)
 	})
 }
 

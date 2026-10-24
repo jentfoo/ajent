@@ -1,6 +1,8 @@
 package projinit
 
 import (
+	"io/fs"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -274,6 +276,20 @@ func TestSurvey(t *testing.T) {
 		// an empty registry has no read, drafting blind could overwrite a file the model never saw
 		_, err := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: tools.New()}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoRead)
+	})
+
+	t.Run("unlistable_cwd_fails", func(t *testing.T) {
+		dir := t.TempDir()
+		start := startStub()
+		r := New(Options{
+			Cwd: filepath.Join(dir, "proj[v2]"), Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted,
+			Registry: stubRegistry(readStub(""), start, pollStub()),
+		})
+
+		// a cwd that cannot be listed may hold READMEs and AGENTS.md no one saw
+		_, err := r.Survey(t.Context())
+		require.ErrorIs(t, err, fs.ErrNotExist)
+		assert.Empty(t, start.inputs()) // the survey stops before spawning anything
 	})
 
 	t.Run("disabled_subagents_report", func(t *testing.T) {
