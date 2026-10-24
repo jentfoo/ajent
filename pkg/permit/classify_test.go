@@ -52,6 +52,9 @@ func TestClassify(t *testing.T) {
 		{"bash ls", "", "ls -la", nil, VerdictAllow},
 		{"bash grep pipeline", "", "grep foo f | sort", nil, VerdictAllow},
 		{"bash git status", "", "git status", nil, VerdictAllow},
+		// quoting a write flag cannot flip the verdict to allow
+		{"bash git quoted output", "", `git diff "--output=/tmp/evil.patch"`, nil, VerdictPrompt},
+		{"bash git quoted ext diff", "", `git log '--ext-diff'`, nil, VerdictPrompt},
 		{"bash sed read only", "", `sed -n 's/a/b/p' f.txt`, nil, VerdictAllow},
 		// bash: exec or write vectors in awk/rg/sort prompt even though the
 		// head is otherwise name-trusted.

@@ -662,7 +662,6 @@ func segmentIsReadOnly(seg, raw string) bool {
 			return false // an argument-position assignment is still shell state
 		}
 	}
-	tokens := segmentTokens(seg)
 	head, ok := headOf(seg)
 	if !ok || head == "" { // env-prefixed or unnameable: never read-only
 		return false
@@ -671,7 +670,7 @@ func segmentIsReadOnly(seg, raw string) bool {
 	case "sed":
 		return sedReadSafe(raw) // quoted flags need the verbatim text
 	case "git":
-		return gitReadOnly(tokens)
+		return gitReadOnly(unwrapLaunchers(tokenizeRaw(raw))) // quoted flags need the verbatim text
 	case "awk":
 		return awkReadSafe(raw) // quoted scripts need the verbatim text, like sed
 	case "rg":

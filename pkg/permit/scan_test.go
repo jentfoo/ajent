@@ -166,6 +166,14 @@ func TestAllSegmentsReadOnly(t *testing.T) {
 		{"grep foo f | sort", true}, // pipeline tolerated
 		{"git status && git log --oneline", true},
 		{`sed -n 's/a/b/p' f`, true},
+		// quoting cannot hide a write/exec flag: the verdict holds for the verbatim tokens
+		{`git diff "--output=/tmp/evil.patch"`, false},
+		{`git log '--ext-diff'`, false},
+		{`git grep "-O" vim pattern`, false},
+		{`git diff "--o"utput=/tmp/evil.patch`, false}, // adjacent quoting joins like the shell
+		{`nohup git diff "--output=x"`, false},
+		{`git log "--oneline"`, true}, // benign quoting still verifies and allows
+		{`git status -C '/tmp'`, true},
 		{"rm -rf build", false},
 		{"find . -delete", false},   // unsafe find action
 		{`find . "-delete"`, false}, // quoting cannot hide the action

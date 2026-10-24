@@ -70,8 +70,8 @@ func isGitGrepExec(t string) bool {
 }
 
 // isGitLsRemoteExec reports whether an argument names a command git runs: an
-// --upload-pack/-u form, an ext::<cmd> URL, or a quoted arg that collapsed to
-// "" in the scan and so cannot be verified.
+// --upload-pack/-u form, an ext::<cmd> URL, or a token retaining a double quote
+// (only escaped quoting keeps one past tokenization), failing safe to prompting.
 func isGitLsRemoteExec(t string) bool {
 	return strings.HasPrefix(t, "--upload-pack") || gitLsRemoteUploadRe.MatchString(t) ||
 		strings.Contains(t, "::") || strings.Contains(t, "\"")
@@ -258,11 +258,13 @@ func gitActionReadOnly(sub string, args []string) bool {
 }
 
 // gitReadOnly reports whether tokens name a verifiably read-only git call.
-// Pre-subcommand flags outside the tiny allowlist disqualify, in particular -c
-// can set pager.log=<cmd> that git executes. Flags that write a file or run a
-// command are rejected globally and per subcommand, and subcommands with both
-// read and write forms (branch/tag/config/remote/reflog/worktree) are verified
-// against their arguments. Fails safe to the prompt/model path.
+// Tokens carry the verbatim argv (quote-stripped), never collapsed scan text,
+// so a quoted write flag stays visible. Pre-subcommand flags outside the tiny
+// allowlist disqualify, in particular -c can set pager.log=<cmd> that git
+// executes. Flags that write a file or run a command are rejected globally and
+// per subcommand, and subcommands with both read and write forms
+// (branch/tag/config/remote/reflog/worktree) are verified against their
+// arguments. Fails safe to the prompt/model path.
 func gitReadOnly(tokens []string) bool {
 	j := 1
 	for j < len(tokens) {

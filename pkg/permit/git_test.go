@@ -9,6 +9,8 @@ import (
 func TestGitReadOnly(t *testing.T) {
 	t.Parallel()
 
+	// the checker verifies verbatim argv tokens, matching how segmentIsReadOnly feeds it
+	run := func(line string) bool { return gitReadOnly(unwrapLaunchers(stringsFields(line))) }
 	cases := []struct {
 		name string
 		in   string
@@ -53,8 +55,15 @@ func TestGitReadOnly(t *testing.T) {
 		{"grep open pager", "git grep -O vim foo", false},
 		{"ls remote upload pack", "git ls-remote --upload-pack=sh origin", false},
 		{"ls remote ext url", "git ls-remote 'ext::sh -c cat% .'", false},
+		// quoting must not hide a write/exec flag from the verbatim tokens
+		{`quoted output flag`, `git diff "--output=out.patch"`, false},
+		{`single quoted ext diff`, `git log '--ext-diff'`, false},
+		{`joined quoted output`, `git diff "--o"utput=out.patch`, false},
+		{"quoted grep pager", `git grep "-O" vim foo`, false},
 		// pre-subcommand pager flag
 		{`pager config executes`, `git -c pager.log=less status`, false},
+		// benign quoting still verifies and allows
+		{"quoted benign flag", `git log "--oneline"`, true},
 		// -C <path> relocates the repo, consuming its path token
 		{"worktree path long", "git -C /tmp status", true},
 		{"worktree path branch", "git -C /tmp branch foo", false},
@@ -64,7 +73,7 @@ func TestGitReadOnly(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, gitReadOnly(segmentTokens(c.in)))
+			assert.Equal(t, c.want, run(c.in))
 		})
 	}
 }
