@@ -303,11 +303,11 @@ func (c *Controller) setPhaseLocked(p Phase) {
 	c.phase = p
 	c.persistLocked()
 	if !p.active() {
-		c.h.Status("", "")
+		c.status("", "")
 		return
 	}
 	round := strconv.Itoa(c.round()) + "/" + strconv.Itoa(maxRevisions)
-	c.h.Status("plan: "+p.String()+" (r"+round+")", "plan r"+round)
+	c.status("plan: "+p.String()+" (r"+round+")", "plan r"+round)
 }
 
 // applyScopeLocked swaps in the tool set for p. The model needs nothing here:
@@ -315,6 +315,13 @@ func (c *Controller) setPhaseLocked(p Phase) {
 func (c *Controller) applyScopeLocked(p Phase) {
 	if c.h.SetTools != nil {
 		c.h.SetTools(c.toolsFor(p))
+	}
+}
+
+// status publishes a status-segment update through the host, if it wired one.
+func (c *Controller) status(text, short string) {
+	if c.h.Status != nil {
+		c.h.Status(text, short)
 	}
 }
 

@@ -232,6 +232,12 @@ func (c *Controller) stalledReviewerLocked(ctx context.Context) (agent.Input, bo
 		optComplete = "Accept and finish"
 		optContinue = "Keep reviewing"
 	)
+	// nil Ask is documented valid on Host: pause in place like a failed ask
+	if c.h.Ask == nil {
+		c.notify("the review ended without a verdict. Continue by hand or /plan-stop",
+			agent.LevelWarn)
+		return agent.Input{}, false
+	}
 	choice, err := c.h.Ask(ctx, "The review ended without a verdict. What now?",
 		[]string{optRevise, optComplete, optContinue})
 	if err != nil {

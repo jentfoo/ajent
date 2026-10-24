@@ -346,8 +346,27 @@ func TestControllerAdvance(t *testing.T) {
 		_, ok := c.Advance(t.Context(), done())
 		require.True(t, ok)
 
-		_, ok = c.Advance(t.Context(), done())
+		_, ok = c.Advance(t.Context(), done()) // review ended with no verdict
 		assert.False(t, ok)
 		assert.Equal(t, PhaseReviewing, c.phase)
+	})
+
+	// a nil Ask is documented valid on Host: without an asker the stall pauses
+	// in place for hand steering rather than panicking
+	t.Run("stalled_reviewer_nil_ask", func(t *testing.T) {
+		f := newFakeHost()
+		h := f.host()
+		h.Ask = nil
+		c := New(h)
+		require.Empty(t, c.Start(t.Context(), ""))
+		handOff(t, c, "the plan")
+		submitPlan(t, c, "the plan")
+		_, ok := c.Advance(t.Context(), done())
+		require.True(t, ok)
+
+		_, ok = c.Advance(t.Context(), done()) // review ended with no verdict
+		assert.False(t, ok)
+		assert.Equal(t, PhaseReviewing, c.phase) // paused in place, not stopped
+		assert.Contains(t, f.notices[len(f.notices)-1], "without a verdict")
 	})
 }

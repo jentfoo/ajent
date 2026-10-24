@@ -212,6 +212,26 @@ func TestControllerStatus(t *testing.T) {
 	assert.Contains(t, f.statuses, "plan: planning (r1/4)")
 }
 
+func TestControllerNilStatus(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost().host()
+	h.Status = nil
+	c := New(h)
+
+	require.Empty(t, c.Start(t.Context(), "")) // the first transition publishes planning
+	assert.Equal(t, PhasePlanning, c.phase)
+
+	handOff(t, c, "the plan") // awaiting-plan gate
+	submitPlan(t, c, "the plan")
+	_, ok := c.Advance(t.Context(), done())
+	require.True(t, ok)
+	assert.Equal(t, PhaseReviewing, c.phase)
+
+	c.Stop() // the idle/done branch clears the segment
+	assert.Equal(t, PhaseDone, c.phase)
+}
+
 func TestControllerParked(t *testing.T) {
 	t.Parallel()
 
