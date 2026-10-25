@@ -74,6 +74,10 @@ const (
 // turns anything over pasteThreshold into a placeholder, so large pastes are supported.
 const maxPasteLen = 4 << 20
 
+// bulkRun is the text volume above which held unbracketed keystrokes flush as
+// one keyPaste, aligned with pasteThreshold so both transports agree on size
+const bulkRun = pasteThreshold
+
 var (
 	pasteStartBytes = []byte(pasteStart)
 	pasteEndBytes   = []byte(pasteEnd)
@@ -83,36 +87,22 @@ var (
 // keyEscape rather than the start of a longer sequence.
 const escTimeout = 50 * time.Millisecond
 
-// escTimer holds a lone escape byte until it is certain no sequence follows. The
-// interface lets tests drive the timeout paths deterministically instead of by
-// wall clock.
-type escTimer interface {
-	Reset(d time.Duration) bool
-	Stop() bool
-	C() <-chan time.Time
-}
+// bulkStall is how long a held bulk run waits out silence before flushing as
+// one paste. Below escTimeout so completed runs deliver promptly; chunk gaps
+// inside an in-flight paste stay well under it.
+const bulkStall = 20 * time.Millisecond
 
-// realEsc wraps *time.Timer as an escTimer, arming lazily so a never-fired
-// timer needs no initial drain.
-type realEsc struct{ t *time.Timer }
-
-func newRealEsc() escTimer {
-	return &realEsc{t: time.NewTimer(time.Hour)}
-}
-
-func (e *realEsc) Reset(d time.Duration) bool {
-	if !e.t.Stop() {
+// resetTimer drains any unreceived tick before re-arming t for d: a stale fire
+// must never resurface as fresh after the Reset.
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
 		select {
-		case <-e.t.C:
+		case <-t.C:
 		default:
 		}
 	}
-	return e.t.Reset(d)
+	t.Reset(d)
 }
-
-func (e *realEsc) Stop() bool { return e.t.Stop() }
-
-func (e *realEsc) C() <-chan time.Time { return e.t.C }
 
 // controlKeys maps single control bytes to their editing action.
 var controlKeys = map[byte]keyType{
@@ -438,22 +428,17 @@ type inputReader struct {
 	colors  chan string   // OSC 11 background answers
 	attrs   chan struct{} // DA1 replies, the fence behind an OSC 11 query
 	cells   chan [2]int   // CSI 16 t cell-size replies, width then height
-
-	newTimer func() escTimer // defaults to newRealEsc, tests inject a manual one
-	escDelay time.Duration   // how long a lone escape byte is held, seeded from escTimeout
 }
 
 func newInputReader(src io.Reader) *inputReader {
 	return &inputReader{
-		src:      src,
-		keys:     make(chan key, 64),
-		reports:  make(chan int, 4),
-		status:   make(chan struct{}, 4),
-		colors:   make(chan string, 1),
-		attrs:    make(chan struct{}, 1),
-		cells:    make(chan [2]int, 1),
-		newTimer: newRealEsc,
-		escDelay: escTimeout,
+		src:     src,
+		keys:    make(chan key, 64),
+		reports: make(chan int, 4),
+		status:  make(chan struct{}, 4),
+		colors:  make(chan string, 1),
+		attrs:   make(chan struct{}, 1),
+		cells:   make(chan [2]int, 1),
 	}
 }
 
@@ -512,9 +497,41 @@ func (r *inputReader) run() {
 	}()
 
 	var buf []byte
-	var pasteScanned int   // bytes of an in-progress paste body already known to hold no terminator
-	var pasteOverflow bool // a capped paste was delivered, its tail dropped up to the terminator
-	timer := r.newTimer()
+	var pasteScanned int                // bytes of an in-progress paste body already known to hold no terminator
+	var pasteOverflow bool              // a capped paste was delivered, its tail dropped up to the terminator
+	timer := time.NewTimer(escTimeout)  // holds a lone escape byte before keyEscape
+	flusher := time.NewTimer(bulkStall) // flushes a held bulk run after its stall window
+
+	// held text keys, enter included so pasted CR cannot submit mid-run
+	// over bulkRun flushes as one keyPaste, under it typing replays as-is
+	var pending []key
+	var pendingBytes int
+	flushText := func() {
+		if len(pending) == 0 {
+			return
+		}
+		if pendingBytes >= bulkRun {
+			// join as literal bytes, enter as \r and newline as \n so CRLF folds to
+			// one break like any paste body
+			var b strings.Builder
+			for _, k := range pending {
+				switch k.typ {
+				case keyEnter:
+					b.WriteByte('\r')
+				case keyNewline:
+					b.WriteByte('\n')
+				default:
+					b.WriteString(k.text)
+				}
+			}
+			r.emit(key{typ: keyPaste, text: b.String()})
+		} else {
+			for _, k := range pending {
+				r.emit(k)
+			}
+		}
+		pending, pendingBytes = nil, 0
+	}
 
 	for {
 		for {
@@ -533,7 +550,27 @@ func (r *inputReader) run() {
 			buf = buf[n:]
 			pasteScanned = 0 // any in-progress paste resolved (or was delivered at cap)
 			pasteOverflow = k.partial
-			r.emit(k)
+			switch k.typ {
+			case keyRune, keyEnter, keyNewline:
+				pending = append(pending, k)
+				if k.typ == keyRune {
+					pendingBytes += len(k.text)
+				} else {
+					pendingBytes++ // enter and newline each join as one body byte
+				}
+				if pendingBytes >= maxPasteLen {
+					flushText() // no terminator here: cap like a bracketed paste
+				}
+			default:
+				if k.typ == keyInterrupt {
+					// an abort discards the run: replayed first, the paste would make a
+					// non-empty draft that turns Ctrl+C into a clear instead of an interrupt
+					pending, pendingBytes = nil, 0
+				} else {
+					flushText()
+				}
+				r.emit(k)
+			}
 		}
 		if len(buf) == 0 {
 			buf = nil // drop the consumed backing array
@@ -547,26 +584,42 @@ func (r *inputReader) run() {
 		// terminator, and a viable start header can be a fragmented head whose drop would
 		// turn the rest of the paste into ordinary keystrokes
 		if len(buf) > 0 && buf[0] == escByte && !pasteOverflow && !pendingPasteStart(buf) {
-			timer.Reset(r.escDelay)
-			pendingEsc = timer.C()
+			resetTimer(timer, escTimeout)
+			pendingEsc = timer.C
+		}
+		// a held bulk run waits out back-to-back chunks: only a stall flushes it
+		var pendingFlush <-chan time.Time
+		switch {
+		case len(buf) == 0 && pendingBytes >= bulkRun:
+			resetTimer(flusher, bulkStall)
+			pendingFlush = flusher.C
+		case len(buf) == 0:
+			flushText() // a typing-sized run replays at once, no stall window
 		}
 
 		select {
 		case res := <-reads:
 			if pendingEsc != nil && !timer.Stop() {
-				<-timer.C()
+				<-timer.C
+			}
+			if pendingFlush != nil && !flusher.Stop() {
+				<-flusher.C
 			}
 			buf = append(buf, res.data...)
 			if res.err != nil {
+				flushText()  // deliver text read up to the close
 				r.flush(buf) // deliver undecoded runes read up to the close
 				return       // defer closes keys, stream end emits no editing keystroke
 			}
 		case <-pendingEsc:
+			flushText() // held text precedes the dropped sequence
 			if len(buf) == 1 {
 				r.keys <- key{typ: keyEscape} // a genuine lone Esc
 			}
 			buf = nil // truncated sequence: drop it rather than leak its bytes as runes
 			pasteScanned = 0
+		case <-pendingFlush:
+			flushText()
 		}
 	}
 }

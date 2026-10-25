@@ -5,7 +5,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -126,119 +125,6 @@ func TestDecodeKeyIncomplete(t *testing.T) {
 		assert.Equal(t, len(b)-len(pasteEnd)+1, n)
 		// exactly a terminator head's worth stays unconsumed for the overflow scan
 		assert.Equal(t, bytes.Repeat([]byte{'a'}, len(pasteEnd)-1), b[n:])
-	})
-}
-
-// manualEsc is an escTimer a test drives directly, so the timeout paths need no
-// wall clock. It may be called from the inputReader run goroutine while the
-// test polls its state, so it guards those fields with a mutex.
-type manualEsc struct {
-	ch     chan time.Time
-	mu     sync.Mutex
-	delay  time.Duration // last Reset duration, for assertion
-	resets int
-}
-
-func newManualEsc() *manualEsc { return &manualEsc{ch: make(chan time.Time, 1)} }
-
-func (m *manualEsc) Reset(d time.Duration) bool {
-	m.mu.Lock()
-	m.delay = d
-	m.resets++
-	m.mu.Unlock()
-	return true
-}
-
-// resetCount returns how many times the timer has been armed.
-func (m *manualEsc) resetCount() int {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	return m.resets
-}
-
-func (m *manualEsc) Stop() bool {
-	select {
-	case <-m.ch:
-	default:
-	}
-	return true
-}
-
-func (m *manualEsc) C() <-chan time.Time { return m.ch }
-
-// fire simulates the escape timeout elapsing.
-func (m *manualEsc) fire(tb testing.TB) {
-	tb.Helper()
-
-	select {
-	case m.ch <- time.Now():
-	default:
-		tb.Fatal("escape timer not armed")
-	}
-}
-
-// newManualReader returns an inputReader whose escape timer is a manualEsc.
-func newManualReader(src io.Reader) (*inputReader, *manualEsc) {
-	r := newInputReader(src)
-	e := newManualEsc()
-	r.newTimer = func() escTimer { return e }
-	return r, e
-}
-
-func TestEscapeTimeout(t *testing.T) {
-	t.Parallel()
-
-	t.Run("lone_escape_fires", func(t *testing.T) {
-		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
-		go r.run()
-
-		_, err := io.WriteString(pw, "\x1b")
-		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
-
-		esc.fire(t)
-		assert.Equal(t, key{typ: keyEscape}, <-r.keys)
-	})
-
-	t.Run("sequence_within_window_decodes", func(t *testing.T) {
-		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
-		go r.run()
-
-		_, err := io.WriteString(pw, "\x1b")
-		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
-
-		_, err = io.WriteString(pw, "[A")
-		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyUp}, <-r.keys)
-	})
-
-	t.Run("paste_containing_escape", func(t *testing.T) {
-		pr, pw := io.Pipe()
-		r, _ := newManualReader(pr)
-		go r.run()
-
-		_, err := io.WriteString(pw, "\x1b[200~a\x1bb\x1b[201~")
-		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyPaste, text: "a\x1bb"}, <-r.keys)
-	})
-
-	t.Run("timer_never_fires_without_data", func(t *testing.T) {
-		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
-		go r.run()
-
-		_, err := io.WriteString(pw, "z")
-		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
-		assert.Zero(t, esc.resetCount())
-
-		_, err = io.WriteString(pw, "\x1b[A")
-		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyUp}, <-r.keys)
 	})
 }
 
@@ -405,6 +291,17 @@ func TestInputReaderRun(t *testing.T) {
 		assert.Equal(t, key{typ: keyRune, text: "j"}, <-r.keys)
 		require.NoError(t, pw.Close())
 	})
+
+	t.Run("paste_body_keeps_escapes", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		_, err := io.WriteString(pw, "\x1b[200~a\x1bb\x1b[201~")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyPaste, text: "a\x1bb"}, <-r.keys)
+		require.NoError(t, pw.Close())
+	})
 }
 
 func TestCSIModifier(t *testing.T) {
@@ -526,9 +423,9 @@ func TestDecodeKeyPasteFrom(t *testing.T) {
 func TestInputReaderPasteStall(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stalled_paste_never_arms_timer", func(t *testing.T) {
+	t.Run("split_body_delivers", func(t *testing.T) {
 		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
+		r := newInputReader(pr)
 		go r.run()
 
 		_, err := io.WriteString(pw, pasteStart+"partia")
@@ -537,15 +434,15 @@ func TestInputReaderPasteStall(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, key{typ: keyPaste, text: "partial"}, <-r.keys) // blocks until decoded
-		assert.Zero(t, esc.resetCount())
+		require.NoError(t, pw.Close())
 	})
 
-	t.Run("split_header_never_arms_timer", func(t *testing.T) {
+	t.Run("split_header_delivers", func(t *testing.T) {
 		// a header fragmented across reads is mid-delivery like any paste body:
-		// arming on the stalled head would drop it and let the body decode as keys
+		// it holds without arming a timer, then completes whole
 		for _, n := range []int{2, 3, 4, 5} {
 			pr, pw := io.Pipe()
-			r, esc := newManualReader(pr)
+			r := newInputReader(pr)
 			go r.run()
 
 			_, err := io.WriteString(pw, pasteStart[:n])
@@ -554,14 +451,13 @@ func TestInputReaderPasteStall(t *testing.T) {
 			require.NoError(t, err)
 
 			assert.Equal(t, key{typ: keyPaste, text: "split"}, <-r.keys) // blocks until decoded
-			assert.Zero(t, esc.resetCount())
 			require.NoError(t, pw.Close())
 		}
 	})
 
 	t.Run("broken_prefix_resumes_decoding", func(t *testing.T) {
 		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
+		r := newInputReader(pr)
 		go r.run()
 
 		// the held head completes as an ordinary CSI once a byte breaks the match:
@@ -572,44 +468,60 @@ func TestInputReaderPasteStall(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
-		assert.Zero(t, esc.resetCount())
-	})
-
-	t.Run("lone_esc_split_still_arms", func(t *testing.T) {
-		// a split right after the bare escape byte is indistinguishable from a
-		// genuine Esc press, which must keep its timeout to stay reportable
-		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
-		go r.run()
-
-		_, err := io.WriteString(pw, "\x1b")
-		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
-
-		_, err = io.WriteString(pw, pasteStart[1:]+"split"+pasteEnd)
-		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyPaste, text: "split"}, <-r.keys)
-		assert.Equal(t, 1, esc.resetCount()) // the tail never re-arms: a complete header holds
+		require.NoError(t, pw.Close())
 	})
 }
 
-func TestInputReaderStalledSequenceDropped(t *testing.T) {
+func TestInputReaderBulkCoalesce(t *testing.T) {
 	t.Parallel()
 
-	t.Run("truncated_csi_drops_no_runes", func(t *testing.T) {
+	// bulk fills exactly one read chunk at the coalescing floor: more text than
+	// typing puts in one read, and any larger body would race the stall window
+	bulk := strings.Repeat("a", bulkRun)
+
+	t.Run("typing_replays_individually", func(t *testing.T) {
 		pr, pw := io.Pipe()
-		r, esc := newManualReader(pr)
+		r := newInputReader(pr)
 		go r.run()
 
-		_, err := io.WriteString(pw, "\x1b[1;5")
+		_, err := io.WriteString(pw, "hi\r\nthere")
 		require.NoError(t, err)
-		require.Eventually(t, func() bool { return esc.resetCount() == 1 }, time.Second, testPoll)
+		for _, k := range []key{
+			{typ: keyRune, text: "h"}, {typ: keyRune, text: "i"}, {typ: keyEnter},
+			{typ: keyNewline}, {typ: keyRune, text: "t"}, {typ: keyRune, text: "h"},
+			{typ: keyRune, text: "e"}, {typ: keyRune, text: "r"}, {typ: keyRune, text: "e"},
+		} {
+			assert.Equal(t, k, <-r.keys)
+		}
+		require.NoError(t, pw.Close())
+	})
 
-		esc.fire(t) // the stall elapses: nothing may be emitted for it
+	t.Run("eof_flushes_pending", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
 
-		_, err = io.WriteString(pw, "z")
+		_, err := io.WriteString(pw, bulk)
 		require.NoError(t, err)
-		assert.Equal(t, key{typ: keyRune, text: "z"}, <-r.keys)
+		require.NoError(t, pw.Close())
+
+		assert.Equal(t, key{typ: keyPaste, text: bulk}, <-r.keys) // one whole paste, stall or EOF
+		_, ok := <-r.keys                                         // stream end emits no keystroke beyond the flush
+		assert.False(t, ok)
+	})
+
+	t.Run("interrupt_discards_pending", func(t *testing.T) {
+		pr, pw := io.Pipe()
+		r := newInputReader(pr)
+		go r.run()
+
+		// the abort lands in the same read as the text it discards: no paste precedes it
+		_, err := io.WriteString(pw, "hi\x03")
+		require.NoError(t, err)
+		assert.Equal(t, key{typ: keyInterrupt}, <-r.keys)
+		require.NoError(t, pw.Close())
+		_, ok := <-r.keys
+		assert.False(t, ok)
 	})
 }
 

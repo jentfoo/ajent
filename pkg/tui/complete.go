@@ -199,7 +199,7 @@ func (u *UI) flashRule() {
 }
 
 // pasteThreshold is the byte size above which a paste becomes a placeholder.
-const pasteThreshold = 2048
+const pasteThreshold = 1024
 
 // pasteEntry is one stored large paste, kept for the whole session so a
 // recalled prompt still expands.

@@ -1275,7 +1275,10 @@ reaches the editor (a character, Backspace, or a caret move) drops the
 
 A paste over a size threshold does not land in the editor: its content is stored
 on the UI and a marker naming the paste is inserted instead, expanded back to
-the full text at submit. The marker carries a per-session counter so two pastes
+the full text at submit. The same path covers terminals that never bracket,
+such as selection pastes through tmux or screen: bulk unbracketed keystrokes
+coalesce into one paste event in the reader, while typing replays untouched.
+The marker carries a per-session counter so two pastes
 of the same size keep separate entries (sharing one key let the second overwrite
 the first). Entries are kept for the whole session and expanded oldest first, so
 a recalled prompt still resolves and nesting is deterministic.
