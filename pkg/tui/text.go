@@ -9,13 +9,36 @@ import (
 
 // displayWidth returns the terminal column count of s, ignoring ANSI escape sequences.
 func displayWidth(s string) int {
+	if !strings.ContainsRune(s, 0x1b) {
+		return textWidth(s) // unstyled: one run, no split needed
+	}
 	var w int
 	for _, seg := range splitANSI(s) {
 		if !seg.escape {
-			w += uniseg.StringWidth(seg.text)
+			w += textWidth(seg.text)
 		}
 	}
 	return w
+}
+
+// textWidth measures one run that holds no escapes. Printable ASCII is one
+// column per byte, which most terminal text is; the rest needs graphemes.
+func textWidth(s string) int {
+	if asciiRun(s) {
+		return len(s)
+	}
+	return uniseg.StringWidth(s)
+}
+
+// asciiRun reports whether s is printable ASCII only, where every byte is one
+// width-one grapheme cluster. Control and non-ASCII bytes fail it.
+func asciiRun(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if b := s[i]; b < ' ' || b > '~' {
+			return false
+		}
+	}
+	return true
 }
 
 // oneLine folds s onto a single terminal row, replacing the line breaks and

@@ -905,10 +905,13 @@ that session chose.
 
 ## Unicode
 
-Widths and cursor movement go through `uniseg` grapheme clusters throughout, so
-wide scripts, combining marks, emoji with skin tone modifiers and ZWJ sequences
-are each treated as one unit of the correct width. A family emoji is one cluster
-of width 2, and both the precomposed and combining forms of `é` are width 1.
+Widths and cursor movement stay `uniseg`-correct throughout: non-ASCII text
+goes through grapheme clusters, so wide scripts, combining marks, emoji with
+skin tone modifiers and ZWJ sequences are each treated as one unit of the
+correct width. Printable-ASCII runs skip that pass with an equivalent
+byte-per-column shortcut, which is exactly what uniseg returns for them.
+A family emoji is one cluster of width 2, and both the precomposed and
+combining forms of `é` are width 1.
 Wrapping never splits a cluster, and `truncateDisplay` never cuts one in half.
 
 Every glyph we choose ourselves is pinned to the width its layout budgets for,

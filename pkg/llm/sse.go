@@ -142,25 +142,55 @@ func (r *SSEReader) readLine() ([]byte, error) {
 	}
 	r.line = r.line[:0]
 	for {
-		b, err := r.br.ReadByte()
-		if err != nil {
-			if len(r.line) > 0 && errors.Is(err, io.EOF) {
-				return r.line, nil
+		n := r.br.Buffered()
+		if n == 0 {
+			// nothing buffered: one blocking byte, so a stalled or dribbling stream
+			// costs no more than it would with no scan at all
+			b, err := r.br.ReadByte()
+			if err != nil {
+				if len(r.line) > 0 && errors.Is(err, io.EOF) {
+					return r.line, nil // a final line with no terminator still counts
+				}
+				return nil, err
 			}
-			return nil, err
-		}
-		switch b {
-		case '\n':
-			return r.line, nil
-		case '\r':
-			if nb, nerr := r.br.ReadByte(); nerr == nil && nb != '\n' {
-				_ = r.br.UnreadByte()
+			switch b {
+			case '\n', '\r':
+				return r.endLine(b), nil
 			}
-			return r.line, nil
+			r.line = append(r.line, b)
+			if len(r.line) > r.maxFrame {
+				return nil, ErrFrameTooLarge
+			}
+			continue
 		}
-		r.line = append(r.line, b)
-		if len(r.line) > r.maxFrame {
+
+		// scan everything buffered at once: a line usually lies inside one read,
+		// so its terminator is found without walking byte by byte
+		buf, _ := r.br.Peek(n)
+		if i := bytes.IndexAny(buf, "\r\n"); i >= 0 {
+			if len(r.line)+i > r.maxFrame { // bound before taking any of it
+				return nil, ErrFrameTooLarge
+			}
+			r.line = append(r.line, buf[:i]...)
+			_, _ = r.br.Discard(i + 1)
+			return r.endLine(buf[i]), nil
+		}
+		if len(r.line)+n > r.maxFrame { // all n bytes join the line: bound before taking them
 			return nil, ErrFrameTooLarge
 		}
+		r.line = append(r.line, buf...)
+		_, _ = r.br.Discard(n)
 	}
+}
+
+// endLine completes a line whose terminator term was just consumed, swallowing an
+// LF that pairs with a bare CR since CRLF is one terminator, not a blank line.
+func (r *SSEReader) endLine(term byte) []byte {
+	if term != '\r' {
+		return r.line // an LF terminator needs no look-ahead: never block for one
+	}
+	if b, err := r.br.Peek(1); err == nil && b[0] == '\n' {
+		_, _ = r.br.Discard(1)
+	}
+	return r.line
 }

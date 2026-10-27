@@ -45,6 +45,15 @@ func benchCommandTable() []agent.ToolCall {
 		benchBash("echo notes > /tmp/notes.txt"),
 		benchBash("curl -s https://example.com | jq ."),
 		benchBash("sed -i 's/a/b/' file.go"),
+		// the analyser's hard shapes: substitution nesting, env indirection and
+		// pipelines deep enough that the head walk has to reach the last stage
+		benchBash("git -C $(dirname \"$PWD/repo\") log --oneline -5"),
+		benchBash("cat `which go` | wc -c"),
+		benchBash("LC_ALL=C git status --short && echo $(date +%s)"),
+		benchBash("find . -name '*.go' | xargs grep -l panic | sort | head -20"),
+		benchBash("awk '{print $1}' access.log | uniq -c | sort -rn | head -5"),
+		benchBash("(cd pkg/parser && go test ./...) 2>&1 | tail -30"),
+		benchBash("env GIT_PAGER=cat git diff --stat HEAD~3"),
 	}
 }
 

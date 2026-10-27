@@ -156,6 +156,110 @@ func BenchmarkCodeBlock(b *testing.B) {
 	}
 }
 
+// benchStreamChunks cuts a reply into provider-sized deltas, split at spaces so
+// the boundaries look like real token traffic.
+func benchStreamChunks(src string, size int) []string {
+	var out []string
+	for len(src) > 0 {
+		end := min(size, len(src))
+		if end < len(src) {
+			if sp := strings.LastIndexByte(src[:end], ' '); sp > 0 {
+				end = sp + 1 // cut after a space, never mid-word
+			}
+		}
+		out, src = append(out, src[:end]), src[end:]
+	}
+	return out
+}
+
+// BenchmarkStreamText measures one streamed reply end to end: the per-delta
+// block split over the pending buffer, the preview compose and the repaint each
+// delta forces. The cases differ in how long a block stays pending, which is
+// what decides how much of the buffer every later delta re-reads.
+func BenchmarkStreamText(b *testing.B) {
+	prose := strings.Repeat("A paragraph with some *emphasis*, `code` and a [link](https://example.com) that runs on.\n\n", 10)
+	paragraph := strings.ReplaceAll(strings.TrimSpace(prose), "\n\n", " ")
+	fence := "```go\n" + strings.Repeat("func step(n int) int { return n % 97 } // trimmed\n", 30)
+
+	for _, tc := range []struct{ name, src string }{
+		{"prose_blocks", prose},       // commits every paragraph: the buffer stays short
+		{"open_paragraph", paragraph}, // one block streams to the end: worst pending size
+		{"open_fence", fence},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			chunks := benchStreamChunks(tc.src, 24)
+			w := &countWriter{}
+			u := withTimer(&UI{
+				theme:  NewTheme(ColorNone, DefaultPalette()),
+				render: newTestInlineAt(w, 120, 40),
+				mode:   ModeInline,
+			})
+			b.ReportMetric(float64(len(chunks)), "deltas/op")
+
+			for b.Loop() {
+				for _, c := range chunks {
+					u.Text(c)
+				}
+				u.EndText()
+			}
+			b.ReportMetric(float64(w.n)/float64(b.N), "wire-B/op")
+		})
+	}
+}
+
+// BenchmarkWrapLine measures re-cutting one styled row into display rows, the
+// per-line cost every markdown, diff and tool-output commit pays. The fast path
+// is a line that already fits; the rest run the cell split and re-join.
+func BenchmarkWrapLine(b *testing.B) {
+	plain := strings.Repeat("lorem ipsum dolor sit amet ", 12)
+	styled := "\x1b[38:5:196mERR\x1b[0m " + strings.Repeat("panic recovered in \\u001b[31mreduce\x1b[0m step ", 12)
+	wide := strings.Repeat("\u4e16\u754c \U0001F468\u200d\U0001F469 \u30c6\u30ad\u30b9\u30c8 ", 24)
+
+	for _, tc := range []struct{ name, line string }{
+		{"fits", strings.Repeat("short row ", 8)},
+		{"plain_wrap", plain},
+		{"styled_wrap", styled},
+		{"wide_wrap", wide},
+	} {
+		b.Run(tc.name+"_soft", func(b *testing.B) {
+			for b.Loop() {
+				wrapLine(tc.line, 118)
+			}
+		})
+		b.Run(tc.name+"_hard", func(b *testing.B) {
+			for b.Loop() {
+				hardWrap(tc.line, 118)
+			}
+		})
+	}
+}
+
+// BenchmarkMarkdownTable measures table layout, which no other bench reaches:
+// every repaint of a streaming table re-measures each cell and re-lays the grid,
+// and a narrow terminal adds column shrinking plus per-cell wrapping.
+func BenchmarkMarkdownTable(b *testing.B) {
+	th := NewTheme(Color256, DefaultPalette())
+	row := "| `reduce.go` | trimmed buffer keeps a window of recent lines | 214 | ok |\n"
+	src := "| file | note | line | state |\n|---|---|---:|---|\n" + strings.Repeat(row, 12)
+
+	for _, tc := range []struct {
+		name  string
+		width int
+	}{
+		{"fits", 160},
+		{"shrinks", 96},
+		{"wraps_cells", 60},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			require.NotEmpty(b, renderMarkdown(th, tc.width, src))
+
+			for b.Loop() {
+				renderMarkdown(th, tc.width, src)
+			}
+		})
+	}
+}
+
 // benchDiffFile is a large Go-like file the diff benches run against.
 func benchDiffFile() string {
 	var sb strings.Builder

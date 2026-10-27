@@ -99,6 +99,29 @@ func BenchmarkForward(b *testing.B) {
 	}
 }
 
+// BenchmarkAppend measures recording one message in a working session's state:
+// the model stamp, the tool-input repair walk, the append itself and the ledger
+// estimate every unreported message needs. One op is an assistant call plus its
+// tool-result batch, then the state rewinds so size stays steady.
+func BenchmarkAppend(b *testing.B) {
+	a := newTestAgent(benchState(), &llm.ScriptedProvider{}, NopSink{})
+	call := llm.ToolCallBlock{ID: "call_new", Name: "read",
+		Input: json.RawMessage(`{"path":"internal/parser/reduce.go"}`)}
+	b.ReportMetric(float64(len(a.state.Messages)), "state-msgs")
+
+	for b.Loop() {
+		n := len(a.state.Messages)
+		a.append(MessageInfo{Message: llm.Message{Role: llm.RoleAssistant,
+			Content: llm.BlockList{llm.TextBlock{Text: "reading the reducer. "}, call}}, Stop: llm.StopToolUse})
+		result := llm.ToolResultBlock{CallID: call.ID, ToolName: "read",
+			Content: llm.BlockList{llm.TextBlock{
+				Text: strings.Repeat("func step(n int) int { return n % 97 }\n", 24)}}}
+		a.appendToolResults(llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{call}},
+			[]llm.ToolResultBlock{result}, "turn aborted")
+		a.state.Messages = a.state.Messages[:n]
+	}
+}
+
 // BenchmarkBuildRequest measures per model-call assembly: the pure message
 // assembly, the system block rebuild (AGENTS.md body included) and the tool
 // schema fetch, everything the estimator and the wire both consume.

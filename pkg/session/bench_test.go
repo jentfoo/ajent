@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
@@ -301,4 +302,39 @@ func BenchmarkResumeOpen(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkRecordTurn measures the write side every turn pays for: one prompt,
+// an assistant call and its tool result appended as the loop produces them, then
+// the fsync plus head-cursor rewrite at the turn boundary.
+func BenchmarkRecordTurn(b *testing.B) {
+	root := b.TempDir()
+	w, err := Create(filepath.Join(root, "bench.jsonl"), SessionData{Version: Version(), Workspace: root})
+	require.NoError(b, err)
+	b.Cleanup(func() { _ = w.Close() })
+
+	callID := "call_bench"
+	rec := NewRecorder(w)
+	turn := []agent.MessageInfo{
+		{Message: llm.Text(llm.RoleUser, "investigate the trim boundary")},
+		{Stop: llm.StopToolUse, Message: llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+			llm.ThinkingBlock{Text: "trace the reducer before touching it", Signature: "sig-bench"},
+			llm.ToolCallBlock{ID: callID, Name: "bash",
+				Input: json.RawMessage(`{"command":"go test ./reduce"}`)},
+		}}},
+		{Message: llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.ToolResultBlock{CallID: callID, ToolName: "bash",
+				Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("ok\treduce\t0.41s\n", 24)}}},
+		}}},
+	}
+	b.ReportMetric(float64(len(turn)), "entries/op")
+
+	for b.Loop() {
+		for _, info := range turn {
+			rec.Message(info)
+		}
+		if err := w.Sync(); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

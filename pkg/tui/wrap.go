@@ -2,6 +2,7 @@ package tui
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/rivo/uniseg"
@@ -21,25 +22,57 @@ type cell struct {
 // cells splits styled text into grapheme cells, dropping the escape sequences
 // into each cell's style so the text can be re-cut at any column.
 func cells(s string) []cell {
-	var out []cell
+	if !strings.ContainsRune(s, 0x1b) {
+		return appendCells(make([]cell, 0, cellHint(s)), s, "") // unstyled: one run, no split
+	}
+
+	split := splitANSI(s)
+	var n int // the hint never undershoots, so the cells never regrow
+	for _, seg := range split {
+		if !seg.escape {
+			n += cellHint(seg.text)
+		}
+	}
+	out := make([]cell, 0, n)
+
 	var active strings.Builder
-	for _, seg := range splitANSI(s) {
+	var style string
+	for _, seg := range split {
 		if seg.escape {
 			if seg.text == sgrReset {
 				active.Reset()
 			} else {
 				active.WriteString(seg.text)
 			}
+			style = active.String() // aliases the builder, which Reset replaces wholesale
 			continue
 		}
-		g := uniseg.NewGraphemes(seg.text)
-		for g.Next() {
-			out = append(out, cell{
-				text:  g.Str(),
-				style: active.String(),
-				width: uniseg.StringWidth(g.Str()),
-			})
+		out = appendCells(out, seg.text, style)
+	}
+	return out
+}
+
+// cellHint estimates how many cells an escape-free run makes: printable ASCII is
+// one per byte, and anything else never makes more clusters than it has runes.
+func cellHint(run string) int {
+	if asciiRun(run) {
+		return len(run)
+	}
+	return utf8.RuneCountInString(run)
+}
+
+// appendCells appends one cell per grapheme cluster of an escape-free run.
+func appendCells(out []cell, run, style string) []cell {
+	if asciiRun(run) { // printable ASCII: every byte is one width-one cluster
+		for i := 0; i < len(run); i++ {
+			out = append(out, cell{text: run[i : i+1], style: style, width: 1})
 		}
+		return out
+	}
+	g := uniseg.NewGraphemes(run)
+	for g.Next() {
+		t := g.Str()
+		out = append(out, cell{text: t, style: style, width: textWidth(t)})
 	}
 	return out
 }

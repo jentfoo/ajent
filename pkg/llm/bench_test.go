@@ -2,6 +2,7 @@ package llm
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -335,6 +337,81 @@ func benchSSEServer(b *testing.B, fixture string) *httptest.Server {
 	}))
 	b.Cleanup(srv.Close)
 	return srv
+}
+
+// chunkReader hands back at most size bytes per Read, so a parser sees frames
+// split mid-line the way socket writes deliver them.
+type chunkReader struct {
+	data []byte
+	pos  int
+	size int
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := min(r.size, len(p), len(r.data)-r.pos)
+	r.pos += copy(p[:n], r.data[r.pos:])
+	return n, nil
+}
+
+// benchSSEBody builds a delta stream shaped like an OpenAI-dialect response:
+// many small data frames, each with one field line and a blank dispatch line.
+func benchSSEBody(frames int) string {
+	var sb strings.Builder
+	for i := range frames {
+		sb.WriteString("event: message\ndata: ")
+		sb.WriteString(`{"id":"chatcmpl-` + strconv.Itoa(i) +
+			`","choices":[{"delta":{"content":" the parser keeps a window "}}]}`)
+		sb.WriteString("\n\n")
+	}
+	return sb.String()
+}
+
+// BenchmarkSSEFrames measures framing alone: Next and readLine over a stream of
+// realistic delta frames, with no provider decode behind it. The chunk size is
+// what the wire decides, so the cases span an MTU-sized write and small writes
+// that split almost every line.
+func BenchmarkSSEFrames(b *testing.B) {
+	ctx := b.Context()
+	small := benchSSEBody(500)
+	wide := strings.Repeat("x", 1<<17) // one data line past the bufio buffer
+
+	for _, tc := range []struct {
+		name, body string
+		chunk      int
+	}{
+		{"mtu_chunks", small, 1400},
+		{"tiny_chunks", small, 37},
+		{"one_byte", small, 1},
+		{"oversize_line", "event: message\ndata: " + wide + "\n\n", 512},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			want := strings.Count(tc.body, "\n\n")
+
+			for b.Loop() {
+				r := NewSSEReader(&chunkReader{data: []byte(tc.body), size: tc.chunk}, 0)
+				var got int
+				for {
+					f, err := r.Next(ctx)
+					if errors.Is(err, io.EOF) {
+						break
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(f.Data) == 0 {
+						b.Fatal("frame with no data")
+					}
+					got++
+				}
+				if got != want {
+					b.Fatalf("%d frames, want %d", got, want)
+				}
+			}
+		})
+	}
 }
 
 // benchTurnEvents shapes one provider response the way the streams deliver it:

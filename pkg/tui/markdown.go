@@ -599,27 +599,29 @@ func indentLines(s, first, rest string) string {
 func splitCompleteBlocks(buf string) (done, rest string) {
 	var inFence bool
 	var fence string
-	var boundary int
-	lines := strings.SplitAfter(buf, "\n")
-	for i, ln := range lines {
-		if !strings.HasSuffix(ln, "\n") {
-			break // partial line, cannot classify it yet
+	var boundary int // byte offset just past the last completed boundary line
+	var start int
+	for i := 0; i < len(buf); i++ {
+		if buf[i] != '\n' {
+			continue // only a terminated line can be classified
 		}
-		trimmed := strings.TrimSpace(ln)
+		end := i + 1
+		trimmed := strings.TrimSpace(buf[start:end])
+		start = end
 		if inFence {
 			if fenceCloses(trimmed, fence) {
-				inFence, boundary = false, i+1
+				inFence, boundary = false, end
 			}
 		} else if marker := fenceMarker(trimmed); marker != "" {
 			inFence, fence = true, marker
 		} else if trimmed == "" {
-			boundary = i + 1
+			boundary = end
 		}
 	}
 	if boundary == 0 {
 		return "", buf
 	}
-	return strings.Join(lines[:boundary], ""), strings.Join(lines[boundary:], "")
+	return buf[:boundary], buf[boundary:]
 }
 
 // fenceMarker returns the run of fence characters a line opens a code fence
