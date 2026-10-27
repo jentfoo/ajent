@@ -261,7 +261,7 @@ func applyEdits(t editTarget, orig string, ops []editOp) (editOutcome, error) {
 		ms, tier := matcher.find(op.OldText, op.NewText)
 		switch {
 		case len(ms) == 0:
-			return editOutcome{}, errors.New(missingError(i+1, t, op.OldText, buf, ops))
+			return editOutcome{}, errors.New(missingError(i+1, t, op.OldText, buf, ops, matcher))
 		case len(ms) > 1 && !op.ReplaceAll:
 			return editOutcome{}, errors.New(ambiguousError(i+1, t.Path, op.OldText, buf, ms))
 		}

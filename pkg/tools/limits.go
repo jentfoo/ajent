@@ -482,6 +482,9 @@ func halfLines(n int) int {
 
 // capLine truncates s to MaxLineRunes on a rune boundary.
 func capLine(s string) string {
+	if len(s) <= MaxLineRunes { // byte length bounds the rune count
+		return s
+	}
 	rs := []rune(s)
 	if len(rs) <= MaxLineRunes {
 		return s

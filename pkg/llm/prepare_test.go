@@ -262,6 +262,14 @@ func TestNormalizeCallID(t *testing.T) {
 		assert.Len(t, out, 64)
 	})
 
+	t.Run("invalid_utf8_one_for_one", func(t *testing.T) {
+		// invalid UTF-8 decodes one underscore per bad byte: a rune-size assumption
+		// here once skipped bytes and read past the end of the id
+		assert.Equal(t, "_abc", normalizeCallID("\xffabc", caps(DialectAnthropic), "p", callForeignEndpoint))
+		assert.Equal(t, "a_bc", normalizeCallID("a\xffbc", caps(DialectAnthropic), "p", callForeignEndpoint))
+		assert.Equal(t, "_", normalizeCallID("\xc3", caps(DialectAnthropic), "p", callForeignEndpoint))
+	})
+
 	t.Run("chat_completions_pipe_joins_sanitized", func(t *testing.T) {
 		assert.Equal(t, "call_a_fc_1", normalizeCallID("call.a|fc/1", caps(DialectOpenAICompletions), "p", callForeignEndpoint))
 	})
@@ -419,6 +427,21 @@ func TestDowngradeImages(t *testing.T) {
 			TextBlock{Text: "here"},
 			TextBlock{Text: imageOmitted},
 		}, out[0].Content)
+	})
+
+	t.Run("clean_messages_survive_across_list", func(t *testing.T) {
+		// an image anywhere rebuilds the message list, so messages before and after
+		// it must survive that rebuild with their content intact
+		in := []Message{
+			{Role: RoleUser, Content: BlockList{TextBlock{Text: "head"}}},
+			{Role: RoleUser, Content: BlockList{img()}},
+			{Role: RoleAssistant, Content: BlockList{TextBlock{Text: "tail"}}},
+		}
+		out := downgradeImages(in, m.Caps)
+		assert.Len(t, out, len(in))
+		assert.Equal(t, in[0].Content, out[0].Content)
+		assert.Equal(t, BlockList{TextBlock{Text: imageOmitted}}, out[1].Content)
+		assert.Equal(t, in[2].Content, out[2].Content)
 	})
 
 	t.Run("image_capable_model_untouched", func(t *testing.T) {

@@ -187,8 +187,8 @@ func benchRequest(m Model) Request {
 }
 
 // BenchmarkPrepare sweeps the per-request normalisation over the shared
-// fixture, one full Prepare pass per op. Messages are cloned first since the
-// pass is idempotent and a settled list would measure the cheap no-op path.
+// fixture, one full Prepare pass per op. Messages are cloned per op so every
+// pass measures the raw, unprepared list a fresh request carries.
 func BenchmarkPrepare(b *testing.B) {
 	raw := benchRequest(benchModel(DialectAnthropic))
 	compat := benchRequest(benchModel(DialectOpenAICompletions))
@@ -316,16 +316,18 @@ func BenchmarkProviderWire(b *testing.B) {
 	})
 }
 
-// benchSSEServer replays a testdata fixture as an event stream.
+// benchSSEServer replays a testdata fixture as an event stream, split once so
+// the handler only writes chunks inside the measured loop.
 func benchSSEServer(b *testing.B, fixture string) *httptest.Server {
 	b.Helper()
 
 	data, err := os.ReadFile(filepath.Join("testdata", fixture))
 	require.NoError(b, err)
+	chunks := splitStream(string(data), 0)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.Header().Set("Content-Type", "text/event-stream")
-		for _, chunk := range splitStream(string(data), 0) {
+		for _, chunk := range chunks {
 			if _, err := io.WriteString(w, chunk); err != nil {
 				return
 			}
@@ -420,6 +422,56 @@ func BenchmarkAccumulator(b *testing.B) {
 				if msg := acc.Message(); len(msg.Content) != tc.wantBlock {
 					b.Fatalf("assembled %d blocks, want %d", len(msg.Content), tc.wantBlock)
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkRepairToolCallIDs measures the id repair that runs after every
+// streamed assistant message: the used-id set rebuild over the whole history
+// plus the rewrite itself, across a growing session.
+func BenchmarkRepairToolCallIDs(b *testing.B) {
+	m := benchModel(DialectAnthropic)
+	full := benchConversation(m)
+	dup := Message{Role: RoleAssistant, Stop: StopToolUse, Content: BlockList{
+		ToolCallBlock{ID: "call_010_a", Name: "read", // an id history already spent
+			Input: json.RawMessage(`{"path":"internal/parser/reduce.go"}`)},
+		ToolCallBlock{ID: "call_010_a", Name: "grep", // repeated in m
+			Input: json.RawMessage(`{"pattern":"panic","glob":"*.go"}`)},
+		ToolCallBlock{ID: "", Name: "bash", // absent id, hashed
+			Input: json.RawMessage(`{"command":"go test ./..."}`)},
+	}}
+
+	for _, frac := range []int{4, 2, 1} {
+		name := "full_history"
+		history := full
+		if frac > 1 {
+			history = full[len(full)-len(full)/frac:]
+			name = map[int]string{4: "quarter_history", 2: "half_history"}[frac]
+		}
+		b.Run(name, func(b *testing.B) {
+			_, changed := RepairToolCallIDs(dup, history)
+			require.True(b, changed)
+			b.ReportMetric(float64(len(history)), "hist-msgs/op")
+
+			for b.Loop() {
+				RepairToolCallIDs(dup, history)
+			}
+		})
+	}
+}
+
+// BenchmarkShortHash measures the call-id digest on the shapes repair feeds it:
+// a short foreign item id and a longer one, so the inline loop stays honest
+// against the hash/fnv implementation it replaced.
+func BenchmarkShortHash(b *testing.B) {
+	for _, tc := range []struct{ name, in string }{
+		{"short_id", "fc_01H8ZQ9W3"},
+		{"long_id", "item_respond_01H8ZQ9W3K2M4N6P8R0T2V4X6Z8A1C3E5G7J9L"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				shortHash(tc.in)
 			}
 		})
 	}

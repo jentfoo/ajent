@@ -36,8 +36,10 @@ test-all:
 test-cover:
 	go test -race -coverprofile=test.out ./... && go tool cover --html=test.out
 
+BENCHTIME := 10s
+
 bench:
-	go test --benchmem -benchtime=20s -bench='Benchmark.*' -run='^$$' ./...
+	go test --benchmem -benchtime=$(BENCHTIME) -bench='Benchmark.*' -run='^$$' ./...
 
 fmt-changed:
 	@files=$$( { git diff --name-only --diff-filter=d HEAD -- '*.go'; git ls-files --others --exclude-standard -- '*.go'; } | sort -u); \

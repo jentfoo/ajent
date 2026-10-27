@@ -208,7 +208,7 @@ func TestEditFailure(t *testing.T) {
 		t.Run("zero_match_"+tc.name, func(t *testing.T) {
 			// drive the production entry point, so a diagnostic reachable only
 			// below canonicalization cannot pass here
-			msg := missingError(1, editTarget{Path: "a.go"}, tc.old, tc.buf, nil)
+			msg := missingError(1, editTarget{Path: "a.go"}, tc.old, tc.buf, nil, &editMatcher{buf: tc.buf})
 			for _, w := range tc.wantContains {
 				assert.Contains(t, msg, w)
 			}

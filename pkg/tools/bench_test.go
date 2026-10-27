@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -105,4 +106,69 @@ func BenchmarkEditExecute(b *testing.B) {
 			}
 		}
 	})
+}
+
+// BenchmarkReadExecute drives the read tool the way the registry does: sniff and
+// full file read, line numbering and tracker observation, first over the default
+// window and then over an explicit page deep in the file.
+func BenchmarkReadExecute(b *testing.B) {
+	e := newToolEnv(b.TempDir())
+	e.writeFile("big.go", benchFileContent())
+	b.ReportMetric(float64(benchFileLines), "file-lines")
+
+	defaults := `{"path":"big.go"}`
+	page := fmt.Sprintf(`{"path":"big.go","offset":%d,"limit":200}`, benchFileLines-400)
+	for _, tc := range []struct{ name, args string }{
+		{"default_window", defaults},
+		{"explicit_page", page},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			res := e.readExec(b.Context(), tc.args)
+			require.False(b, res.IsError, textOf(res))
+
+			for b.Loop() {
+				e.readExec(b.Context(), tc.args)
+			}
+		})
+	}
+}
+
+// benchGrepTree is ~200KB of synthetic Go source with a spread of matchable
+// lines, what a workspace-wide fallback search walks when rg is absent.
+func benchGrepTree() string {
+	var sb strings.Builder
+	for i := 0; i < 3000; i++ {
+		fmt.Fprintf(&sb, "func handler_%04d(ctx context.Context, n int) error {\n", i)
+		sb.WriteString("\tif n <= 0 {\n\t\treturn fmt.Errorf(\"bad input %d\", n)\n\t}\n\treturn nil\n}\n\n")
+	}
+	return sb.String()
+}
+
+// BenchmarkGrepFallback measures the pure Go fallback engine over one large
+// file: a rare literal match, a regex, dense matches and context windows.
+func BenchmarkGrepFallback(b *testing.B) {
+	content := benchGrepTree()
+	b.ReportMetric(float64(len(content)), "src-B/op")
+
+	for _, tc := range []struct {
+		name    string
+		pattern string
+		ctx     int
+	}{
+		{"rare_match", `handler_2999`, 0},
+		{"regex_match", `handler_0\d\d[1-5]`, 0},
+		{"many_matches", `return`, 0},
+		{"with_context", `handler_15`, 3},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			re := regexp.MustCompile(tc.pattern)
+			hits, n, _ := goGrep(content, re, tc.ctx, 0)
+			require.Positive(b, n)
+			require.NotEmpty(b, hits)
+
+			for b.Loop() {
+				goGrep(content, re, tc.ctx, 0)
+			}
+		})
+	}
 }

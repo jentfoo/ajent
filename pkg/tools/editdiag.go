@@ -36,8 +36,9 @@ const (
 // the failure, call out an earlier edit whose newText would create it (a cascade),
 // report each reliably-detected cause, and end with the closest text verbatim so
 // it can be copied. A self-replacing op is reported on its own instead, since no
-// file-side cause would apply.
-func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
+// file-side cause would apply. m is the failing apply's matcher, whose canonical
+// view backs the diagnosis.
+func missingError(idx int, t editTarget, old, buf string, ops []editOp, m *editMatcher) string {
 	var b strings.Builder
 	_, _ = fmt.Fprintf(&b, "no match for edit %d in %s.\n", idx, t.Path)
 	if cascade := cascadeIssue(idx, old, ops); cascade != "" {
@@ -46,7 +47,7 @@ func missingError(idx int, t editTarget, old, buf string, ops []editOp) string {
 		// an op repeating its oldText as newText is the no-op cause; any file-side
 		// blame would misattribute
 		b.WriteString("- oldText equals newText, so nothing changes; put what the file currently holds in oldText and your intended change in newText\n")
-	} else if issues := diagnoseNoMatch(old, buf); len(issues) > 0 {
+	} else if issues := m.diagnoseNoMatch(old); len(issues) > 0 {
 		for _, it := range issues {
 			_, _ = fmt.Fprintf(&b, "- %s\n", it)
 		}
@@ -94,31 +95,31 @@ func cascadeIssue(idx int, old string, ops []editOp) string {
 	return ""
 }
 
-// diagnoseNoMatch inspects why old is absent from buf and reports each reliably
-// detectable cause: per-line indentation/spacing when the words are all present (a
-// pure-spacing mismatch), an erased lookalike character, or casing. Returns nil
-// when nothing reliable can be said.
-func diagnoseNoMatch(old, buf string) []string {
+// diagnoseNoMatch inspects why old is absent from the matcher's buffer and
+// reports each reliably detectable cause: per-line indentation/spacing when the
+// words are all present (a pure-spacing mismatch), an erased lookalike
+// character, or casing. Returns nil when nothing reliable can be said.
+func (m *editMatcher) diagnoseNoMatch(old string) []string {
 	// reason in canonical space: the tiers already tried every lookalike
 	// difference, so reasoning here names the real cause instead of a stray quote
 	cold, _ := canonical(old)
-	cbuf, _ := canonical(buf)
 	compact := stripSpace(cold)
 	if compact == "" {
 		return nil // only-whitespace oldText: no anchor to reason about
 	}
+	m.canonicalize() // idempotent; the failing find has usually already built it
 	switch {
-	case strings.Contains(stripSpace(cbuf), compact):
+	case strings.Contains(stripSpace(m.cbuf), compact):
 		// every word present: a pure-spacing mismatch, name it per line when we can
-		if specific := lineWhitespaceIssues(old, buf); len(specific) > 0 {
+		if specific := lineWhitespaceIssues(old, m.buf, m.clines); len(specific) > 0 {
 			return specific
 		}
 		return []string{"your words are all in the file but separated by different whitespace; you must match it exactly"}
-	case strings.Contains(strings.ToLower(stripSpace(cbuf)), strings.ToLower(compact)):
+	case strings.Contains(strings.ToLower(stripSpace(m.cbuf)), strings.ToLower(compact)):
 		// words and order present ignoring case: only letter casing differs
 		return []string{"the text matches the file only if you ignore letter case. Your oldText's capitalization differs, so copy it exactly"}
 	default:
-		if stripSpace(cbuf) == "" {
+		if stripSpace(m.cbuf) == "" {
 			return []string{"the file appears empty or whitespace-only"}
 		}
 		// the words genuinely differ, a retry needing exact text rather than an approximation
@@ -209,12 +210,11 @@ func countPhrase(n int) string {
 // per matched file line, how its whitespace differs from oldText. Only called when
 // every word is present (a pure-spacing mismatch), so each pair shares stripped form.
 // A fold-erased character leaves no spacing complaint to find and is named from the
-// raw pair instead.
-func lineWhitespaceIssues(old, buf string) []string {
+// raw pair instead. foldBuf holds buf's canonical lines.
+func lineWhitespaceIssues(old, buf string, foldBuf []string) []string {
 	oldLines := strings.Split(old, "\n")
 	bufLines := strings.Split(buf, "\n")
 	foldOld := canonLines(old)
-	foldBuf := canonLines(buf)
 
 	seq := buildContent(foldOld)
 	fileSeq := buildContent(foldBuf)

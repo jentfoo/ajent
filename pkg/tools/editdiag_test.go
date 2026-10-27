@@ -103,16 +103,20 @@ func TestBlockSimilarity(t *testing.T) {
 func TestMissingErrorHint(t *testing.T) {
 	t.Parallel()
 
+	// matcher builds the failing apply's view over buf, as applyEdits does
+	matcher := func(buf string) *editMatcher { return &editMatcher{buf: buf} }
+
 	t.Run("ends_with_copyable_text", func(t *testing.T) {
 		msg := missingError(1, editTarget{Path: "greet.go"},
-			"    if name == \"\" {\n        return \"hello, wrld\"\n    }", decoyFile, nil)
+			"    if name == \"\" {\n        return \"hello, wrld\"\n    }", decoyFile, nil, matcher(decoyFile))
 		assert.Contains(t, msg, "closest text in greet.go at line 11 (must match verbatim):")
 		// the block is last and untouched, so it can be copied straight out
 		assert.True(t, strings.HasSuffix(msg, "\tif name == \"\" {\n\t\treturn \"hello, world\"\n\t}"))
 	})
 
 	t.Run("says_no_similar_text", func(t *testing.T) {
-		msg := missingError(1, editTarget{Path: "a.go"}, "unrelated content", "func f() {}\n", nil)
+		msg := missingError(1, editTarget{Path: "a.go"}, "unrelated content", "func f() {}\n",
+			nil, matcher("func f() {}\n"))
 		assert.Contains(t, msg, "appears nowhere in this file, read the file and copy it exactly")
 		assert.NotContains(t, msg, "must match verbatim")
 	})
@@ -122,7 +126,7 @@ func TestMissingErrorHint(t *testing.T) {
 		// spacing or blank-line complaint would name a cause that is not there
 		old := "title — subtitle" // em dash
 		msg := missingError(1, editTarget{Path: "f.txt"}, old, "title - subtitle\n",
-			[]editOp{{OldText: old, NewText: "title - subtitle"}})
+			[]editOp{{OldText: old, NewText: "title - subtitle"}}, matcher("title - subtitle\n"))
 		assert.Contains(t, msg, `the file has "-" where you wrote "—"`)
 		assert.NotContains(t, msg, "separated by different whitespace")
 		assert.NotContains(t, msg, "blank line") // the terminator is not a missing blank line
@@ -130,7 +134,7 @@ func TestMissingErrorHint(t *testing.T) {
 
 	t.Run("self_replace_reported_alone", func(t *testing.T) {
 		msg := missingError(1, editTarget{Path: "f.txt"}, "a b", "x\na  b\n",
-			[]editOp{{OldText: "a b", NewText: "a b"}})
+			[]editOp{{OldText: "a b", NewText: "a b"}}, matcher("x\na  b\n"))
 		assert.Contains(t, msg, "oldText equals newText")
 		assert.NotContains(t, msg, "separated by different whitespace")
 	})
@@ -141,9 +145,9 @@ func TestMissingErrorHint(t *testing.T) {
 func TestMissingSelfReplace(t *testing.T) {
 	t.Parallel()
 
-	out := missingError(2, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}, {OldText: "same", NewText: "same"}})
+	out := missingError(2, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}, {OldText: "same", NewText: "same"}}, &editMatcher{})
 	assert.Contains(t, out, "nothing changes")
-	assert.NotContains(t, missingError(1, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}}), "nothing changes")
+	assert.NotContains(t, missingError(1, editTarget{}, "a", "", []editOp{{OldText: "a", NewText: "b"}}, &editMatcher{}), "nothing changes")
 }
 
 func TestCascadeIssue(t *testing.T) {
@@ -217,7 +221,7 @@ func TestLineWhitespaceIssuesAreBounded(t *testing.T) {
 			fmt.Fprintf(&old, "  line%d()\n", i)
 			fmt.Fprintf(&buf, "\tline%d()\n", i)
 		}
-		issues := lineWhitespaceIssues(old.String(), buf.String())
+		issues := lineWhitespaceIssues(old.String(), buf.String(), canonLines(buf.String()))
 		require.Len(t, issues, 1) // not one bullet per line
 		assert.Contains(t, issues[0], "lines 1, 2, 3 and 37 more")
 		assert.Contains(t, issues[0], "indentation differs")
@@ -229,7 +233,7 @@ func TestLineWhitespaceIssuesAreBounded(t *testing.T) {
 			fmt.Fprintf(&old, "%sline%d()\n", strings.Repeat(" ", i+1), i)
 			fmt.Fprintf(&buf, "\tline%d()\n", i)
 		}
-		issues := lineWhitespaceIssues(old.String(), buf.String())
+		issues := lineWhitespaceIssues(old.String(), buf.String(), canonLines(buf.String()))
 		require.Len(t, issues, maxWhitespaceIssues+1)
 		assert.Contains(t, issues[maxWhitespaceIssues], "and 4 more spacing differences")
 	})
@@ -240,7 +244,7 @@ func TestLineWhitespaceIssuesAreBounded(t *testing.T) {
 			fmt.Fprintf(&old, "item %d — ok\n", i)
 			fmt.Fprintf(&buf, "item %d - ok\n", i)
 		}
-		issues := lineWhitespaceIssues(old.String(), buf.String())
+		issues := lineWhitespaceIssues(old.String(), buf.String(), canonLines(buf.String()))
 		require.Len(t, issues, 1) // one folded character, not one complaint per line
 		assert.Contains(t, issues[0], "lines 1, 2, 3 and 2 more")
 	})
@@ -272,8 +276,11 @@ func TestSoleDifference(t *testing.T) {
 func TestDiagnoseNoMatch(t *testing.T) {
 	t.Parallel()
 
+	// diagnose builds the failing apply's view over buf, as applyEdits does
+	diagnose := func(old, buf string) []string { return (&editMatcher{buf: buf}).diagnoseNoMatch(old) }
+
 	t.Run("names_folded_character", func(t *testing.T) {
-		issues := diagnoseNoMatch("title — subtitle", "intro\ntitle - subtitle\n")
+		issues := diagnose("title — subtitle", "intro\ntitle - subtitle\n")
 		require.Len(t, issues, 1)
 		assert.Contains(t, issues[0], `the file has "-" where you wrote "—"`)
 	})
@@ -281,25 +288,25 @@ func TestDiagnoseNoMatch(t *testing.T) {
 	t.Run("joined_words_still_spacing", func(t *testing.T) {
 		// the aligned lines are not fold-equal and no run differs, so a spacing
 		// shape the pairwise comparison cannot name is what remains
-		issues := diagnoseNoMatch("ab", "x\na b\n")
+		issues := diagnose("ab", "x\na b\n")
 		require.Len(t, issues, 1)
 		assert.Contains(t, issues[0], "separated by different whitespace")
 	})
 
 	t.Run("casing_only", func(t *testing.T) {
-		issues := diagnoseNoMatch("Hello World\n", "say hello world\n")
+		issues := diagnose("Hello World\n", "say hello world\n")
 		require.Len(t, issues, 1)
 		assert.Contains(t, issues[0], "ignore letter case")
 	})
 
 	t.Run("genuinely_absent", func(t *testing.T) {
-		issues := diagnoseNoMatch("unrelated words here", "func f() {}\n")
+		issues := diagnose("unrelated words here", "func f() {}\n")
 		require.Len(t, issues, 1)
 		assert.Contains(t, issues[0], "appears nowhere in this file")
 	})
 
 	t.Run("whitespace_only_old", func(t *testing.T) {
-		assert.Nil(t, diagnoseNoMatch("  \n\t\n", "content\n"))
+		assert.Nil(t, diagnose("  \n\t\n", "content\n"))
 	})
 }
 

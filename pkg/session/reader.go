@@ -32,12 +32,12 @@ func Read(path string) ([]Entry, []string, error) {
 		n     int // line number for warnings
 	)
 	for {
-		line, rerr := r.ReadString('\n')
+		line, rerr := r.ReadBytes('\n')
 		if len(line) > 0 && line[len(line)-1] == '\n' {
 			// a malformed line yields an empty entry plus a warning, so the reader stays tolerant
 			var e Entry
 			warn := ""
-			if err := json.Unmarshal([]byte(line[:len(line)-1]), &e); err != nil {
+			if err := json.Unmarshal(line[:len(line)-1], &e); err != nil {
 				warn = "unparseable entry: " + err.Error()
 			}
 			n++
@@ -85,14 +85,14 @@ func Branch(entries []Entry, head string) []Entry {
 
 	rev := make([]Entry, 0, len(entries)) // a linear chain is the common shape
 	// Read accepts any well-formed line, so the parent chain can carry a cycle
-	seen := make(map[string]bool, len(entries))
+	seen := make([]bool, len(entries))
 	id := head
 	for id != "" {
 		i, ok := idx[id]
-		if !ok || seen[id] { // unknown or already-walked (cycle guard)
+		if !ok || seen[i] { // unknown or already-walked (cycle guard)
 			break
 		}
-		seen[id] = true
+		seen[i] = true
 		e := entries[i]
 		rev = append(rev, e)
 		id = e.ParentID

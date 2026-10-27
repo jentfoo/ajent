@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // countWriter counts bytes written, so a benchmark can report wire bytes.
@@ -148,6 +151,67 @@ func BenchmarkCodeBlock(b *testing.B) {
 			th := NewTheme(ColorBasic, DefaultPalette())
 			for b.Loop() {
 				renderMarkdown(th, 118, src)
+			}
+		})
+	}
+}
+
+// benchDiffFile is a large Go-like file the diff benches run against.
+func benchDiffFile() string {
+	var sb strings.Builder
+	for i := 0; i < 3000; i += 6 {
+		fmt.Fprintf(&sb, "func handler_%04d(ctx context.Context, n int) error {\n", i)
+		sb.WriteString("\tif n <= 0 {\n\t\treturn fmt.Errorf(\"bad input %d\", n)\n\t}\n\treturn nil\n}\n\n")
+	}
+	return sb.String()
+}
+
+// BenchmarkRenderDiff measures diff rendering on the approval-dialog and
+// edit-result path: go-udiff over whole files plus hunk and intraline markup.
+func BenchmarkRenderDiff(b *testing.B) {
+	th := NewTheme(Color256, DefaultPalette())
+	before := benchDiffFile()
+	small := strings.Replace(before, "if n <= 0 {", "if n < 0 {", 1)
+	scattered := strings.ReplaceAll(before, "if n <= 0 {", "if n < 0 {")
+	for _, tc := range []struct {
+		name, before, after string
+	}{
+		{"small_change", before, small},
+		{"scattered_changes", before, scattered},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			out := RenderDiff(th, "big.go", tc.before, tc.after)
+			require.NotEmpty(b, out)
+			b.ReportMetric(float64(lineCount(tc.before)), "file-lines")
+
+			for b.Loop() {
+				RenderDiff(th, "big.go", tc.before, tc.after)
+			}
+		})
+	}
+}
+
+// BenchmarkToolOutput measures the per-delta streamed-output path: head commits,
+// the collapse counter past the cap, and the transient activity row.
+func BenchmarkToolOutput(b *testing.B) {
+	v := newVT(120, 40)
+	u := newTestUI(b, v, strings.NewReader(""))
+	delta := "goroutine 1 [running]: main.step(0x41, 0x9) at reduce.go:214 +0x9f\n"
+	for _, tc := range []struct {
+		name  string
+		delta string
+	}{
+		{"plain_line", delta},
+		{"styled_line", "\x1b[31mFAIL\x1b[0m: TestStep flaked on pass 12 of 200\n"},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			for b.Loop() {
+				u.mu.Lock()
+				u.runs = nil // one op is one tool's whole stream
+				u.mu.Unlock()
+				for range 200 {
+					u.Output("call", tc.delta)
+				}
 			}
 		})
 	}

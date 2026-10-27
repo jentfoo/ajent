@@ -204,25 +204,44 @@ func downgradeImages(msgs []Message, caps Capabilities) []Message {
 	if caps.Images || !hasImageBlock(msgs) {
 		return msgs
 	}
-	out := make([]Message, 0, len(msgs))
-	for _, m := range msgs {
-		content := make(BlockList, 0, len(m.Content))
-		for _, b := range m.Content {
+	var out []Message // nil while every message passes through untouched
+	// fork copies the messages already passed through on the first change, so a
+	// clean pass returns the caller's slice and a dirty one owns its output
+	fork := func(i int) {
+		if out == nil {
+			out = slices.Clone(msgs[:i])
+		}
+	}
+	for i, m := range msgs {
+		var content BlockList // rebuilt blocks once a change lands in this message
+		for j, b := range m.Content {
 			switch v := b.(type) {
 			case ImageBlock:
+				content = takeBlocks(content, m.Content, j)
 				content = appendPlaceholder(content, imageOmitted)
 			case ToolResultBlock:
 				if hasImage(v.Content) {
+					content = takeBlocks(content, m.Content, j)
 					v.Content = downgradeBlocks(v.Content, toolImageOmitted)
+					content = append(content, v)
+				} else {
+					content = keepBlock(content, v)
 				}
-				content = append(content, v)
 			default:
-				content = append(content, b)
+				content = keepBlock(content, b)
 			}
 		}
+		if content == nil {
+			if out != nil {
+				out = append(out, m) // untouched message shares the input's array
+			}
+			continue
+		}
+		fork(i)
 		m.Content = content
 		out = append(out, m)
 	}
+	// every image found above rebuilds its message, so out is never nil here
 	return out
 }
 
@@ -929,7 +948,11 @@ func normalizeIDPart(id string) string {
 
 // sanitizeID maps non [a-zA-Z0-9_-] runes to an underscore.
 func sanitizeID(id string) string {
+	if strings.IndexFunc(id, func(r rune) bool { return !isAllowedIDRune(r) }) < 0 {
+		return id // already wire-safe: the common case
+	}
 	var b strings.Builder
+	b.Grow(len(id))
 	for _, r := range id {
 		if isAllowedIDRune(r) {
 			b.WriteRune(r)
