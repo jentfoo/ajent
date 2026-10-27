@@ -673,6 +673,9 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 	defer shutdown()
 
+	// shared dispatch for every submitted line, so a second source routes unchanged
+	router := &lineRouter{ui: ui, send: send, stager: stager, gate: gate, hist: hist}
+
 	for {
 		select {
 		case msg, ok := <-ui.Messages():
@@ -681,33 +684,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				shutdown()
 				return rec.exitLabel() // drop an abandoned session, else the resume hint label
 			}
-			line := command.ParseLine(msg)
-			if line.Multiline {
-				ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
-			}
-			var blocks []llm.Block
-			if line.Kind == command.KindPrompt {
-				// image tokens become blocks, and the recorded line keeps them, so
-				// recall restores the text an image rode in on. Orphaned tokens
-				// (slot consumed earlier) drop here with a notice.
-				var notices []string
-				line.Rest, blocks, notices = pendingImages.take(line.Rest)
-				for _, n := range notices {
-					ui.Notify(n, tui.LevelWarn)
-				}
-			}
-			appendHistory(hist, secretPrefix, msg, line)
-			switch line.Kind {
-			case command.KindShell:
-				stager.Run(line.Rest, line.Excluded)
-			case command.KindCommand:
-				send(pumpLine{kind: command.KindCommand, rest: line.Rest})
-			default:
-				// arm the handoff here, where the line certainly left the editor: the
-				// async edit notification cannot re-arm after the pump resolves it
-				gate.submitted()
-				send(pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks})
-			}
+			router.route(msg, true)
 		case <-quit:
 			shutdown()
 			return rec.exitLabel() // drop an abandoned session, else the resume hint label
@@ -727,6 +704,51 @@ func appendHistory(hist *session.EditorHistory, prefix string, msg string, line 
 		// skipped from history exactly as the transcript-derived indexes drop it
 	default:
 		hist.Append(msg) // every prompt and !shell line recorded for recall
+	}
+}
+
+// lineRouter dispatches every submitted line: shell lines stage at once,
+// commands and prompts queue for the pump. Editor-coupled side effects (recall
+// history, clipboard image tokens) stay behind fromEditor.
+type lineRouter struct {
+	ui     *tui.UI
+	send   func(pumpLine)
+	stager *command.Stager
+	gate   *typingGate
+	hist   *session.EditorHistory // nil when no recall store exists
+}
+
+// route parses one submitted line and hands it to its dispatcher. fromEditor
+// marks a line that left the prompt editor. Other sources pass false.
+func (r *lineRouter) route(msg string, fromEditor bool) {
+	line := command.ParseLine(msg)
+	if line.Multiline {
+		r.ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
+	}
+	var blocks []llm.Block
+	if fromEditor && line.Kind == command.KindPrompt {
+		// image tokens become blocks, and the recorded line keeps them, so
+		// recall restores the text an image rode in on. Orphaned tokens
+		// (slot consumed earlier) drop here with a notice.
+		var notices []string
+		line.Rest, blocks, notices = pendingImages.take(line.Rest)
+		for _, n := range notices {
+			r.ui.Notify(n, tui.LevelWarn)
+		}
+	}
+	if fromEditor {
+		appendHistory(r.hist, secretPrefix, msg, line)
+	}
+	switch line.Kind {
+	case command.KindShell:
+		r.stager.Run(line.Rest, line.Excluded)
+	case command.KindCommand:
+		r.send(pumpLine{kind: command.KindCommand, rest: line.Rest})
+	default:
+		// arm the handoff at submit time. A remote prompt arms too so a held
+		// boundary treats it like a just-typed line
+		r.gate.submitted()
+		r.send(pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks})
 	}
 }
 
@@ -773,6 +795,21 @@ const (
 	// command) holds the hint line before releasing it to whatever claimed it before.
 	hintNoticeTTL = 6 * time.Second
 )
+
+// abortRunning stops a running turn Esc-style: queued prompts return to the
+// editor, the stream cancels, any staged shell beside it dies too. Reports
+// whether a turn ran so callers can fall through to other cancel targets.
+func abortRunning(ag *agent.Agent, q *steerQueue, stager *command.Stager) bool {
+	if !ag.Running() {
+		return false
+	}
+	q.abort()
+	ag.Interrupt()
+	if stager.Pending() {
+		stager.Cancel() // a staged shell runs beside the turn, stop it too
+	}
+	return true
+}
 
 func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
 	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
@@ -822,23 +859,13 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 				}()
 			case tui.ControlEscape:
 				switch {
-				case ag.Running():
-					q.abort() // queued messages return to the editor, joined with newlines
-					ag.Interrupt()
-					if stager.Pending() {
-						stager.Cancel() // a staged shell runs beside the turn, stop it too
-					}
+				case abortRunning(ag, q, stager):
 				case initCtl.abort(): // a minutes-long /init survey is escapable too
 				case stager.Pending():
 					stager.Cancel() // Esc cancels an in-flight staged shell command
 				}
 			case tui.ControlInterrupt:
-				if ag.Running() {
-					q.abort()
-					ag.Interrupt()
-					if stager.Pending() {
-						stager.Cancel() // a staged shell runs beside the turn, stop it too
-					}
+				if abortRunning(ag, q, stager) {
 					continue
 				}
 				if initCtl.abort() {

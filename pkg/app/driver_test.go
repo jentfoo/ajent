@@ -544,6 +544,124 @@ func TestAppendHistory(t *testing.T) {
 	}
 }
 
+func TestLineRouterRoute(t *testing.T) {
+	t.Parallel()
+
+	// pins the shared dispatch: prompts and commands queue for the pump, shell
+	// lines stage instead of queueing, and editor-coupled side effects (recall
+	// history, clipboard image tokens) stay behind fromEditor.
+	newUI := func(t *testing.T) *tui.UI {
+		t.Helper()
+
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
+		go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(ui.Close)
+		return ui
+	}
+	newHist := func(t *testing.T) *session.EditorHistory {
+		t.Helper()
+
+		s := session.StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		h, err := session.NewEditorHistory(s, t.TempDir(), secretPrefix)
+		require.NoError(t, err)
+		return h
+	}
+	// only the shell case runs its stager, a sinkless one keeps an accidental
+	// Run from panicking on a notice
+	idleStager := func() *command.Stager {
+		return command.NewStager(context.Background(), nil, agent.NopSink{})
+	}
+	armed := func(gate *typingGate) bool {
+		gate.mu.Lock()
+		defer gate.mu.Unlock()
+		return gate.inFlight
+	}
+
+	t.Run("prompt_queues_for_pump", func(t *testing.T) {
+		var lines []pumpLine
+		gate := &typingGate{}
+		r := &lineRouter{ui: newUI(t), gate: gate, hist: nil,
+			send:   func(pl pumpLine) { lines = append(lines, pl) },
+			stager: idleStager()}
+
+		r.route("hello world", true)
+
+		require.Len(t, lines, 1)
+		assert.Equal(t, command.KindPrompt, lines[0].kind)
+		assert.Equal(t, "hello world", lines[0].rest)
+		assert.True(t, armed(gate), "a routed prompt arms the handoff")
+	})
+
+	t.Run("command_queues_for_pump", func(t *testing.T) {
+		var lines []pumpLine
+		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: nil,
+			send:   func(pl pumpLine) { lines = append(lines, pl) },
+			stager: idleStager()}
+
+		r.route("/model x", false)
+
+		require.Len(t, lines, 1)
+		assert.Equal(t, command.KindCommand, lines[0].kind)
+		assert.Equal(t, "model x", lines[0].rest)
+	})
+
+	t.Run("shell_stages_without_queue", func(t *testing.T) {
+		reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "router-shell"})
+		require.NoError(t, err)
+		stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+		t.Cleanup(stager.Cancel) // the sleep must not outlive the test
+		var lines []pumpLine
+		gate := &typingGate{}
+		r := &lineRouter{ui: newUI(t), gate: gate, hist: nil,
+			send:   func(pl pumpLine) { lines = append(lines, pl) },
+			stager: stager}
+
+		r.route("!sleep 5", false)
+
+		require.Eventually(t, stager.Pending, time.Second, time.Millisecond)
+		assert.Empty(t, lines)
+		assert.False(t, armed(gate), "a staged shell never arms the prompt handoff")
+	})
+
+	t.Run("editor_source_records_history", func(t *testing.T) {
+		h := newHist(t)
+		var lines []pumpLine
+		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: h,
+			send:   func(pl pumpLine) { lines = append(lines, pl) },
+			stager: idleStager()}
+
+		r.route("remember this", true)
+
+		assert.Equal(t, []string{"remember this"}, h.Recent())
+	})
+
+	t.Run("external_source_skips_editor_side_effects", func(t *testing.T) {
+		h := newHist(t)
+		var lines []pumpLine
+		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: h,
+			send:   func(pl pumpLine) { lines = append(lines, pl) },
+			stager: idleStager()}
+
+		r.route("[image #3] describe this", false)
+
+		require.Len(t, lines, 1)
+		assert.Equal(t, "[image #3] describe this", lines[0].rest) // token stays literal
+		assert.Empty(t, lines[0].blocks)
+		assert.Empty(t, h.Recent())
+	})
+}
+
 func TestPermissionsModeDefaultResolves(t *testing.T) {
 	t.Setenv(config.EnvHome, t.TempDir())
 	set, _, err := config.Load(config.Options{

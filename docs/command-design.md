@@ -48,7 +48,9 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 `pkg/app`'s loop is a thin classifier feeding one pump channel:
 
 - `ParseLine` routes shell lines to `Stager.Run` (non-blocking), while command and prompt
-  lines go to the single pump goroutine that owns ordering.
+  lines go to the single pump goroutine that owns ordering. The switch lives on one
+  `lineRouter`, so a submission source other than the editor takes the same routing
+  unchanged, with only recall history and clipboard image tokens gated to editor lines.
 - A prompt flushes staged shell results, expands `@` refs, then either queues
   onto the steer queue (rendering as a dimmed row with its echo deferred until it
   lands) or starts the drain directly and echoes immediately.
