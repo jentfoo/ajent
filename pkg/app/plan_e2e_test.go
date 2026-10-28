@@ -62,6 +62,7 @@ type planHarness struct {
 	toolsReg *tools.Registry
 	expander *refs.Expander
 	ui       *tui.UI
+	wrap     *hubUI // the wrapped surface forkTo drives
 	reg      *llm.Registry
 	dir      string
 	planner  *llm.ScriptedProvider
@@ -93,7 +94,7 @@ func TestForkToRefusedMidTurn(t *testing.T) {
 	require.NoError(t, err)
 	ag, _, release := holdTurn(t)
 
-	err = r.forkTo(ui, ag, reg, before[1].ID, m)
+	err = r.forkTo(wrapUI(t, ui), ag, reg, before[1].ID, m)
 	release()
 
 	require.ErrorIs(t, err, errTurnRunning)
@@ -125,7 +126,7 @@ func TestForkToRefusedAfterSwitch(t *testing.T) {
 	// onSwitch fires between the head move and the restore: land the turn there
 	r.onSwitch = func([]llm.Message) { start() }
 
-	err = r.forkTo(ui, ag, reg, "", m) // empty head: the implementation round's new root
+	err = r.forkTo(wrapUI(t, ui), ag, reg, "", m) // empty head: the implementation round's new root
 	release()
 
 	require.ErrorIs(t, err, errTurnRunning)
@@ -181,7 +182,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	st := &agent.State{Model: e2eImplementor, Tokens: tokens.New(e2eImplementor)}
 
 	h := &planHarness{
-		st: st, rec: rec, toolsReg: toolsReg, dir: dir, ui: ui, reg: reg,
+		st: st, rec: rec, toolsReg: toolsReg, dir: dir, ui: ui, wrap: wrapUI(t, ui), reg: reg,
 		expander: refs.NewExpander(toolsReg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil),
 		planner:  &llm.ScriptedProvider{ProviderName: "planner", Turns: plannerTurns},
 		impl:     &llm.ScriptedProvider{ProviderName: "impl", Turns: implTurns},
@@ -213,7 +214,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 // a fresh controller over the same surfaces.
 func (h *planHarness) host() plan.Host {
 	w, rec, st, toolsReg := h.rec.w, h.rec, h.st, h.toolsReg
-	ui, reg := h.ui, h.reg
+	ui, reg := h.wrap, h.reg
 	return plan.Host{
 		PickModel:   func(context.Context, string) (llm.Model, bool) { return e2ePlanner, true },
 		ActiveModel: func() llm.Model { return st.Model },

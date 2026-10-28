@@ -428,6 +428,11 @@ Two kinds of mid-turn input:
   to opt in. The live side is the reverse: an injected input is silent at
   delivery unless its producer sets `Input.Echo`, keeping the one-echo rule
   between hosts that echo at submit and steers that land mid-turn.
+- An `Input.Origin` string names a non-typed **submitter** (the control
+  socket's `"controller"`) without any of `Injected`'s behavior changes: the
+  input still groups, echoes and recalls like the user line it emulates, and
+  the origin only rides onto the `MessageInfo` and the transcript entry as an
+  audit annotation. The model never sees it.
 - **`Input.Before` and `Input.After`** frame one input. Before is context that
   predates the message, such as staged `!` output or `/init`'s survey. It is a
   `[]MessageInfo` appended ahead of it, so each entry carries its own marks

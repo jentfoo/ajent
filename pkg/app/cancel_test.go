@@ -346,10 +346,12 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 
 			quit := make(chan struct{})
 			controls := make(chan tui.Control, 4)
-			go controlLoop(context.Background(), ui, controls,
-				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady), stager, nil,
-				func() { close(quit) }, nil)
+			hub := newTestHub(ui)
+			hub.ag = ag
+			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+			hub.stager = stager
+			go controlLoop(context.Background(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
@@ -425,16 +427,20 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 				Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 			})
 
-			// wired as the driver wires it: submit reserves, clear releases
+			// wired as the driver wires it: submit reserves, clear releases. The
+			// queue takes the hubUI wrapper, whose Interactive gates recovery.
 			waitReady, takeReady := stagePair(t)
-			q := newSteerQueue(ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
+			hub := newTestHub(ui)
+			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
 			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
 
 			quit := make(chan struct{})
 			controls := make(chan tui.Control, 4)
-			go controlLoop(context.Background(), ui, controls,
-				newHintBoard(func(string, string) {}), ag, q, stager, nil,
-				func() { close(quit) }, nil)
+			hub.ag = ag
+			hub.q = q
+			hub.stager = stager
+			go controlLoop(context.Background(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "held prompt"}) }()
@@ -504,9 +510,12 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 
 	quit := make(chan struct{})
 	controls := make(chan tui.Control, 4)
-	go controlLoop(context.Background(), ui, controls,
-		newHintBoard(func(string, string) {}), ag, q, stager, nil,
-		func() { close(quit) }, nil)
+	hub := newTestHub(ui)
+	hub.ag = ag
+	hub.q = q
+	hub.stager = stager
+	go controlLoop(context.Background(), controls,
+		newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()

@@ -218,7 +218,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		After:            res.After,
 		Reduce:           &res.Reduce,
 	}
-	if _, aerr := c.rec.w.Append(session.TypeCompaction, cd); aerr != nil {
+	if _, aerr := c.rec.appendEntry(session.TypeCompaction, cd); aerr != nil {
 		c.notify("compaction failed: recording the checkpoint: "+aerr.Error(), agent.LevelWarn)
 		return false, aerr
 	}

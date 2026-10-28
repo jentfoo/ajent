@@ -390,7 +390,7 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			visible := in.Injected && !llm.OnlyToolResults(blocks)
 			a.append(MessageInfo{
 				Message:  llm.Message{Role: llm.RoleUser, Content: blocks},
-				Injected: in.Injected, Replayed: visible,
+				Injected: in.Injected, Replayed: visible, Origin: in.Origin,
 			})
 			if visible && in.Echo != "" {
 				a.sink.UserPrompt(in.Echo)

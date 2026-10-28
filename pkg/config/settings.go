@@ -12,7 +12,8 @@ type Settings struct {
 	Compaction  Compaction  `json:"compaction,omitzero"`
 	Subagent    Subagent    `json:"subagent,omitzero"` // research sub-agents
 	UI          UI          `json:"ui,omitzero"`
-	Images      Images      `json:"images,omitzero"` // image capture and delivery
+	Images      Images      `json:"images,omitzero"`  // image capture and delivery
+	Control     Control     `json:"control,omitzero"` // local control socket surface
 
 	// DisableUpdateCheck turns off the startup update-available notice.
 	DisableUpdateCheck bool `json:"disableUpdateCheck,omitzero"`
@@ -106,6 +107,14 @@ type Images struct {
 	// Block, default off, prevents any image block from reaching providers:
 	// every image becomes an "Image reading is disabled." text placeholder.
 	Block bool `json:"block,omitzero"`
+}
+
+// Control configures the local control socket. Startup-read only: no
+// /settings row, no session override, restart to change it.
+type Control struct {
+	// Enabled, default off, exposes the running session on a same-user unix
+	// socket for read-only controllers and enables --serve.
+	Enabled bool `json:"enabled,omitzero"`
 }
 
 // Permissions configures the tool guard chain.

@@ -19,7 +19,7 @@ func (c *uiConsole) CopyClipboard(ctx context.Context, text string) error {
 // copyText writes text through the shared clipboard writer, riding ui's terminal
 // for OSC 52 delivery on remote terminals. It returns the notice to show with its
 // level and whether the caller should notify.
-func copyText(ctx context.Context, ui *tui.UI, text string) (string, tui.Level, bool) {
+func copyText(ctx context.Context, ui *hubUI, text string) (string, tui.Level, bool) {
 	if err := clipboardWrite(ctx, text, clipboard.CopyOptions{TTY: ui.TerminalWriter()}); err != nil {
 		return err.Error(), tui.LevelError, true
 	}

@@ -33,6 +33,7 @@ type cliFlags struct {
 	resumeID     string // the id or name from --resume <id|name>
 	sessionName  string // --session <name>: resume that name, creating it when new
 	sessionGiven bool   // --session was given, so an empty name is a usage error
+	serve        bool   // --serve: run with the control socket as the only front end
 
 	deleteTarget  string // --delete <name|id>: the session to remove from disk
 	deleteGiven   bool   // --delete was given, so an empty target is a usage error
@@ -93,6 +94,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 			"alt (own scrollback), plain")
 	fs.BoolVar(&f.cont, "continue", false, "resume the most recent session automatically")
 	fs.StringVar(&f.sessionName, "session", "", "resume the session with this name, creating it if it does not exist")
+	fs.BoolVar(&f.serve, "serve", false,
+		"run with no terminal, serving the session over the local control socket (needs control.enabled)")
 	fs.StringVar(&f.deleteTarget, "delete", "", "delete the saved session with this name or id, then exit")
 	fs.BoolVarP(&f.version, "version", "v", false, "print version and exit")
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
@@ -167,7 +170,7 @@ func (f cliFlags) validate() error {
 			// only a day count follows --delete-old, so a leftover positional is one
 			// that did not parse as digits
 			return fmt.Errorf("--delete-old takes a number of days, not %q", f.args[0])
-		case f.resume || f.cont || f.sessionGiven || f.promptGiven || len(f.args) > 0:
+		case f.resume || f.cont || f.sessionGiven || f.promptGiven || f.serve || len(f.args) > 0:
 			return errors.New("--delete and --delete-old cannot be combined with a session or prompt flag")
 		}
 		return nil
@@ -183,6 +186,15 @@ func (f cliFlags) validate() error {
 	// the permission-mode flags conflict in every mode, interactive and one-shot
 	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 1 {
 		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
+	}
+	if f.serve {
+		switch {
+		case f.promptGiven || f.prompt != "":
+			return errors.New("--serve and --prompt are mutually exclusive; prompts arrive over the control socket")
+		case len(f.args) > 0:
+			return errors.New("--serve takes no prompt; positional arguments are a --prompt form")
+		}
+		return nil
 	}
 	if f.prompt == "" {
 		if f.promptGiven {

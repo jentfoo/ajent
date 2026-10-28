@@ -1358,3 +1358,26 @@ func TestPromptBatchPerItemProvenance(t *testing.T) {
 	}))
 	assert.Equal(t, []bool{false, true}, marks)
 }
+
+// TestPromptBatchOriginStamped pins the submitter annotation: a non-editor
+// origin rides the input onto its appended user message, while injected rows
+// carry none.
+func TestPromptBatchOriginStamped(t *testing.T) {
+	t.Parallel()
+
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+	a := newTestAgent(nil, p, nil)
+	var origins []string
+	a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
+		if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
+			origins = append(origins, mi.Origin)
+		}
+	})
+
+	require.NoError(t, a.PromptBatch(t.Context(), []Input{
+		{Text: "typed"},
+		{Text: "remote", Origin: "controller"},
+		{Text: "sys", Injected: true},
+	}))
+	assert.Equal(t, []string{"", "controller", ""}, origins)
+}

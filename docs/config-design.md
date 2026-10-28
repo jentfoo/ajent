@@ -232,6 +232,15 @@ an unknown name falls back to detection (see tui-design.md, "Terminal images").
 tool layer at startup, and resume re-applies it after the transcript's overrides
 are seeded so a session saved blocked comes back blocked.
 
+### Control
+
+`control.enabled`, off by default, is the deliberate act of turning on a local
+control surface: it exposes the running session on a same-user unix socket for
+read-only controllers and enables `--serve`. Like `subagent.maxPollWait` it is
+startup-read only (pkg/app copies it once at process start): no `/settings`
+row, no session override, no live toggle. The socket is a runtime artifact, so
+a key that could flip mid-run would leave a controller attached to nothing.
+
 ## The writer
 
 Saving re-marshals an order-preserving object tree: unknown keys and key order

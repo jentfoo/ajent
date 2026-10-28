@@ -206,14 +206,15 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 
 // TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
 // window and only a second inside it quits, while Ctrl+D quits outright.
+// TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
+// window and only a second inside it quits, while Ctrl+D quits outright.
+// Mode cycling rides the hub's barrier, so the cycled channel carries the
+// barrier mode after each control, giving a test its ordering signal.
 func TestControlLoop(t *testing.T) {
 	t.Parallel()
 
 	rec := &hintRecorder{} // records what the loop paints on the hint line
-	// start runs the loop over a control channel the caller drives. cycled
-	// carries the mode-cycle direction (false forward, true back), giving a test
-	// a signal ordered behind earlier controls.
-	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan bool) {
+	start := func(t *testing.T) (controls chan tui.Control, quit chan struct{}, cycled chan permit.Mode, hub *sessionHub) {
 		t.Helper()
 
 		inR, inW, err := os.Pipe()
@@ -233,14 +234,18 @@ func TestControlLoop(t *testing.T) {
 
 		controls = make(chan tui.Control, 4)
 		quit = make(chan struct{})
-		cycled = make(chan bool, 4)
+		cycled = make(chan permit.Mode, 4)
 		ag := agent.New(&agent.State{Tokens: tokens.New(llm.Model{})}, agent.Options{})
 		stager := command.NewStager(context.Background(), nil, nil)
-		go controlLoop(context.Background(), ui, controls, newHintBoard(rec.record), ag,
-			newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady), stager, nil,
-			func() { close(quit) },
-			func(back bool) { cycled <- back })
-		return controls, quit, cycled
+		hub = newTestHub(ui)
+		hub.ag = ag
+		hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+		hub.stager = stager
+		// a spy over a production-shaped barrier reports each cycle's resulting
+		// mode, giving the test a signal ordered behind earlier controls
+		hub.barrier = &modeSpy{Barrier: wiredBarrier(tools.New()), out: cycled}
+		go controlLoop(context.Background(), controls, newHintBoard(rec.record), hub, func() { close(quit) })
+		return controls, quit, cycled, hub
 	}
 	quitted := func(t *testing.T, quit chan struct{}) bool {
 		t.Helper()
@@ -254,7 +259,7 @@ func TestControlLoop(t *testing.T) {
 	}
 
 	t.Run("double_press_quits", func(t *testing.T) {
-		controls, quit, _ := start(t)
+		controls, quit, _, _ := start(t)
 		controls <- tui.ControlInterrupt
 		controls <- tui.ControlInterrupt
 		assert.True(t, quitted(t, quit))
@@ -262,10 +267,10 @@ func TestControlLoop(t *testing.T) {
 
 	// one press only arms the window: the app stays up until the second arrives
 	t.Run("single_press_holds", func(t *testing.T) {
-		controls, quit, cycled := start(t)
+		controls, quit, cycled, _ := start(t)
 		controls <- tui.ControlInterrupt
 		controls <- tui.ControlModeCycle // ordered behind the press: it has been handled
-		assert.False(t, <-cycled)
+		assert.Equal(t, permit.ModeAuto, <-cycled)
 		assert.Equal(t, []string{"ctrl+c again to quit"}, rec.last())
 
 		select {
@@ -277,21 +282,21 @@ func TestControlLoop(t *testing.T) {
 		assert.True(t, quitted(t, quit))
 	})
 
-	// both mode-cycle controls reach the callback, each with its own direction
+	// both mode-cycle controls reach the barrier, each with its own direction
 	t.Run("mode_cycle_reports_direction", func(t *testing.T) {
-		controls, _, cycled := start(t)
+		controls, _, cycled, _ := start(t)
 		controls <- tui.ControlModeCycle
-		assert.False(t, <-cycled)
+		assert.Equal(t, permit.ModeAuto, <-cycled)
 		controls <- tui.ControlModeCycleBack
-		assert.True(t, <-cycled)
+		assert.Equal(t, permit.ModeAllowRead, <-cycled)
 	})
 
 	// the picker copy control routes without a picker open: silent no-op, never a quit
 	t.Run("copy_selection_without_picker_is_silent", func(t *testing.T) {
-		controls, quit, cycled := start(t)
+		controls, quit, cycled, _ := start(t)
 		controls <- tui.ControlCopySelection
 		controls <- tui.ControlModeCycle // ordered behind: the copy control settled
-		assert.False(t, <-cycled)
+		assert.Equal(t, permit.ModeAuto, <-cycled)
 
 		select {
 		case <-quit:
@@ -301,10 +306,29 @@ func TestControlLoop(t *testing.T) {
 	})
 
 	t.Run("ctrl_d_quits", func(t *testing.T) {
-		controls, quit, _ := start(t)
+		controls, quit, _, _ := start(t)
 		controls <- tui.ControlEOF
 		assert.True(t, quitted(t, quit))
 	})
+}
+
+// modeSpy reports each cycle's resulting mode on out, an ordering signal for
+// control-loop tests that drive mode-cycle controls.
+type modeSpy struct {
+	*permit.Barrier
+	out chan permit.Mode
+}
+
+func (s *modeSpy) Cycle() permit.Mode {
+	m := s.Barrier.Cycle()
+	s.out <- m
+	return m
+}
+
+func (s *modeSpy) Prev() permit.Mode {
+	m := s.Barrier.Prev()
+	s.out <- m
+	return m
 }
 
 func TestCheckSessionTarget(t *testing.T) {
@@ -591,7 +615,7 @@ func TestLineRouterRoute(t *testing.T) {
 	t.Run("prompt_queues_for_pump", func(t *testing.T) {
 		var lines []pumpLine
 		gate := &typingGate{}
-		r := &lineRouter{ui: newUI(t), gate: gate, hist: nil,
+		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: gate, hist: nil,
 			send:   func(pl pumpLine) { lines = append(lines, pl) },
 			stager: idleStager()}
 
@@ -605,7 +629,7 @@ func TestLineRouterRoute(t *testing.T) {
 
 	t.Run("command_queues_for_pump", func(t *testing.T) {
 		var lines []pumpLine
-		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: nil,
+		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: &typingGate{}, hist: nil,
 			send:   func(pl pumpLine) { lines = append(lines, pl) },
 			stager: idleStager()}
 
@@ -623,7 +647,7 @@ func TestLineRouterRoute(t *testing.T) {
 		t.Cleanup(stager.Cancel) // the sleep must not outlive the test
 		var lines []pumpLine
 		gate := &typingGate{}
-		r := &lineRouter{ui: newUI(t), gate: gate, hist: nil,
+		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: gate, hist: nil,
 			send:   func(pl pumpLine) { lines = append(lines, pl) },
 			stager: stager}
 
@@ -637,7 +661,7 @@ func TestLineRouterRoute(t *testing.T) {
 	t.Run("editor_source_records_history", func(t *testing.T) {
 		h := newHist(t)
 		var lines []pumpLine
-		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: h,
+		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: &typingGate{}, hist: h,
 			send:   func(pl pumpLine) { lines = append(lines, pl) },
 			stager: idleStager()}
 
@@ -649,7 +673,7 @@ func TestLineRouterRoute(t *testing.T) {
 	t.Run("external_source_skips_editor_side_effects", func(t *testing.T) {
 		h := newHist(t)
 		var lines []pumpLine
-		r := &lineRouter{ui: newUI(t), gate: &typingGate{}, hist: h,
+		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: &typingGate{}, hist: h,
 			send:   func(pl pumpLine) { lines = append(lines, pl) },
 			stager: idleStager()}
 
@@ -818,7 +842,7 @@ func TestPromptAdapterPlainModeReportsNoUI(t *testing.T) {
 		_ = outW.Close()
 	})
 
-	a := promptAdapter{ui: ui, hold: func(context.Context) {}}
+	a := promptAdapter{ui: wrapUI(t, ui), hold: func(context.Context) {}}
 	_, err = a.Open("Allow?", "cmd", []string{"Allow"})
 	assert.ErrorIs(t, err, tui.ErrNoUI)
 }

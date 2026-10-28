@@ -90,7 +90,7 @@ func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 	// switching to a smaller window must not leave Used at zero.
 	c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
 
@@ -128,7 +128,7 @@ func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
 	require.NoError(t, err)
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, rec: session.NewRecorder(w)}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, rec: session.NewRecorder(w)}
 
 	// re-selecting the same model must not record a change.
 	c.SetModel(active)
@@ -165,7 +165,7 @@ func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 	active := llm.Model{Provider: "p", ID: "first"}
 	st := &agent.State{Model: active, Tokens: tokens.New(active)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 	// the same-model no-op must not create the file.
 	c.SetModel(active)
@@ -209,7 +209,7 @@ func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
 		Caps: llm.Capabilities{Reasoning: true},
 	}
 	st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 	// the user's explicit level choice persists as a session override, the
 	// /reasoning pick owns that leaf now
@@ -255,14 +255,14 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 	waitReady, takeReady := stagePair(t)
 	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, q: q}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, q: q}
 
 	starts := newStartState(false)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
-	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+	startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 	<-entered // the turn owns State from here until it settles
 
@@ -391,7 +391,7 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 
 	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09)
@@ -450,7 +450,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		st := &agent.State{Model: model, Tokens: tokens.New(model)}
 		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 		require.NoError(t, err)
-		c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 		require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 		assert.Equal(t, 100000, st.Tokens.Context().Compact)
@@ -472,7 +472,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		st := &agent.State{Model: model, Tokens: tokens.New(model)}
 		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 		require.NoError(t, err)
-		c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 		c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
 		require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
@@ -536,7 +536,7 @@ func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
 	st := &agent.State{Model: big, Tokens: tokens.New(big)}
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 	c.SetModel(small) // the override this reset must undo
 	assert.Equal(t, "p/small", st.Model.Key())
@@ -564,7 +564,7 @@ func TestUIConsoleReasoningRetainDoesNotLatch(t *testing.T) {
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st}
 
 	require.Equal(t, llm.RetainAll, st.Reasoning.Retain) // the flavor default
 
@@ -586,7 +586,7 @@ func TestUIConsoleResetRecordsNullSettingChange(t *testing.T) {
 	require.NoError(t, err)
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, rec: session.NewRecorder(w)}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, rec: session.NewRecorder(w)}
 
 	require.NoError(t, c.SetSessionSetting("compaction.auto", false))
 	require.NoError(t, c.ResetSessionSetting("compaction.auto"))

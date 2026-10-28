@@ -107,8 +107,22 @@ type RunOptions struct {
 	AllowTools []string
 	DenyTools  []string
 	Args       []string // positional arguments, joined into a bootstrap prompt
+	Serve      bool     // --serve: run with the control socket as the only front end
 
 	SessMode     ResumeMode
 	SessTarget   string
 	SessResolved SessionResolution // check-time target resolution, avoids a second scan
+}
+
+// ServeOptions carries what RunServe needs; the driver derives the rest from
+// the set and registry.
+type ServeOptions struct {
+	Set          *config.Set
+	Reg          *llm.Registry
+	Active       llm.Model
+	SessMode     ResumeMode
+	SessTarget   string
+	SessResolved SessionResolution
+	Warnings     []string
+	Scope        ToolScope
 }

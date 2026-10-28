@@ -46,6 +46,9 @@ type sessRec struct {
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. Nil until main wires it.
 	onSwitch func([]llm.Message)
+	// onAppend observes each successfully appended transcript entry, for the
+	// control server's entry.append events. Nil drops.
+	onAppend func(session.Entry)
 	// starts is the driver's dispatch state, shared so a rewind seeds its base
 	// with the same committed rule the pump uses. Nil until main wires it.
 	starts *startState
@@ -191,7 +194,7 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 // error is an open failure the caller must surface, never a fall-back-to-fresh
 // signal; implicit modes that legitimately start fresh return a writer with a
 // nil error.
-func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string, pre session.Info) (*sessRec, error) {
+func newSession(ui *tui.UI, dialogs *interactionBroker, mode ResumeMode, target, modelKey string, pre session.Info) (*sessRec, error) {
 	store, err := session.NewStore()
 	if err != nil {
 		return nil, err
@@ -199,7 +202,7 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string, pre sessio
 	cwd := config.Cwd()
 	var pick func([]session.Info) (int, error)
 	if ui != nil && mode == ResumePick {
-		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
+		pick = func(list []session.Info) (int, error) { return pickSessionRoot(dialogs, list) }
 	}
 	w, snap, note, err := openSession(store, mode, cwd, target, modelKey, pick, pre)
 	if err != nil {
@@ -399,7 +402,7 @@ func roleTag(kind session.RowKind) (string, tui.ItemMark) {
 	}
 }
 
-func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
+func pickSessionRoot(dialogs *interactionBroker, list []session.Info) (int, error) {
 	items := make([]tui.PickItem, len(list))
 	for i, in := range list {
 		label := in.First
@@ -424,7 +427,7 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 			items[i].Disabled = true
 		}
 	}
-	return ui.PickContext(context.Background(), "Resume session", items,
+	return dialogs.Pick(context.Background(), "Resume session", items,
 		tui.PickOptions{Placeholder: "filter"})
 }
 
@@ -490,7 +493,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	return branch, append(rwarns, warns...)
 }
 
-func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
+func (r *sessRec) rebuild(set *config.Set, ui *hubUI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
 	branch, warns := r.restoreState(set, reg, st, toolsReg)
 	for _, wmsg := range warns {
 		ui.Notify("resume: "+wmsg, tui.LevelWarn)
@@ -512,11 +515,14 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	session.Replay(branch, replaySink(ui), session.ReplayOptions{})
 }
 
-func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
-	if ui == nil || ag == nil {
-		return
+// appendEntry appends one transcript entry, announcing it to any observer,
+// so direct writers (the compaction checkpoint) surface like recorder ones.
+func (r *sessRec) appendEntry(typ session.Type, data any) (session.Entry, error) {
+	e, err := r.w.Append(typ, data)
+	if err == nil && r.onAppend != nil {
+		r.onAppend(e)
 	}
-	ui.SetOnRewind(func() { r.rewind(ui, ag, reg) })
+	return e, err
 }
 
 // errTurnRunning reports a refused state swap: a turn claimed the loop between
@@ -526,7 +532,7 @@ var errTurnRunning = errors.New("a turn is running")
 // switchState points the writer and live agent state at head's branch, an empty
 // head starting a new root, firing the switch callbacks once both moved. It
 // reports errTurnRunning when a turn claims the loop first, with nothing moved.
-func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
+func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
 	var rebuilt agent.State
 	if head != "" {
 		// rebuild before moving HEAD, so a failed read leaves writer and state in step
@@ -591,7 +597,7 @@ func (r *sessRec) baseEstimate(ag *agent.Agent) int {
 	return ag.BaseEstimate(committed)
 }
 
-func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
+func pushSwitchedContext(ui *hubUI, t *tokens.Accounting) {
 	if ui == nil {
 		return
 	}
@@ -611,18 +617,22 @@ func (r *sessRec) liveModel(ag *agent.Agent) (llm.Model, bool) {
 	return save, true
 }
 
-func syncModelUI(ui *tui.UI, reg *llm.Registry, m llm.Model) {
+func syncModelUI(ui *hubUI, reg *llm.Registry, m llm.Model) {
 	reg.SetActive(m)
 	if ui == nil {
 		return
 	}
-	ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+	ui.SetModelOf(m)
 }
 
 // replaySink builds the sink a rewind or resume replay drives: tool images
-// render as text, since the drawings already sit in scrollback above.
-func replaySink(ui *tui.UI) agent.Sink {
-	s := tuisink.New(ui)
+// render as text, since the drawings already sit in scrollback above. No
+// terminal (serve mode) replays nowhere: the transcript is the client's view.
+func replaySink(ui *hubUI) agent.Sink {
+	if ui.UI == nil {
+		return agent.NopSink{}
+	}
+	s := tuisink.New(ui.UI)
 	s.SetImages(false)
 	return s
 }
@@ -631,7 +641,7 @@ func replaySink(ui *tui.UI) agent.Sink {
 // reseeding the ledger against it. It reports errTurnRunning when a turn claims
 // the loop first, leaving the model as the switch left it. The caller owns the
 // refusal notice.
-func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) error {
+func (r *sessRec) restoreForkModel(ui *hubUI, ag *agent.Agent, reg *llm.Registry, m llm.Model) error {
 	if m.ID == "" || ag == nil {
 		return nil
 	}
@@ -677,22 +687,24 @@ func initialRow(tree []session.TreeRow, head string) int {
 
 const rewindDeferThreshold = 300
 
-func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
+// pickRewind opens the context-tree picker and reports the chosen entry id,
+// false when cancelled or nothing is rewindable.
+func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
 	// a failed re-read is not the same as nothing recorded yet
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
 		ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
-		return
+		return "", false
 	}
 	if len(entries) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
-		return
+		return "", false
 	}
 	head := resumeHead(r.w.Head(), entries)
 	tree := session.TreeRows(entries, head)
 	if len(tree) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
-		return
+		return "", false
 	}
 
 	// one payload per row, verbatim from the transcript so a ctrl+x copy is
@@ -722,16 +734,36 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.SetDeferHistory(true)
 		defer ui.SetDeferHistory(false)
 	}
-	picked, err := ui.PickContext(context.Background(), "Rewind to", items,
+	picked, err := ui.dialogs.Pick(context.Background(), "Rewind to", items,
 		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})
 	if err != nil {
-		return // cancelled
+		return "", false // cancelled
 	}
+	return tree[picked].ID, true
+}
 
-	newHead, fillText, ok := session.RewindTarget(entries, tree[picked].ID)
+// errUnknownHead names a rewind target absent from the transcript, so callers
+// can answer it as not-found rather than a generic failure.
+var errUnknownHead = errors.New("unknown head")
+
+// rewindTo switches onto head's branch, the double-Esc operation minus its
+// picker: rebuild state, move the writer, keep the live model, discard staged
+// output meant for the branch left behind. An interactive run redraws to the
+// restored context; a serve run has nothing to redraw. It reports the new head
+// entry id. Notifications for mid-operation failures stay inside (they render
+// locally and reach observers as notice events); the returned error is the
+// caller's machine-readable copy.
+func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head string) (string, error) {
+	entries, _, err := session.Read(r.w.Path())
+	if err != nil {
+		return "", err
+	}
+	newHead, fillText, ok := session.RewindTarget(entries, head)
 	if !ok || newHead == "" {
-		ui.Notify("cannot rewind onto that entry", tui.LevelWarn)
-		return
+		if !slices.ContainsFunc(entries, func(e session.Entry) bool { return e.ID == head }) {
+			return "", fmt.Errorf("%w %q", errUnknownHead, head)
+		}
+		return "", errors.New("cannot rewind onto that entry")
 	}
 	// keep the current model across a fork: rebuilding from an earlier point
 	// would otherwise revert to whatever model was active there, silently undoing
@@ -740,10 +772,10 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	if !ok {
 		// a refused capture means a turn owns the loop, nothing may move
 		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
-		return
+		return "", errTurnRunning
 	}
 	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
-		return
+		return "", err
 	}
 	if r.discardStaged != nil {
 		r.discardStaged() // staged against the branch just left, not this one's to carry
@@ -755,16 +787,19 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.Notify(fmt.Sprintf(
 			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
 			saveModel.Key()), tui.LevelWarn)
-		return
+		return newHead, err
 	}
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.
-	ui.Reset()
-	// mark where restored history begins so it reads clearly in scrollback
-	ui.Divider()
-	session.Replay(session.Branch(entries, newHead), replaySink(ui), session.ReplayOptions{})
-	if fillText != "" {
-		ui.SetInput(fillText)
+	if ui.Interactive() {
+		ui.Reset()
+		// mark where restored history begins so it reads clearly in scrollback
+		ui.Divider()
+		session.Replay(session.Branch(entries, newHead), replaySink(ui), session.ReplayOptions{})
+		if fillText != "" {
+			ui.SetInput(fillText)
+		}
 	}
+	return newHead, nil
 }

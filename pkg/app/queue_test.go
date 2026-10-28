@@ -34,11 +34,13 @@ type fakeQueueUI struct {
 	prepended []string
 	set       []string
 	images    [][]tui.Image
+	headless  bool // Interactive reports false, the serve-mode shape
 }
 
 func (f *fakeQueueUI) SetQueued(texts []string) { f.queued = append(f.queued, slices.Clone(texts)) }
 func (f *fakeQueueUI) PrependInput(t string)    { f.prepended = append(f.prepended, t) }
 func (f *fakeQueueUI) SetInput(t string)        { f.set = append(f.set, t) }
+func (f *fakeQueueUI) Interactive() bool        { return !f.headless }
 func (f *fakeQueueUI) UserEcho(t string)        { f.echoed = append(f.echoed, t) }
 func (f *fakeQueueUI) UserImages(imgs []tui.Image) {
 	f.images = append(f.images, imgs)
@@ -50,6 +52,26 @@ func (f *fakeQueueUI) lastQueued() []string {
 		return nil
 	}
 	return f.queued[len(f.queued)-1]
+}
+
+// TestSteerQueueAbortDropsWhenHeadless pins the serve rule: an interrupt with
+// no editor to recover into drops the queued prompts instead of pretending a
+// recall happened.
+func TestSteerQueueAbortDropsWhenHeadless(t *testing.T) {
+	t.Parallel()
+
+	waitReady, takeReady := stagePair(t)
+	fake := &fakeQueueUI{headless: true}
+	q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+	q.draining = true
+	q.offer(agent.Input{Text: "held work"}, "held work", 0)
+	require.Equal(t, 1, q.pending())
+
+	q.abort()
+
+	assert.Equal(t, 0, q.pending())
+	assert.Empty(t, fake.prepended)    // nothing recovered: no editor exists
+	assert.Empty(t, fake.lastQueued()) // rows cleared
 }
 
 func TestSteerQueue(t *testing.T) {
@@ -280,6 +302,27 @@ func TestSteerQueue(t *testing.T) {
 		runs[0].Delivered()
 		runs[2].Delivered()
 		assert.Equal(t, []string{"typed", "typed two"}, fake.echoed)
+	})
+
+	t.Run("join_groups_controller_with_user_runs", func(t *testing.T) {
+		// a controller submit is a user line with an origin, never injected:
+		// it joins the same run its typed neighbours form, so grouping, echo
+		// and recall stay truthful
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(agent.Input{Text: "typed"}, "typed", 1))
+		require.True(t, q.offer(agent.Input{Text: "remote", Origin: "controller"}, "remote", 1))
+
+		runs := q.pull()
+		require.Len(t, runs, 1)
+		assert.False(t, runs[0].Injected)
+		assert.Equal(t, "typed\nremote", runs[0].Text)
+
+		runs[0].Delivered()
+		assert.Equal(t, []string{"typed\nremote"}, fake.echoed)
 	})
 
 	t.Run("join_chains_afters_per_run", func(t *testing.T) {

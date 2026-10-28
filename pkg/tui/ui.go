@@ -53,6 +53,15 @@ const (
 // clockwise frames, with ⠦ (bottom-left) leading so idle rests at bottom-left
 var spinnerFrames = []string{"⠦", "⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴"}
 
+// SpinnerFrame returns the status glyph a working (true) or resting (false)
+// turn shows, the same frames the status line animates from.
+func SpinnerFrame(working bool) string {
+	if !working {
+		return spinnerFrames[0]
+	}
+	return spinnerFrames[1]
+}
+
 // Control is an out-of-band key the caller decides the meaning of. The editor
 // does not consume these, and the TUI front end maps them onto agent control calls.
 type Control uint8

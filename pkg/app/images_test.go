@@ -256,7 +256,7 @@ func TestResumeAppliesImagesBlock(t *testing.T) {
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	toolsReg, err := tools.Builtins(tools.Options{SessionID: t.TempDir()})
 	require.NoError(t, err)
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	assert.False(t, tools.ImagesEnabled())
 }

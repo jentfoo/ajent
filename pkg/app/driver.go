@@ -43,9 +43,12 @@ const shutdownDrainWait = 100 * time.Millisecond
 // turn rather than starting a second one. sessMode decides whether this run starts
 // fresh or resumes a saved transcript, and sessTarget names it for the id and name
 // modes. sessResolved carries CheckSessionTarget's resolution of sessTarget
-// for the open to adopt directly. Returns the transcript label for an
-// exit-time `--resume` hint, empty when there is nothing to resume.
-func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope) string {
+// for the open to adopt directly. A nil term runs serve mode: the control
+// socket is the only front end and a startup failure returns a non-nil error.
+// Returns the transcript label for an exit-time `--resume` hint, empty when
+// there is nothing to resume.
+func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope) (string, error) {
+	serve := term == nil
 	providers := llm.NewProviders(reg)
 	rc := llm.ReasoningFrom(set.Settings().Reasoning, active)
 	st := &agent.State{
@@ -54,13 +57,36 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		Tokens:    tokens.New(active),
 	}
 
+	// the broker fronts every dialog before one can open (the resume picker
+	// below is the first), and the hub makes every later surface change and
+	// control entry cross one seam. Both exist before the first notice.
+	dialogs := newInteractionBroker(term, nil, nil)
+	env := agent.DetectEnvironment()
+	hub := newSessionHub(hubDeps{
+		ui: term, dialogs: dialogs, active: active,
+		workspace: config.Cwd(), cwd: env.Cwd, acct: st.Tokens,
+	}, hubEmitters{}) // a control server attaches its own observers later
+
 	// every turn is recorded into the workspace transcript so double-Esc while idle
 	// can open the context-tree picker and rewind onto an earlier point.
 	var modelKey string
 	if active.ID != "" {
 		modelKey = active.Key() // a modelless start stays unstamped, "/" would warn on resume
 	}
-	rec, serr := newSession(ui, sessMode, sessTarget, modelKey, sessResolved)
+	rec, serr := newSession(term, dialogs, sessMode, sessTarget, modelKey, sessResolved)
+	hub.bindSession(rec)
+	ui := hub.ui // every consumer below sees the wrapper, never the raw TUI
+	if serve && rec == nil {
+		// every serve session is recorded: a transcript that cannot open is a
+		// failed start, not an unrecorded run
+		var reason string
+		if serr != nil {
+			reason = serr.Error()
+		} else {
+			reason = "recording is unavailable"
+		}
+		return "", fmt.Errorf("serve needs a recorded session: %s", reason)
+	}
 	if rec == nil {
 		msg := "session recording disabled; Esc will not rewind"
 		if serr != nil {
@@ -73,134 +99,13 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		ui.Notify(rec.note, tui.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
 
-	sink := tuisink.New(ui)
-
-	// build the built-in tool registry and hand it to the loop so the model can
-	// read, write, edit and run commands.
-	// ask_user rides the TUI's question queue, so it never pre-empts a permission
-	// dialog. It stays disabled until a workflow enables it.
-	toolsReg, terr := builtinTools(set, reg, askUser(ui), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
-	if terr != nil {
-		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
-	}
-	// a configured enabled set replaces the built-in default (read/write/edit/bash),
-	// so find/grep/ls come on when config.json lists them.
-	if toolsReg != nil && len(set.Settings().Tools.Enabled) > 0 {
-		toolsReg.SetEnabled(set.Settings().Tools.Enabled)
-	}
-
-	// the compactor is wired lazily so the agent options can close over it before
-	// the *Agent it needs exists, and it is assigned once, right after agent.New.
-	var comp *compactor
-	env := agent.DetectEnvironment()
-	// user-global instructions layer before the project's, so the more specific
-	// cwd file comes later in context. An unresolvable home is skipped silently.
-	globalDir, _ := config.Home()
-	proj, perr := agent.LoadProjectInstructions(globalDir, env.Cwd)
-	if perr != nil {
-		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
-	}
-	opts := agent.Options{
-		Sinks:               []agent.Sink{sink},
-		Env:                 env,
-		ProjectInstructions: proj,
-		SystemPrompt:        set.Settings().Agent.SystemPrompt, // config or --system, replaces default guidance
-		Tools:               toolsReg,
-		Provider: func(m llm.Model) (llm.Provider, error) {
-			return providers.ProviderFor(m)
-		},
-		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {
-			if comp == nil {
-				return false, nil // recording is off, nothing to compact
-			}
-			return comp.run(ctx, reason, "")
-		},
-		TurnBoundary: func() {
-			if comp != nil {
-				comp.endTurn()
-			}
-		},
-		MaxSteps:    set.Settings().Agent.MaxSteps, // <= 0 or unset means unlimited
-		TurnRetries: set.Settings().Agent.TurnRetries,
-		SessionID:   sessionHint(rec),
-	}
-	if rec != nil {
-		opts.Sinks = []agent.Sink{rec.rec.Sink(sink)} // persist notices and fsync at turn end
-		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
-		rec.rebuild(set, ui, reg, st, toolsReg)
-	}
-
-	// the editor's in-progress text feeds accounting (SetOnEdit below) and clears on
-	// submission via settled. editSinks may be empty before a session is set up.
-	editSinks := opts.Sinks // may be empty before a session is set up
-	pushContext := func() {
-		if len(editSinks) == 0 {
-			return
-		}
-		c := st.Tokens.Context()
-		for _, s := range editSinks {
-			s.Context(c)
-		}
-	}
-	// once a submitted prompt and everything behind it lands in state, pending owns
-	// its tokens. The submit bucket must clear so they are never counted twice.
-	settled := func() {
-		if len(editSinks) > 0 {
-			st.Tokens.SetSubmit(0)
-			pushContext()
-		}
-	}
 	// one app-lifetime root ties every derived operation (the prompt pump, staged
 	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
 	// and again on any return path via the defer, so tool work dies with the app.
+	// Signal handling installs here, ahead of the control socket binding below,
+	// so a socket that exists proves a signal will be caught.
 	appRoot, stopApp := context.WithCancel(context.Background())
 	defer stopApp()
-
-	// the stager owns `!` shell lines: they run immediately through the real bash
-	// tool and stage their output for delivery to the model. Built before the
-	// steer queue, whose delivery paths flush staged output into the batch.
-	stager := command.NewStager(appRoot, toolsReg, sink)
-	// prompts submitted while a turn runs queue here: they render as dimmed rows,
-	// hand over at the next step boundary (or the next turn), and recover to the
-	// editor on interrupt or Alt+Up. Staged shell output rides whichever prompt
-	// delivers, never a submission that might be recalled or aborted.
-	q := newSteerQueue(ui,
-		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
-		settled,
-		stager.WaitReady,
-		stager.TakeReady,
-	)
-	// /copy reads the transcript as of the last turn end while a turn streams,
-	// never the live list the loop goroutine is appending to
-	snap := &turnSnapshot{st: st}
-	snap.seed(st.Messages)
-	// hints arbitrates the one hint status line across its sources: the typing hold and
-	// the control loop's quit/cancel notices
-	hints := uiHintBoard(ui)
-	// typingGate holds the next step boundary while the user is mid-message, so a
-	// prompt they are still typing lands in this step instead of behind it.
-	gate := &typingGate{
-		idle:      typingIdle,
-		handoff:   typingHandoff,
-		poll:      typingPoll,
-		pending:   q.pending,
-		searching: ui.Searching,
-	}
-	// the hold speaks through the shared hint board, so a quit countdown can
-	// take the line and hand it back to a still-held boundary when it releases.
-	gate.status = hints.Line().Set
-	// the editor's in-progress text feeds accounting so the context bar grows as you
-	// type or paste, then clears once submitted (the buffer empties), and it is also the
-	// typing signal the boundary hold reads.
-	ui.SetOnEdit(func(text string) {
-		gate.edit(text)
-		if len(editSinks) == 0 {
-			return
-		}
-		st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
-		pushContext()
-	})
-	var ag *agent.Agent
 
 	quit := make(chan struct{})
 
@@ -238,11 +143,176 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		}
 		select {
 		case <-sig:
-			ui.Close()
+			if term != nil {
+				ui.Close()
+			}
 			os.Exit(ExitTurn)
 		case <-shutdownDone:
 		}
 	}()
+
+	// the control socket binds before any loop starts, so a controller never
+	// races creation. Serve mode always has one (its only front end); an
+	// interactive run needs the deliberate config opt-in.
+	var ctlSrv *controlServer
+	if serve || set.Settings().Control.Enabled {
+		var cerr error
+		ctlSrv, cerr = startControl(hub, dialogs, rec, serve)
+		if cerr != nil {
+			if serve {
+				return "", fmt.Errorf("control socket: %w", cerr)
+			}
+			ui.Notify("control: "+cerr.Error(), tui.LevelWarn) // alive peer names the session, run continues
+		}
+	}
+
+	// the terminal sink renders turns locally; serve mode runs hub-only, its
+	// sink (fanout plus spinner tracking) standing in as the front end
+	var sink agent.Sink
+	if term != nil {
+		sink = tuisink.New(term)
+	} else {
+		sink = hub.sink()
+	}
+
+	// build the built-in tool registry and hand it to the loop so the model can
+	// read, write, edit and run commands.
+	// ask_user rides the TUI's question queue, so it never pre-empts a permission
+	// dialog. It stays disabled until a workflow enables it.
+	toolsReg, terr := builtinTools(set, reg, askUser(dialogs), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
+	if terr != nil {
+		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
+	}
+	hub.tools = toolsReg
+	// a configured enabled set replaces the built-in default (read/write/edit/bash),
+	// so find/grep/ls come on when config.json lists them.
+	if toolsReg != nil && len(set.Settings().Tools.Enabled) > 0 {
+		toolsReg.SetEnabled(set.Settings().Tools.Enabled)
+	}
+
+	// the compactor is wired lazily so the agent options can close over it before
+	// the *Agent it needs exists, and it is assigned once, right after agent.New.
+	var comp *compactor
+	// user-global instructions layer before the project's, so the more specific
+	// cwd file comes later in context. An unresolvable home is skipped silently.
+	globalDir, _ := config.Home()
+	proj, perr := agent.LoadProjectInstructions(globalDir, env.Cwd)
+	if perr != nil {
+		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
+	}
+	opts := agent.Options{
+		Sinks:               []agent.Sink{sink},
+		Env:                 env,
+		ProjectInstructions: proj,
+		SystemPrompt:        set.Settings().Agent.SystemPrompt, // config or --system, replaces default guidance
+		Tools:               toolsReg,
+		Provider: func(m llm.Model) (llm.Provider, error) {
+			return providers.ProviderFor(m)
+		},
+		Compact: func(ctx context.Context, reason agent.CompactReason) (bool, error) {
+			if comp == nil {
+				return false, nil // recording is off, nothing to compact
+			}
+			return comp.run(ctx, reason, "")
+		},
+		TurnBoundary: func() {
+			if comp != nil {
+				comp.endTurn()
+			}
+		},
+		MaxSteps:    set.Settings().Agent.MaxSteps, // <= 0 or unset means unlimited
+		TurnRetries: set.Settings().Agent.TurnRetries,
+		SessionID:   sessionHint(rec),
+	}
+	if term != nil {
+		opts.Sinks = append(opts.Sinks, hub.sink()) // hub fans out after the renderer
+	}
+	if rec != nil {
+		// recorder first, hub after: the order 34a's clients rely on. Serve mode
+		// wraps the hub sink directly, no renderer existing
+		opts.Sinks = []agent.Sink{rec.rec.Sink(sink)}
+		if term != nil {
+			opts.Sinks = append(opts.Sinks, hub.sink())
+		}
+		opts.OnMessage = []func(agent.MessageInfo){rec.rec.Message}
+		rec.rebuild(set, ui, reg, st, toolsReg)
+	}
+
+	// the editor's in-progress text feeds accounting (SetOnEdit below) and clears on
+	// submission via settled. editSinks may be empty before a session is set up.
+	editSinks := opts.Sinks // may be empty before a session is set up
+	pushContext := func() {
+		if len(editSinks) == 0 {
+			return
+		}
+		c := st.Tokens.Context()
+		for _, s := range editSinks {
+			s.Context(c)
+		}
+	}
+	// once a submitted prompt and everything behind it lands in state, pending owns
+	// its tokens. The submit bucket must clear so they are never counted twice.
+	settled := func() {
+		if len(editSinks) > 0 {
+			st.Tokens.SetSubmit(0)
+			pushContext()
+		}
+	}
+
+	// the stager owns `!` shell lines: they run immediately through the real bash
+	// tool and stage their output for delivery to the model. Built before the
+	// steer queue, whose delivery paths flush staged output into the batch.
+	stager := command.NewStager(appRoot, toolsReg, sink)
+	hub.stager = stager // prompts submitted while a turn runs queue here: they render as dimmed rows,
+	// hand over at the next step boundary (or the next turn), and recover to the
+	// editor on interrupt or Alt+Up. Staged shell output rides whichever prompt
+	// delivers, never a submission that might be recalled or aborted.
+	q := newSteerQueue(ui,
+		func(est int) { submitPrompt(st, editSinks, est, pushContext) },
+		settled,
+		stager.WaitReady,
+		stager.TakeReady,
+	)
+	hub.q = q
+	// /copy reads the transcript as of the last turn end while a turn streams,
+	// never the live list the loop goroutine is appending to
+	snap := &turnSnapshot{st: st}
+	snap.seed(st.Messages)
+	// hints arbitrates the one hint status line across its sources: the typing hold and
+	// the control loop's quit/cancel notices
+	hints := uiHintBoard(ui)
+	// typingGate holds the next step boundary while the user is mid-message, so a
+	// prompt they are still typing lands in this step instead of behind it.
+	searching := func() (bool, time.Time) { return false, time.Time{} } // serve: no editor, no search
+	if term != nil {
+		searching = ui.Searching
+	}
+	gate := &typingGate{
+		idle:      typingIdle,
+		handoff:   typingHandoff,
+		poll:      typingPoll,
+		pending:   q.pending,
+		searching: searching,
+	}
+	// the hold speaks through the shared hint board, so a quit countdown can
+	// take the line and hand it back to a still-held boundary when it releases.
+	gate.status = hints.Line().Set
+	// the editor's in-progress text feeds accounting so the context bar grows as you
+	// type or paste, then clears once submitted (the buffer empties), and it is also the
+	// typing signal the boundary hold reads. Serve mode has no editor: drafts arrive
+	// only through host fills on the hubUI wrapper.
+	if term != nil {
+		ui.SetOnEdit(func(text string) {
+			gate.edit(text)
+			hub.draft(text) // coalesced, secret-suppressed, droppable
+			if len(editSinks) == 0 {
+				return
+			}
+			st.Tokens.SetCompose(tokens.EstimateText(text, tokens.KindProse))
+			pushContext()
+		})
+	}
+	var ag *agent.Agent
 
 	// sub-agent investigations fan read-only work into throwaway child agents,
 	// each a fresh headless loop whose only return value is a final summary.
@@ -344,7 +414,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			po.Mode, po.ModeSet = m, true
 		}
 		// the ask-a-person paths install as one unit: dialogs open through the
-		// prompt adapter, note injection steers the running turn without stopping
+		// broker, note injection steers the running turn without stopping
 		// it, and Hold runs the typing gate's dialog hold so an approval dialog
 		// never steals a draft's focus.
 		po.Dialogs = &permit.Dialogs{
@@ -375,6 +445,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		barrier = permit.NewBarrier(toolsReg.ReadOnly, bd.options(po))
 		bd.install(barrier)
 		showPermissionIndicator(ui, barrier)
+		hub.barrier = barrier
 
 		// OnToolBatch hands each step's calls (in message order) to sub-agent id
 		// reservation and permission prefetch, wired before agent.New copies Options.
@@ -402,6 +473,8 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	}
 
 	ag = agent.New(st, opts)
+	hub.ag = ag
+	hub.syncLedger() // a resume rebuilt the ledger snapshots read
 
 	// starts answers the run's two dispatch questions: committed gates whether
 	// tool schemas count toward the bar (a resumed branch with history already
@@ -418,7 +491,6 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	pushContext()
 
 	if rec != nil {
-		rec.bindRewind(ui, ag, reg)
 		comp = &compactor{
 			rec: rec, st: st, ag: ag, reg: reg,
 			sink:        opts.Sinks[0], // set above when rec != nil
@@ -488,7 +560,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		starts: starts, quit: quitNow, permit: barrier,
-		q: q, snap: snap,
+		q: q, snap: snap, hub: hub, dialogs: dialogs,
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
@@ -521,6 +593,7 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		cwd: config.Cwd(), toolsReg: toolsReg, sink: sink, ag: ag,
 		notify: ui.Notify, agents: sag, watch: initSeen, pump: pump,
 	})
+	hub.initCtl = ictl
 	if ictl != nil {
 		ictl.runner.Seed(st.Messages) // a resumed transcript already holds /init ids
 	}
@@ -533,24 +606,12 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 		// /compact <instructions> still wins.
 		comp.focus = ctl.Focus
 	}
-	onModeCycle := func(back bool) {
-		if barrier == nil {
-			return
-		}
-		var m permit.Mode
-		if back {
-			m = barrier.Prev()
-		} else {
-			m = barrier.Cycle() // re-evaluates any open dialog under the new mode
-		}
-		showPermissionIndicator(ui, barrier)
-		ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
-	}
-	go controlLoop(appRoot, ui, ui.Controls(), hints, ag, q, stager, ictl, quitNow, onModeCycle)
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.starts = starts
 		rec.onSwitch = func(msgs []llm.Message) {
+			hub.syncLedger() // a switch replaced the ledger snapshots read
+			hub.setHead(rec.w.Head())
 			if t := toolsReg.Tracker(); t != nil {
 				t.Reset() // reads the new context lacks must re-inject, not dedupe
 			}
@@ -561,37 +622,70 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 			snap.seed(msgs) // mid-turn /copy reflects the switched context, not the old branch
 		}
 	}
-	ui.SetCompleter(command.NewCompleter(cmds, console, idx))
+	if term != nil {
+		ui.SetCompleter(command.NewCompleter(cmds, console, idx))
+	}
 
 	// Ctrl+R searches this workspace's typed lines merged with recorded prompts
 	// across sessions; plain ↑/↓ recall only the open session's own tree, falling
 	// back to that search scope until the session has prompts of its own. Every
-	// submitted line also lands in the editor-history file now.
+	// submitted line also lands in the editor-history file now. Serve mode keeps
+	// no recall store: there is no editor to recall into.
 	var hist *session.EditorHistory
-	if store := promptStore(rec); store != nil {
-		hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
-		defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
-		idx := session.NewRecallIndex(store, config.Cwd(), secretPrefix, hist)
-		ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
-		if rec != nil && rec.w != nil {
-			sess := session.NewTranscriptIndex(rec.w.Path(), secretPrefix)
-			ui.SetPromptHistory(func() []string { return session.PromptTexts(sess.Prompts()) })
+	if term != nil {
+		if store := promptStore(rec); store != nil {
+			hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
+			defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
+			idx := session.NewRecallIndex(store, config.Cwd(), secretPrefix, hist)
+			ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
+			if rec != nil && rec.w != nil {
+				sess := session.NewTranscriptIndex(rec.w.Path(), secretPrefix)
+				ui.SetPromptHistory(func() []string { return session.PromptTexts(sess.Prompts()) })
+			}
 		}
 	}
 
-	if ctl != nil {
-		// a manual rewind invalidates the workflow's branch points, so it ends first
-		ui.SetOnRewind(func() {
-			if ctl.Active() {
-				ctl.Stop()
-			}
-			rec.rewind(ui, ag, reg)
-		})
-		ctl.Restore() // pick a mid-workflow session back up before the first prompt
+	// shared dispatch for every submitted line, so a second source routes unchanged.
+	// Wired before the control loop starts, so every hub entry is live from the
+	// first keypress.
+	router := &lineRouter{ui: ui, send: send, stager: stager, gate: gate, hist: hist}
+	hub.setSubmitLine(router.submit)
+	if term != nil {
+		go controlLoop(appRoot, ui.Controls(), hints, hub, quitNow)
 	}
 
-	// a first start with no palette chosen picks one before any output exists
-	if ui.Mode() != tui.ModePlain {
+	// the rewind entry both fronts share: a manual double-Esc and a remote
+	// session.rewind end an active plan workflow first, then switch branches.
+	// Wired after the plan controller exists; a control request that races the
+	// wiring sees the unavailable error, never a partial rewind.
+	if rec != nil {
+		rewindTo := func(head string) (string, error) {
+			if ctl != nil && ctl.Active() {
+				ctl.Stop()
+			}
+			return rec.rewindTo(ui, ag, reg, head)
+		}
+		hub.setRewindTo(rewindTo)
+		if term != nil {
+			ui.SetOnRewind(func() {
+				if head, ok := rec.pickRewind(ui); ok {
+					_, _ = rewindTo(head)
+				}
+			})
+		}
+	}
+	if ctl != nil {
+		ctl.Restore() // pick a mid-workflow session back up before the first prompt
+	}
+	if ctlSrv != nil {
+		// wiring is complete, so every hub entry and snapshot source reads
+		// consistent: connection loops may start dispatching against it now
+		ctlSrv.start()
+	}
+
+	// a first start with no palette chosen picks one before any output exists;
+	// serve mode renders nothing, so no palette applies
+	if term != nil && ui.Mode() != tui.ModePlain {
 		if terr := command.ThemeSetup(appRoot, console); terr != nil {
 			ui.Notify("theme: "+terr.Error(), tui.LevelWarn)
 		}
@@ -668,26 +762,33 @@ func Driver(ui *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, se
 				}()
 			}
 			wg.Wait()
+			if ctlSrv != nil {
+				// session.exit flushes to every observer, then the socket unlinks
+				ctlSrv.Close("")
+			}
 			close(shutdownDone)
 		})
 	}
 	defer shutdown()
 
-	// shared dispatch for every submitted line, so a second source routes unchanged
-	router := &lineRouter{ui: ui, send: send, stager: stager, gate: gate, hist: hist}
-
+	// serve mode reads no editor lines: the nil channel blocks this case out of
+	// the select and the run ends on quit alone
+	var editorLines <-chan string
+	if term != nil {
+		editorLines = ui.Messages()
+	}
 	for {
 		select {
-		case msg, ok := <-ui.Messages():
+		case msg, ok := <-editorLines:
 			if !ok {
 				// UI went away (stdin EOF): same ordered teardown as a user quit
 				shutdown()
-				return rec.exitLabel() // drop an abandoned session, else the resume hint label
+				return rec.exitLabel(), nil // drop an abandoned session, else the resume hint label
 			}
 			router.route(msg, true)
 		case <-quit:
 			shutdown()
-			return rec.exitLabel() // drop an abandoned session, else the resume hint label
+			return rec.exitLabel(), nil // drop an abandoned session, else the resume hint label
 		}
 	}
 }
@@ -711,16 +812,28 @@ func appendHistory(hist *session.EditorHistory, prefix string, msg string, line 
 // commands and prompts queue for the pump. Editor-coupled side effects (recall
 // history, clipboard image tokens) stay behind fromEditor.
 type lineRouter struct {
-	ui     *tui.UI
+	ui     *hubUI
 	send   func(pumpLine)
 	stager *command.Stager
 	gate   *typingGate
 	hist   *session.EditorHistory // nil when no recall store exists
 }
 
-// route parses one submitted line and hands it to its dispatcher. fromEditor
-// marks a line that left the prompt editor. Other sources pass false.
+// route parses one submitted editor line and hands it to its dispatcher.
+// fromEditor marks a line that left the prompt editor. Other sources pass
+// false and carry no origin.
 func (r *lineRouter) route(msg string, fromEditor bool) {
+	r.dispatch(msg, fromEditor, "")
+}
+
+// submit routes one line from a non-editor source: identical classification,
+// editor-coupled side effects excluded, origin recorded where the line lands
+// on the transcript.
+func (r *lineRouter) submit(line, origin string) {
+	r.dispatch(line, false, origin)
+}
+
+func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) {
 	line := command.ParseLine(msg)
 	if line.Multiline {
 		r.ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
@@ -748,7 +861,7 @@ func (r *lineRouter) route(msg string, fromEditor bool) {
 		// arm the handoff at submit time. A remote prompt arms too so a held
 		// boundary treats it like a just-typed line
 		r.gate.submitted()
-		r.send(pumpLine{kind: command.KindPrompt, rest: line.Rest, blocks: blocks})
+		r.send(pumpLine{kind: command.KindPrompt, rest: line.Rest, origin: origin, blocks: blocks})
 	}
 }
 
@@ -811,7 +924,10 @@ func abortRunning(ag *agent.Agent, q *steerQueue, stager *command.Stager) bool {
 	return true
 }
 
-func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, hints *hintBoard, ag *agent.Agent, q *steerQueue, stager *command.Stager, initCtl *initController, quitNow func(), onModeCycle func(back bool)) {
+// controlLoop serves the terminal's out-of-band keys until the UI goes away,
+// routing each through the same hub methods an out-of-process client calls.
+func controlLoop(ctx context.Context, controls <-chan tui.Control, hints *hintBoard, hub *sessionHub, quitNow func()) {
+	ui := hub.ui
 	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
 	// that advertises the window, keeping the gesture and the hint the same
 	// length. The window is measured from armed, not from the timer, so a press
@@ -858,23 +974,15 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 					}
 				}()
 			case tui.ControlEscape:
-				switch {
-				case abortRunning(ag, q, stager):
-				case initCtl.abort(): // a minutes-long /init survey is escapable too
-				case stager.Pending():
-					stager.Cancel() // Esc cancels an in-flight staged shell command
-				}
+				hub.Interrupt()
 			case tui.ControlInterrupt:
-				if abortRunning(ag, q, stager) {
+				switch hub.Interrupt() {
+				case stopTurn:
 					continue
-				}
-				if initCtl.abort() {
+				case stopSurvey:
 					hints.ShowFor("cancelled project survey", "", hintNoticeTTL)
 					continue
-				}
-				// a running `!` cancels on the first Ctrl+C instead of quitting
-				if stager.Pending() {
-					stager.Cancel()
+				case stopShell:
 					hints.ShowFor("cancelled shell command", "", hintNoticeTTL)
 					continue
 				}
@@ -889,21 +997,17 @@ func controlLoop(ctx context.Context, ui *tui.UI, controls <-chan tui.Control, h
 				quitHint = time.After(doublePressWindow)
 				arm.Set("ctrl+c again to quit", "")
 			case tui.ControlEOF:
-				if ag.Running() {
+				if hub.ag != nil && hub.ag.Running() {
 					continue // ignored while a turn streams, per the key table
 				}
 				quitNow()
 				return
 			case tui.ControlRecallQueued:
-				q.recall() // Alt+Up: pop the newest queued message back into the editor
+				hub.q.recall() // Alt+Up: pop the newest queued message back into the editor
 			case tui.ControlModeCycle:
-				if onModeCycle != nil {
-					onModeCycle(false)
-				}
+				hub.ModeCycle(false)
 			case tui.ControlModeCycleBack:
-				if onModeCycle != nil {
-					onModeCycle(true)
-				}
+				hub.ModeCycle(true)
 			}
 		}
 	}

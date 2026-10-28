@@ -64,6 +64,7 @@ type MessageData struct {
 	Usage    llm.Usage      `json:"usage,omitzero"`
 	Injected bool           `json:"injected,omitempty"` // system context excluded from prompt recall
 	Replayed bool           `json:"replayed,omitempty"` // injected context that still belongs in restored scrollback
+	Origin   string         `json:"origin,omitempty"`   // submitter of a non-typed prompt, "controller" today
 }
 
 // CompactionData records a context reduction without deleting anything.

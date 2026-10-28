@@ -74,6 +74,7 @@ governs its assembly and use.
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
 | Staged shell results | the `!` user message: `User Ran:` / `Output:` ahead of your next prompt; `!!` sends nothing |
+| Controller-submitted prompts | the transcript's `origin` annotation; no in-context marker |
 
 ## Staged shell results
 
@@ -99,6 +100,27 @@ mark is what puts it back on screen: injected context the model still carries
 belongs in restored scrollback, so a resume or rewind redraws the run above the
 prompt it fed instead of showing a prompt whose premise has vanished. How replay
 renders it lives in `tui-design.md`.
+
+---
+
+## Controller-submitted prompts
+
+A prompt arriving over the control socket is an authorized human proxy, so it
+reaches the model as an ordinary user message: byte-identical to the line the
+controller submitted, no wrapper, no in-context marker. Its provenance is a
+transcript annotation instead — the message entry records `origin:
+"controller"` beside the existing message-level marks (`injected`, `replayed`),
+empty for typed lines.
+
+The annotation is deliberately **not** the `Input.Injected` flag. The steer
+queue groups runs by that flag and replay derives echo and scrollback from it,
+so a controller prompt must keep grouping, echoing and recalling like the user
+line it emulates. Enforced invariants: the message text is the submitted line
+verbatim (cache-stable like any user turn), and the origin survives the queue
+join, the transcript write and resume parsing unchanged. Anything else a
+future source might inject (an extension, a hook) follows the same rule:
+annotate, never wrap, unless the model must be able to tell the text from a
+user's own words.
 
 ---
 

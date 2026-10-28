@@ -66,7 +66,7 @@ func TestRunPump(t *testing.T) {
 				return nil
 			},
 		})
-		console := &uiConsole{ui: ui, commands: cmds}
+		console := &uiConsole{ui: wrapUI(t, ui), commands: cmds}
 		pump := make(chan pumpLine, 4)
 		starts := newStartState(false)
 		ctx, cancel := context.WithCancel(t.Context())
@@ -75,7 +75,7 @@ func TestRunPump(t *testing.T) {
 		stager := command.NewStager(ctx, nil, nil)
 		go func() {
 			runPump(ctx, pump, nil, console, stager, nil,
-				false, ui, starts, func() {},
+				false, wrapUI(t, ui), starts, func() {},
 				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady),
 				nil, &agent.State{Tokens: tokens.New(llm.Model{})}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
@@ -182,7 +182,7 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 	waitReady, takeReady := stagePair(t)
 	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}, Tokens: tokens.New(llm.Model{ID: "m", Provider: "p"})}
-	console := &uiConsole{ui: ui, commands: cmds, st: st, q: q}
+	console := &uiConsole{ui: wrapUI(t, ui), commands: cmds, st: st, q: q}
 	applied := make(chan struct{})
 	console.deferred = append(console.deferred, func() { close(applied) })
 
@@ -194,7 +194,7 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 	var drain drainWaiter
 	go func() {
 		runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
-			false, ui, starts, func() {},
+			false, wrapUI(t, ui), starts, func() {},
 			q, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 		close(done)
 	}()
@@ -239,7 +239,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 			advance: func(context.Context) (agent.Input, bool) { return agent.Input{}, false },
 			parked:  func() bool { return true },
 		}
-		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, starts, hooks, &drain)
+		startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "plan"}}, starts, hooks, &drain)
 		drain.wait(5 * time.Second)
 
 		require.True(t, starts.dispatched.marked())
@@ -264,7 +264,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		var drain drainWaiter
-		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "plan"}}, starts, planHooks{}, &drain)
+		startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "plan"}}, starts, planHooks{}, &drain)
 		drain.wait(5 * time.Second)
 
 		require.Len(t, p.Requests(), 2) // no workflow: steering delivers as before
@@ -286,7 +286,7 @@ func TestStartDrainIdle(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		var drain drainWaiter
-		startDrain(ctx, ui, true, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+		startDrain(ctx, wrapUI(t, ui), true, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 		assert.False(t, ui.Idle()) // the dispatch owns Esc's interrupt role at once
 
@@ -305,7 +305,7 @@ func TestStartDrainIdle(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
 		var drain drainWaiter
-		startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+		startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 		drain.wait(5 * time.Second)
 		assert.False(t, ui.Idle()) // recording off: Esc never returns to rewind
@@ -321,7 +321,7 @@ func TestRunPumpParkedHold(t *testing.T) {
 		{Events: textTurn("held reply")},
 	}}
 	ag, st := scriptedAgent(p)
-	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
+	console := &uiConsole{ui: wrapUI(t, ui), commands: command.NewRegistry()}
 	waitReady, takeReady := stagePair(t)
 	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
 
@@ -343,7 +343,7 @@ func TestRunPumpParkedHold(t *testing.T) {
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), nil,
-		false, ui, starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+		false, wrapUI(t, ui), starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
 
 	pump <- pumpLine{kind: command.KindPrompt, rest: "note", input: &agent.Input{Text: "note", Injected: true}}
 	require.Eventually(t, func() bool { return q.pending() == 1 }, time.Second, time.Millisecond)
@@ -369,7 +369,7 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 		{Events: textTurn("later reply")},
 	}}
 	ag, st := scriptedAgent(p)
-	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
+	console := &uiConsole{ui: wrapUI(t, ui), commands: command.NewRegistry()}
 
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "parked-flush"})
 	require.NoError(t, err)
@@ -398,7 +398,7 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, stager, expander,
-		false, ui, starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+		false, wrapUI(t, ui), starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
 
 	stager.Run("echo boom", false)
 	require.Eventually(t, func() bool {
@@ -452,7 +452,7 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
-	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+	startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 	<-entered // the turn is pinned inside its tool call
 

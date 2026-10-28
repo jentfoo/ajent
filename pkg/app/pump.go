@@ -19,6 +19,9 @@ import (
 type pumpLine struct {
 	kind command.Kind
 	rest string
+	// origin names a non-editor submitter ("controller"), recorded onto the
+	// message entry; empty means the line was typed locally.
+	origin string
 	// blocks are image payloads captured from clipboard tokens in rest, appended
 	// to the turn's input after the text.
 	blocks []llm.Block
@@ -66,7 +69,7 @@ func newStartState(committed bool) *startState {
 
 // runPump serves submitted lines until ctx (appRoot) is canceled. The pump
 // channel is never closed, so senders never race a close.
-func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *tui.UI, starts *startState, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
+func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *hubUI, starts *startState, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -184,6 +187,7 @@ func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (age
 		Blocks:   line.blocks, // clipboard images ride after the text
 		After:    res.Run,
 		Prepared: true, // expanded here, the append seam must not re-expand
+		Origin:   line.origin,
 	}, echo, res.Est
 }
 
@@ -241,7 +245,7 @@ func (d *drainWaiter) wait(timeout time.Duration) {
 }
 
 // startDrain runs inputs as the turn goroutine, its exit observable on drain.
-func startDrain(ctx context.Context, ui *tui.UI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, starts *startState, hooks planHooks, drain *drainWaiter) {
+func startDrain(ctx context.Context, ui *hubUI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, starts *startState, hooks planHooks, drain *drainWaiter) {
 	// stamped before idle drops so a stale exit skips rather than races this write
 	gen := q.nextGen()
 	ui.SetIdle(false)

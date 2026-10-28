@@ -26,6 +26,7 @@ type Input struct {
 	Injected  bool                                // system-injected context (not a typed prompt), excluded from recall
 	Echo      string                              // injected-only live echo, drawn as the message lands; empty stays silent
 	Prepared  bool                                // already expanded or host-authored, Options.NormalizeInput skips it
+	Origin    string                              // submitter of a non-typed prompt ("controller"), recorded on the transcript
 }
 
 // State is the in-memory projection of a session. It is owned by the loop
@@ -61,8 +62,9 @@ type MessageInfo struct {
 	Message  llm.Message
 	Stop     llm.StopReason // assistant messages only
 	Usage    llm.Usage
-	Injected bool // system-injected context, excluded from prompt recall
-	Replayed bool // injected context that still belongs in restored scrollback
+	Injected bool   // system-injected context, excluded from prompt recall
+	Replayed bool   // injected context that still belongs in restored scrollback
+	Origin   string // submitter of a non-typed prompt, empty when typed locally
 }
 
 // BeforeMessages returns the bare messages of infos, in order.

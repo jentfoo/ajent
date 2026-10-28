@@ -28,7 +28,8 @@ import (
 // q is the state gate: while a drain goroutine owns State, writes queue and the
 // pump applies them once it exits.
 type uiConsole struct {
-	ui       *tui.UI
+	ui       *hubUI
+	dialogs  *interactionBroker // the brokered dialog surface, nil in tests without one
 	set      *config.Set
 	reg      *llm.Registry
 	st       *agent.State
@@ -40,6 +41,7 @@ type uiConsole struct {
 	mcp      mcpAdapter      // the MCP server manager adapter, or nil
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
+	hub      *sessionHub     // control plane, set by the driver for rename tracking
 
 	// q gates state writes against a live drain goroutine; nil applies at once
 	q *steerQueue
@@ -64,27 +66,27 @@ func (c *uiConsole) Notify(msg string, level tui.Level) { c.ui.Notify(msg, level
 func (c *uiConsole) Print(markdown string)              { c.ui.Print(markdown) }
 
 func (c *uiConsole) Pick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.PickOptions) (int, error) {
-	return c.ui.PickContext(ctx, prompt, items, opts)
+	return c.dialogs.Pick(ctx, prompt, items, opts)
 }
 
 func (c *uiConsole) MultiPick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.MultiPickOptions) ([]int, error) {
-	return c.ui.MultiPickContext(ctx, prompt, items, opts)
+	return c.dialogs.MultiPick(ctx, prompt, items, opts)
 }
 
 func (c *uiConsole) Select(ctx context.Context, prompt string, options []tui.Option) (int, error) {
-	return c.ui.SelectContext(ctx, prompt, options)
+	return c.dialogs.Select(ctx, prompt, options)
 }
 
 func (c *uiConsole) Confirm(ctx context.Context, prompt string) (bool, error) {
-	return c.ui.ConfirmContext(ctx, prompt)
+	return c.dialogs.Confirm(ctx, prompt)
 }
 
 func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (string, error) {
-	return c.ui.InputContext(ctx, label, placeholder)
+	return c.dialogs.Input(ctx, label, placeholder)
 }
 
 func (c *uiConsole) InputSecret(ctx context.Context, label, placeholder string) (string, error) {
-	return c.ui.InputSecretContext(ctx, label, placeholder)
+	return c.dialogs.InputSecret(ctx, label, placeholder)
 }
 
 func (c *uiConsole) ColorProfile() tui.ColorProfile { return c.ui.ColorProfile() }
@@ -191,7 +193,13 @@ func (c *uiConsole) SetSessionName(name string) error {
 	if err := c.sess.store.NameConflict(config.Cwd(), canonical, c.sess.w.Path()); err != nil {
 		return err
 	}
-	return c.rec.Rename(canonical)
+	if err := c.rec.Rename(canonical); err != nil {
+		return err
+	}
+	if c.hub != nil {
+		c.hub.setSessionName(canonical) // snapshots report the live name
+	}
+	return nil
 }
 
 // keyPermissionMode is the dotted config key driving the live permission barrier.
@@ -354,7 +362,7 @@ func (c *uiConsole) applyModel(m llm.Model) {
 	// /model rescales the bar immediately rather than on the next turn.
 	t := c.st.Tokens
 	t.SetModel(m) // drops every context term for the new window/reserve
-	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+	c.ui.SetModelOf(m)
 	// SetModel zeroed the ledger, so Used would read empty regardless of real
 	// occupancy. Remeasure against the actual in-memory messages: a switch to a
 	// smaller window must reflect that it now overflows, or threshold auto-compaction
@@ -555,7 +563,7 @@ func levelOrEmpty(rc llm.ReasoningConfig) string {
 
 // showReasoningIndicator shows the reasoning level in the status bar when it
 // differs from the resolved default, clearing it otherwise.
-func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
+func showReasoningIndicator(ui *hubUI, set *config.Set, st *agent.State) {
 	var text string
 	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
 		text = st.Reasoning.Level.String() // an explicit config choice stays visible even when clamped

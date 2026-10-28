@@ -13,22 +13,38 @@ import (
 // crash mid-turn resumes with its tool results intact.
 type Recorder struct {
 	w       *Writer
-	dropped string // first message-append failure since the last turn end
+	dropped string      // first message-append failure since the last turn end
+	watch   func(Entry) // optional observer of successful appends, app supplied
 }
 
 // NewRecorder returns a recorder that persists to w.
 func NewRecorder(w *Writer) *Recorder { return &Recorder{w: w} }
 
+// WatchAppend installs fn to observe each entry this recorder successfully
+// appends; nil clears it. The observer fires on the appending goroutine and
+// must not block or append itself.
+func (r *Recorder) WatchAppend(fn func(Entry)) { r.watch = fn }
+
+// append writes one entry through w, observing it on success.
+func (r *Recorder) append(typ Type, data any) (Entry, error) {
+	e, err := r.w.Append(typ, data)
+	if err == nil && r.watch != nil {
+		r.watch(e)
+	}
+	return e, err
+}
+
 // Message records one appended message. Wire as agent.Options.OnMessage. A
 // failure is held for TurnEnd, which surfaces it as a notice rather than
 // dropping the message silently.
 func (r *Recorder) Message(info agent.MessageInfo) {
-	_, err := r.w.Append(TypeMessage, MessageData{
+	_, err := r.append(TypeMessage, MessageData{
 		Message:  info.Message,
 		Stop:     info.Stop,
 		Usage:    info.Usage,
 		Injected: info.Injected,
 		Replayed: info.Replayed,
+		Origin:   info.Origin,
 	})
 	if err != nil && r.dropped == "" {
 		r.dropped = "failed to record message: " + err.Error()
@@ -51,12 +67,12 @@ func (r *Recorder) Sink(next agent.Sink) agent.Sink {
 
 // ModelChange records a model switch by its canonical key.
 func (r *Recorder) ModelChange(m llm.Model, reason string) {
-	_, _ = r.w.Append(TypeModelChange, ModelData{Model: m.Key(), Reason: reason})
+	_, _ = r.append(TypeModelChange, ModelData{Model: m.Key(), Reason: reason})
 }
 
 // Rename persists a new session name, which NameOf then reads back.
 func (r *Recorder) Rename(name string) error {
-	_, err := r.w.Append(TypeSessionName, NameData{Name: name})
+	_, err := r.append(TypeSessionName, NameData{Name: name})
 	return err
 }
 
@@ -66,7 +82,7 @@ func (r *Recorder) SettingChange(key string, value any) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.w.Append(TypeSettingChange, SettingData{Key: key, Value: raw})
+	_, err = r.append(TypeSettingChange, SettingData{Key: key, Value: raw})
 	return err
 }
 
@@ -76,7 +92,7 @@ func (r *Recorder) Custom(customType string, v any) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.w.Append(TypeCustom, CustomData{CustomType: customType, Data: raw})
+	_, err = r.append(TypeCustom, CustomData{CustomType: customType, Data: raw})
 	return err
 }
 
@@ -107,7 +123,7 @@ func (s *recordingSink) Context(c tokens.ContextState) {
 // Notice persists the notice then forwards it, persistence failures surfacing as
 // an error-level notice through the wrapped sink.
 func (s *recordingSink) Notice(msg string, level agent.Level) {
-	if _, err := s.rec.w.Append(TypeNotice, NoticeData{Message: msg, Level: level}); err != nil {
+	if _, err := s.rec.append(TypeNotice, NoticeData{Message: msg, Level: level}); err != nil {
 		s.next.Notice("failed to persist session: "+err.Error(), agent.LevelError)
 	}
 	s.next.Notice(msg, level)

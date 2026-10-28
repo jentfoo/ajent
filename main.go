@@ -93,6 +93,7 @@ func main() {
 		AllowTools: f.allowTools,
 		DenyTools:  f.denyTools,
 		Args:       f.args,
+		Serve:      f.serve,
 
 		SessMode:     sessMode,
 		SessTarget:   sessTarget,

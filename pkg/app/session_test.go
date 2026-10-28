@@ -513,7 +513,7 @@ func TestResumeSyncsActiveModel(t *testing.T) {
 	require.NoError(t, err)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	assert.Equal(t, "p/b", st.Model.Key())
 	assert.Equal(t, "p/b", reg.Active().Key()) // the /model preselect follows the resume
@@ -569,7 +569,7 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	// the session override 0.5 survives resume onto a model with no declared one,
 	// so the trigger and the bar read it rather than the global default.
@@ -631,7 +631,7 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	// the recorded frame lands in state, feeding the MCP restore set
 	assert.Equal(t, []string{"read", "write", "edit", "grep", "find", "ls"}, st.Tools)
@@ -700,7 +700,7 @@ func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	// the empty frame survives as empty, not nil, feeding every restore path
 	assert.NotNil(t, st.Tools)
@@ -1192,7 +1192,7 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	entries := readEntriesRewind(t, p)
 	ag, st, release := holdTurn(t)
 
-	err = r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: ")
+	err = r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, "rewind: ")
 
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head()) // the head never moved
@@ -1206,7 +1206,7 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 
 	release()
-	require.NoError(t, r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	require.NoError(t, r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, "rewind: "))
 	assert.True(t, switched) // the retry fires what the refusal held back
 	assert.True(t, resumed)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head())
@@ -1231,12 +1231,12 @@ func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	require.NoError(t, err)
 	ag, st, release := holdTurn(t)
 
-	err = r.restoreForkModel(ui, ag, reg, m)
+	err = r.restoreForkModel(wrapUI(t, ui), ag, reg, m)
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, "m", st.Model.ID) // the live model is untouched
 
 	release()
-	require.NoError(t, r.restoreForkModel(ui, ag, reg, m))
+	require.NoError(t, r.restoreForkModel(wrapUI(t, ui), ag, reg, m))
 	assert.Equal(t, "b", st.Model.ID)
 }
 
@@ -1278,7 +1278,7 @@ func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	rewound := make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	// one exclusive filter answers the picker; readLines queues it until the
 	// picker opens, so ordering against start above stays deterministic
@@ -1330,7 +1330,7 @@ func TestRewindRefusedAfterSwitch(t *testing.T) {
 	rewound := make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	<-rewound
 
@@ -1351,10 +1351,21 @@ func TestRewindRefusedAfterSwitch(t *testing.T) {
 	rewound = make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	<-rewound
 	assert.Equal(t, "b", st.Model.ID) // the restore landed on the retry
+}
+
+// rewindPicked runs the interactive rewind composition: answer the picker,
+// switch onto its choice. The driver's SetOnRewind body, shared with tests.
+func rewindPicked(t *testing.T, r *sessRec, ui *hubUI, ag *agent.Agent, reg *llm.Registry) {
+	t.Helper()
+	head, ok := r.pickRewind(ui)
+	if !ok {
+		return
+	}
+	_, _ = r.rewindTo(ui, ag, reg, head)
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.
@@ -1459,7 +1470,7 @@ func TestRebuildWarnsUnreadable(t *testing.T) {
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	require.NoError(t, os.Remove(p))
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "resume: transcript unreadable")
@@ -1477,7 +1488,7 @@ func TestRewindWarnsUnreadable(t *testing.T) {
 	r := &sessRec{w: w}
 	require.NoError(t, os.Remove(p))
 
-	r.rewind(ui, nil, nil) // the failure returns before the agent or registry are touched
+	r.pickRewind(wrapUI(t, ui)) // the failure returns before the agent or registry are touched
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "rewind: ")
@@ -1511,7 +1522,7 @@ func TestNewSessionSeedsSnapshot(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 
@@ -1564,7 +1575,7 @@ func TestResumeSurfacesSnapshotWarnings(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 
@@ -1597,7 +1608,7 @@ func TestResumeSeesConcurrentAppend(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 	require.NotEmpty(t, rec.snapshot.entries)

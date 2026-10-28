@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"os"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -15,7 +14,7 @@ import (
 )
 
 type promptAdapter struct {
-	ui   *tui.UI
+	ui   *hubUI
 	hold func(context.Context) // typing wait behind Hold
 	path tui.Completer         // @ completion for reasons and notes, nil when none
 }
@@ -26,39 +25,19 @@ func (a promptAdapter) Hold(ctx context.Context) {
 }
 
 func (a promptAdapter) Open(prompt, subject string, options []string) (permit.Dialog, error) {
-	if a.ui.Mode() == tui.ModePlain { // nobody to ask in headless/piped mode
-		return nil, tui.ErrNoUI
-	}
-	d := a.ui.OpenDecision(tui.DecisionRequest{Prompt: prompt, Context: subject, Options: tuiOptions(options)})
-	return decisionAdapter{d}, nil
+	return a.ui.dialogs.OpenDecision(tui.DecisionRequest{
+		Prompt: prompt, Context: subject, Options: tuiOptions(options),
+	})
 }
 
 func (a promptAdapter) Reason(ctx context.Context, label string) (string, bool) {
 	// a reason may name files, so @ refs complete like the prompt's; nil path is inert
-	ans, err := a.ui.Ask(ctx, tui.Question{Text: label, Completer: a.path})
+	ans, err := a.ui.dialogs.Ask(ctx, tui.Question{Text: label, Completer: a.path})
 	if err != nil || ans.Declined {
 		return "", false
 	}
 	return ans.Text, true
 }
-
-type decisionAdapter struct{ d *tui.Decision }
-
-func (a decisionAdapter) Wait(ctx context.Context) (int, error) {
-	r, err := a.d.Wait(ctx)
-	if err != nil {
-		// an explicit Esc is a real denial, not the headless no-UI path
-		if errors.Is(err, tui.ErrCancelled) {
-			return 0, permit.ErrDenied
-		}
-		return 0, err
-	}
-	return r.Index, nil
-}
-
-func (a decisionAdapter) Resolve(index int) { a.d.Resolve(index) }
-
-func (a decisionAdapter) Close() { a.d.Close() }
 
 func toolSchema(reg *tools.Registry) func(name string) (llm.ToolSchema, bool) {
 	return func(name string) (llm.ToolSchema, bool) {
@@ -178,11 +157,19 @@ func (a classifierAdapter) Classify(ctx context.Context, s permit.Subject) permi
 	return permit.NormalizeClass(out)
 }
 
-func showPermissionIndicator(ui *tui.UI, b *permit.Barrier) {
-	if ui == nil || b == nil {
+func showPermissionIndicator(ui *hubUI, b *permit.Barrier) {
+	if b == nil {
 		return
 	}
-	m := b.Mode()
+	showPermissionMode(ui, b.Mode())
+}
+
+// showPermissionMode mirrors the live mode onto the permissions segment, the
+// default mode hidden until the user changes it.
+func showPermissionMode(ui *hubUI, m permit.Mode) {
+	if ui == nil {
+		return
+	}
 	if m != permit.ModeAllowRead { // default: hidden until the user changes it
 		ui.SetStatusSegment(segment(segPermissions, m.String(), m.Short()))
 		return

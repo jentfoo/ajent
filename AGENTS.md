@@ -50,6 +50,7 @@ into a reference mirroring either surface.
 | `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
+| `control-design.md` | `pkg/ctl` (+ the server in `pkg/app`) | The per-session control socket and serve mode: the single control seat (claim, release-on-EOF, observer refusals), one routing path for every write method, transcript `origin` provenance for controller prompts, fail-open delivery with seq ordering and the watermark rule, the security model. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
 ## Architecture
@@ -112,11 +113,13 @@ Depth lives in the design docs above.
 
 - **`pkg/agent`** — the turn loop; everything else builds on it.
 - **`pkg/app`** — the only wiring layer, nothing imports it. Root `main()` short-circuits
-  `--version`/`--update`/`--delete`/`--delete-old` before calling into `app`.
+  `--version`/`--update`/`--delete`/`--delete-old` before calling into `app`. Also owns the
+  control-socket server and serve mode (`control*.go`, see `control-design.md`).
 - **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote (leaf).
 - **`pkg/command`** — `/slash`, `!shell`, prompt-line classification and completion.
 - **`pkg/compact`** — compaction: verbatim band, cut point, summary checkpoint.
 - **`pkg/config`** — layered settings with per-key provenance (leaf).
+- **`pkg/ctl`** — control-socket wire types and line codec; the versioned protocol both the app server and controllers import (leaf).
 - **`pkg/httputil`** — the hardened outbound HTTP client (leaf).
 - **`pkg/img`** — image sniff/downscale for model input (leaf).
 - **`pkg/llm`** — the streaming provider interface, capabilities, model registry.

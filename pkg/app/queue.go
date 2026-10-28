@@ -19,6 +19,9 @@ type queueUI interface {
 	SetInput(text string)
 	UserEcho(text string)
 	UserImages(imgs []tui.Image)
+	// Interactive reports whether a local editor exists to recover queued
+	// prompts into; serve mode has none and an interrupt drops them instead.
+	Interactive() bool
 }
 
 // steerQueue holds prompts submitted while a turn runs: they render as dimmed
@@ -320,20 +323,24 @@ func queuedLabel(it steerItem) string {
 
 // abort recovers every queued item into the editor, joined by newlines ahead of
 // any draft, and clears rows/items/accounting. Called before an interrupt so a
-// mid-turn message is never lost. The refresh runs on an empty queue too: a
-// directly dispatched prompt parked in the typing hold still holds its submit
+// mid-turn message is never lost. A run with no editor (serve mode) drops the
+// queued items instead: there is nothing to recover into, and pretending a
+// recall happened would hide the loss. The refresh runs on an empty queue too:
+// a directly dispatched prompt parked in the typing hold still holds its submit
 // reserve, and the interrupt that follows drops it without ever landing.
 func (s *steerQueue) abort() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.items) > 0 {
-		labels := make([]string, len(s.items))
-		for i, it := range s.items {
-			labels[i] = restoredLabel(it)
+		if s.ui.Interactive() {
+			labels := make([]string, len(s.items))
+			for i, it := range s.items {
+				labels[i] = restoredLabel(it)
+			}
+			s.ui.PrependInput(strings.Join(labels, "\n"))
 		}
 		s.items = nil
-		s.ui.PrependInput(strings.Join(labels, "\n"))
 	}
 	s.refreshLocked()
 }

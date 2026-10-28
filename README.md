@@ -202,6 +202,7 @@ Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P
   },
   "compaction": { "auto": true, "threshold": 0.8, "minSteps": 2, "verbatimFraction": 0.1 },
   "subagent": { "maxConcurrent": 4 },
+  "control": { "enabled": true },
   "ui": { "render": "auto", "theme": "dark-warm" },
   "disableUpdateCheck": true
 }
@@ -224,6 +225,7 @@ The top-level blocks:
   * `subagent.model` / `maxConcurrent` / `maxPollWait` / `maxSteps` - subagent specific configuration allows you to set a different model, as well as control concurrency and expected speed for running on local hardware.
   * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers, while an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
   * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default, and `/settings` can flip it for the session, while `AJENT_IMAGES_BLOCK=true` sets it for a single run.
+  * `control.enabled` - turn on the local control socket (see Control socket below). Off by default, restart to change it.
   * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
   * `ui.color` - color depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`. Any other value names the depth outright. That is the way out if your terminal is classified badly, since `256` turns on syntax highlighting where detection was too conservative and `none` turns color off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
   * `disableUpdateCheck` - turn off the startup update-available notice. Off by default, and a fork install or an offline machine that does not want to nag can set this once in the user layer.
@@ -259,6 +261,8 @@ The CLI is deliberately small. Run `ajent --help` for the full list, and the imp
                        for the session
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends
+    --serve            run with no terminal, serving the session over the
+                       control socket (needs control.enabled)
 ```
 
 Sessions are normally identified by an opaque id, and `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session, and `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
@@ -266,3 +270,30 @@ Sessions are normally identified by an opaque id, and `--resume` takes the full 
 `--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one. Delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. Piping stdin or stdout takes the same path, so `echo "question" | ajent` runs one turn and exits, the pipe standing in for `--prompt`. Bare `--resume` still wants its interactive picker, so a piped run refuses it (exit code 1) instead of silently starting a fresh transcript. Scripts should name the session (`--resume <id|name>`) or use `--continue`. There is no dialog in headless mode, so without a scope flag the barrier runs at **auto+write** (`permissions.headlessMode` overrides, and a scope flag overrides both): workspace-confined writes run free, and anything else the static analysis cannot verify is model-classified, its verdict final. Scope flags (`--allow-all`, `--read-only`, `--allow-auto`, `--allow-autowrite`) are mutually exclusive. `--allow-tools` pre-grants an "allow for session": a tool name (`--allow-tools write`, writers included), `bash` for any nameable shell call, or a bare word for bash commands with that head (`--allow-tools python3`). A nameable bash call no grant covers is still model-reviewed under the auto scopes, and a line static analysis cannot parse (redirect, substitution) refuses outright. `--deny-tools` withholds tools. A refusal in a one-shot reads `permission not given`, so a script never prompts and never hangs on a dialog.
+
+## Control socket
+
+Setting `"control": { "enabled": true }` exposes the running session on a local
+unix socket, `~/.ajent/control/<session-id>.sock`, so another program can watch
+it live: streaming output, tool activity, notices and every dialog the session
+opens are announced as it happens, and the transcript can be read back to
+reconcile. A controller that claims the control seat (`attach`) can also drive
+the session with the same authority as the keyboard: submitting prompts,
+commands and shell lines, answering dialogs (approval prompts included),
+interrupting and ending it. Only one connection holds the seat; everyone else
+is a read-only observer. It is **off by default** and same-user local only
+(the socket and its directory are locked to your account), so enabling it
+shares nothing beyond your own account. A second `ajent` on the same session
+refuses to start rather than fight over the socket, and the socket disappears
+when the run ends.
+
+`ajent --serve` runs the same session with **no terminal at all**: the socket is
+the only front end, prompts and dialogs hold until a controller answers them,
+and the run stays up until it is ended. Serve mode requires `control.enabled`
+and refuses otherwise. A plain one-shot (`-p`, piped stdio) never opens a
+socket: it exits with its one turn, so there is nothing to attach to.
+
+The `ctl-demo/` module in the repository builds `ajent-ctl`, a minimal example
+controller: `ajent-ctl -socket ~/.ajent/control/<id>.sock` attaches, prints the
+session state and transcript, streams events until the session exits, and can
+drive one interactively when given actions on stdin.

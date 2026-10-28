@@ -4,8 +4,6 @@ import (
 	"slices"
 	"sync"
 	"time"
-
-	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // hintBoard arbitrates the single "hint" status segment. Holders own slots. Only the most
@@ -27,7 +25,7 @@ func newHintBoard(set func(text, short string)) *hintBoard {
 }
 
 // uiHintBoard writes hints to the front end's hint segment.
-func uiHintBoard(ui *tui.UI) *hintBoard {
+func uiHintBoard(ui *hubUI) *hintBoard {
 	if ui == nil {
 		return &hintBoard{}
 	}
