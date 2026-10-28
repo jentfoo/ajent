@@ -177,3 +177,33 @@ func TestReadBytes(t *testing.T) {
 		assert.Equal(t, int64(9000), ReadBytes(Measurement{Kind: KindText, Bytes: 9000}))
 	})
 }
+
+func TestNumberLines(t *testing.T) {
+	t.Parallel()
+
+	out, lastEmitted, truncatedAt, total := numberLines([]byte("alpha\nbeta\ngamma\n"), 1, 10, 0, false)
+	require.Zero(t, truncatedAt)
+	assert.Equal(t, 3, lastEmitted)
+	assert.Equal(t, 3, total)
+	assert.Contains(t, out, "     1\talpha\n")
+
+	t.Run("overlong_line_reports_remainder", func(t *testing.T) {
+		long := []byte(strings.Repeat("y", MaxLineRunes+1500)) // 1.5 KB past the cap
+		out, _, truncatedAt, _ := numberLines(long, 1, 10, 0, false)
+		require.Zero(t, truncatedAt)
+		assert.Contains(t, out, " ... [line truncated, +1.5 KB]")
+	})
+
+	t.Run("tiny_remainder_rounds_up", func(t *testing.T) {
+		long := []byte(strings.Repeat("y", MaxLineRunes+5))
+		out, _, truncatedAt, _ := numberLines(long, 1, 10, 0, false)
+		require.Zero(t, truncatedAt)
+		assert.Contains(t, out, " ... [line truncated, +0.1 KB]")
+	})
+
+	t.Run("short_line_no_marker", func(t *testing.T) {
+		out, _, truncatedAt, _ := numberLines([]byte("ok\n"), 1, 10, 0, false)
+		require.Zero(t, truncatedAt)
+		assert.NotContains(t, out, "truncated")
+	})
+}

@@ -226,7 +226,7 @@ func TestBashOutputElision(t *testing.T) {
 
 	// a single overlong line under every bound is still capped and spilled
 	t.Run("overlong_line_within_bounds_capped_and_spilled", func(t *testing.T) {
-		long := strings.Repeat("y", 2000)
+		long := strings.Repeat("y", MaxLineRunes+100)
 		cmd := fmt.Sprintf(`{"command":"printf '%%s\\n' '%s'"}`, long)
 		r := newBashWithLimit(t, Limit{Lines: 10}, cmd)
 		assert.False(t, r.res.IsError)
@@ -240,7 +240,7 @@ func TestBashOutputElision(t *testing.T) {
 		require.NotNil(t, m, "spill path must be named")
 		dat, err := os.ReadFile(m[1])
 		require.NoError(t, err) // the spilled file really holds the complete stream
-		assert.Contains(t, string(dat), strings.Repeat("y", 2000))
+		assert.Contains(t, string(dat), long)
 	})
 }
 

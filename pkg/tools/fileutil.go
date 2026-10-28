@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"strings"
 
@@ -163,8 +164,10 @@ func numberLines(data []byte, start, limit int, maxBytes int, explicitLimit bool
 	end := min(start+limit-1, total)
 	for i := start - 1; i < end; i++ {
 		line := capLine(string(lines[i]))
-		if len(line) < len(lines[i]) { // capped: say so, offset cannot reach the rest
-			line += " ... [line truncated]"
+		if dropped := len(lines[i]) - len(line); dropped > 0 { // capped: say what remains, offset cannot reach it
+			// ceil to one decimal so a tiny remainder never reads "+0.0 KB"
+			kb := math.Ceil(float64(dropped)*10/(1<<10)) / 10
+			line += fmt.Sprintf(" ... [line truncated, +%.1f KB]", kb)
 		}
 		if b.Len() > 0 && maxBytes > 0 && b.Len()+len(line)+1 > maxBytes {
 			return b.String(), i, i, total // byte bound: whole lines only

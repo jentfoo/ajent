@@ -139,9 +139,9 @@ func applyLimit(dst *Limit, src Limit) {
 // never reads the file to count lines, so annotating a giant file is itself bounded.
 const MeasureCeiling int64 = 512 << 10
 
-// MaxLineRunes caps a single line before it is emitted. Counted in runes so an
-// all-CJK minified file cannot eat the whole budget either.
-const MaxLineRunes = 1024
+// MaxLineRunes caps a single line before it is emitted, about 2 KB of ASCII.
+// Counted in runes so an all-CJK minified file cannot eat the whole budget either.
+const MaxLineRunes = 2048
 
 // Bounded describes one truncation: the kept head plus totals for the footer.
 type Bounded struct {
