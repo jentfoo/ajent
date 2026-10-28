@@ -94,6 +94,7 @@ func main() {
 		DenyTools:  f.denyTools,
 		Args:       f.args,
 		Serve:      f.serve,
+		Attach:     f.attach,
 
 		SessMode:     sessMode,
 		SessTarget:   sessTarget,

@@ -34,6 +34,7 @@ type cliFlags struct {
 	sessionName  string // --session <name>: resume that name, creating it when new
 	sessionGiven bool   // --session was given, so an empty name is a usage error
 	serve        bool   // --serve: run with the control socket as the only front end
+	attach       string // --attach <socket>: mirror a running session over its control socket
 
 	deleteTarget  string // --delete <name|id>: the session to remove from disk
 	deleteGiven   bool   // --delete was given, so an empty target is a usage error
@@ -96,6 +97,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.StringVar(&f.sessionName, "session", "", "resume the session with this name, creating it if it does not exist")
 	fs.BoolVar(&f.serve, "serve", false,
 		"run with no terminal, serving the session over the local control socket (needs control.enabled)")
+	fs.StringVar(&f.attach, "attach", "",
+		"attach this terminal to a running session's control socket and mirror it live")
 	fs.StringVar(&f.deleteTarget, "delete", "", "delete the saved session with this name or id, then exit")
 	fs.BoolVarP(&f.version, "version", "v", false, "print version and exit")
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
@@ -170,7 +173,7 @@ func (f cliFlags) validate() error {
 			// only a day count follows --delete-old, so a leftover positional is one
 			// that did not parse as digits
 			return fmt.Errorf("--delete-old takes a number of days, not %q", f.args[0])
-		case f.resume || f.cont || f.sessionGiven || f.promptGiven || f.serve || len(f.args) > 0:
+		case f.resume || f.cont || f.sessionGiven || f.promptGiven || f.serve || f.attach != "" || len(f.args) > 0:
 			return errors.New("--delete and --delete-old cannot be combined with a session or prompt flag")
 		}
 		return nil
@@ -182,6 +185,33 @@ func (f cliFlags) validate() error {
 		} else if _, err := session.ValidateName(f.sessionName); err != nil {
 			return err
 		}
+	}
+	if f.attach != "" {
+		switch {
+		case f.serve:
+			return errors.New("--attach and --serve are mutually exclusive")
+		case f.promptGiven || f.prompt != "":
+			return errors.New("--attach takes no prompt; submit prompts in the attached session")
+		case len(f.args) > 0:
+			return errors.New("--attach takes a socket path only; positional arguments are a --prompt form")
+		case f.resume || f.cont || f.sessionGiven:
+			return errors.New("--attach follows the running session; it does not open a local one")
+		case countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 0:
+			return errors.New("--attach has no permission barrier of its own; cycle the mode in the attached session")
+		}
+		// everything else configures a local agent loop an attach run never builds
+		var locals []string
+		if f.model != "" {
+			locals = append(locals, "--model")
+		}
+		if f.system != "" {
+			locals = append(locals, "--system")
+		}
+		locals = append(locals, f.headless...)
+		if len(locals) > 0 {
+			return fmt.Errorf("%s only applies to a local run", strings.Join(locals, ", "))
+		}
+		return nil
 	}
 	// the permission-mode flags conflict in every mode, interactive and one-shot
 	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 1 {

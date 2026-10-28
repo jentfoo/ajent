@@ -221,6 +221,8 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"blank_prompt_flag", []string{"-p", "   "}, false},
 		{"empty_prompt_value", []string{"-p", ""}, false},
 		{"delete_with_blank_prompt", []string{"--delete", "a", "-p", "  "}, false},
+		{"attach_socket", []string{"--attach", "/tmp/x.sock"}, true},
+		{"attach_with_session_name", []string{"--attach=/x.sock", "--session", "fix"}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -251,6 +253,32 @@ func TestCliFlagsValidate(t *testing.T) {
 		f, err := parseFlags([]string{"-p", "   "})
 		require.NoError(t, err)
 		require.EqualError(t, f.validate(), "--prompt is blank; give it a prompt or drop the flag")
+	})
+
+	// --attach configures no local run: every such flag refuses rather than being ignored
+	t.Run("attach_refuses_local_run_flags", func(t *testing.T) {
+		for _, tc := range []struct {
+			argv  []string
+			match string
+		}{
+			{[]string{"--attach", "/x.sock", "-p", "hi"}, "takes no prompt"},
+			{[]string{"--attach", "/x.sock", "extra"}, "socket path only"},
+			{[]string{"--attach", "/x.sock", "--serve"}, "mutually exclusive"},
+			{[]string{"--attach", "/x.sock", "--resume"}, "does not open a local one"},
+			{[]string{"--attach", "/x.sock", "--continue"}, "does not open a local one"},
+			{[]string{"--attach=/x.sock", "--session", "s"}, "does not open a local one"},
+			{[]string{"--attach", "/x.sock", "--allow-all"}, "no permission barrier"},
+			{[]string{"--attach", "/x.sock", "-m", "p/m"}, "only applies to a local run"},
+			{[]string{"--attach", "/x.sock", "--system", "x"}, "only applies to a local run"},
+			{[]string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
+			{[]string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
+		} {
+			f, perr := parseFlags(tc.argv)
+			require.NoError(t, perr, "%v", tc.argv)
+			verr := f.validate()
+			require.Error(t, verr, "%v", tc.argv)
+			assert.Contains(t, verr.Error(), tc.match, "%v", tc.argv)
+		}
 	})
 }
 

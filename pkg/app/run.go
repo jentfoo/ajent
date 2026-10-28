@@ -68,6 +68,18 @@ func Run(o RunOptions) int {
 		warnings = append(warnings, fmt.Sprintf("unknown ui.images %q, detecting instead", imagesName))
 		imagesName = ""
 	}
+
+	// attach mode mirrors a running session over its control socket: it opens no
+	// local transcript and needs no models file, so it branches before either loads.
+	// The remote run decides model, tools and permission mode; only the paint
+	// settings above are this process's own.
+	if o.Attach != "" {
+		return RunAttach(AttachOptions{
+			Socket: o.Attach, Mode: mode, Color: color,
+			Palette: pal, Images: imagesName, Warnings: warnings,
+		})
+	}
+
 	tools.SetImagesEnabled(!set.Settings().Images.Block)
 	tools.ApplyLimits(tools.LimitsFrom(set.Settings().Tools.Limits))
 

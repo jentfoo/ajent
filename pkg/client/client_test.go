@@ -1,0 +1,299 @@
+package client
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/ctl"
+)
+
+// fakeSession is a minimal control-socket server: hello, then canned replies
+// keyed by method, with queued events preceding them like a retained ring.
+type fakeSession struct {
+	ln     net.Listener
+	home   string
+	mu     sync.Mutex
+	replay []ctl.Event // events staged for the next connection's stream
+}
+
+// newFakeSession binds a socket in a short temp dir and starts accepting. It
+// pins nothing: discovery tests point AJENT_HOME at f.home themselves.
+func newFakeSession(t *testing.T) *fakeSession {
+	t.Helper()
+	home, err := os.MkdirTemp("", "client-test")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+
+	dir := filepath.Join(home, DirName)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", filepath.Join(dir, "01JFAKESESSIONID000000.sock"))
+	require.NoError(t, err)
+
+	f := &fakeSession{ln: ln, home: home}
+	t.Cleanup(func() { _ = ln.Close() })
+	go f.acceptLoop()
+	return f
+}
+
+// dial attaches a client to the fake session, feeding events into a channel.
+func (f *fakeSession) dial(t *testing.T) (*Conn, ctl.Hello, <-chan ctl.Event) {
+	t.Helper()
+	events := make(chan ctl.Event, 64)
+	conn, hello, err := Dial(f.Path())
+	require.NoError(t, err)
+	t.Cleanup(conn.Close)
+	go conn.Serve(func(ev ctl.Event) { events <- ev })
+	return conn, hello, events
+}
+
+// waitEvent pulls one event with a bound.
+func waitEvent(t *testing.T, events <-chan ctl.Event) ctl.Event {
+	t.Helper()
+	select {
+	case ev := <-events:
+		return ev
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for an event")
+		return ctl.Event{}
+	}
+}
+
+// Path reports the socket path this fake listens on.
+func (f *fakeSession) Path() string { return f.ln.Addr().String() }
+
+// serve answers one connection until it goes away.
+func (f *fakeSession) acceptLoop() {
+	for {
+		conn, err := f.ln.Accept()
+		if err != nil {
+			return
+		}
+		go f.serveConn(conn)
+	}
+}
+
+func (f *fakeSession) serveConn(conn net.Conn) {
+	defer func() { _ = conn.Close() }()
+	enc := ctl.NewEncoder(conn)
+
+	// the greeting a real session writes before anything can queue behind it
+	err := enc.Encode(ctl.NewEvent(ctl.EventHello, 0, ctl.Hello{
+		Protocol: ctl.Protocol, Session: ctl.Session{ID: "01JFAKESESSIONID000000", Name: "fake"},
+		Workspace: "/repo", Cwd: "/repo", Interactive: true, PID: os.Getpid(),
+	}))
+	if err != nil {
+		return
+	}
+
+	f.mu.Lock()
+	events := append([]ctl.Event(nil), f.replay...)
+	f.replay = nil // one replay per connection, like a session's retained ring
+	f.mu.Unlock()
+
+	var seq uint64
+	for _, ev := range events {
+		seq++
+		ev.Seq = seq
+		if err := enc.Encode(ev); err != nil {
+			return
+		}
+	}
+
+	dec := ctl.NewDecoder(conn)
+	for {
+		var req ctl.Request
+		if err := dec.Decode(&req); err != nil {
+			return
+		}
+		switch req.Method {
+		case ctl.MethodState:
+			seq++
+			_ = enc.Encode(ctl.NewEvent(ctl.EventTurnStart, seq, ctl.TurnStartData{Model: "p/m"}))
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq,
+				Result: mustJSON(ctl.State{Session: ctl.Session{ID: "01JTEST"}})})
+		case ctl.MethodSubmit:
+			var p ctl.SubmitParams
+			_ = json.Unmarshal(req.Params, &p)
+			seq++
+			_ = enc.Encode(ctl.NewEvent(ctl.EventEcho, seq, ctl.EchoData{Text: p.Line}))
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq})
+		case ctl.MethodInterrupt:
+			_ = enc.Encode(ctl.Reply{ID: req.ID,
+				Result: mustJSON(ctl.InterruptResult{Stopped: "turn"})})
+		case ctl.MethodReplay:
+			// never answered: the hang a close-wakeup test needs
+		default:
+			_ = enc.Encode(ctl.Reply{ID: req.ID,
+				Error: ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)})
+		}
+	}
+}
+
+func mustJSON(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
+}
+
+// TestDialReadsHello pins the hello contract: protocol version and a working
+// request round trip behind it.
+func TestDialReadsHello(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+
+	conn, hello, events := f.dial(t)
+	assert.Equal(t, ctl.Protocol, hello.Protocol)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	stopped, err := conn.Interrupt(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "turn", stopped)
+
+	// the interrupt carried no observable side effect: nothing streams
+	select {
+	case ev := <-events:
+		t.Fatalf("unexpected event %s", ev.Name)
+	default:
+	}
+}
+
+// TestDialRefusesMissingSocket covers connect failures naming the cause.
+func TestDialRefusesMissingSocket(t *testing.T) {
+	t.Parallel()
+
+	_, _, err := Dial(filepath.Join(t.TempDir(), "missing.sock"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no such socket")
+}
+
+// TestCallReportsWireError pins the error shape: a refused request surfaces as
+// *ctl.Error with its code, not a transport failure.
+func TestCallReportsWireError(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	_, err := conn.Call(ctx, "no-such-method", nil, nil)
+	require.Error(t, err)
+	var wire *ctl.Error
+	require.ErrorAs(t, err, &wire)
+	assert.Equal(t, ctl.CodeUnknownMethod, wire.Code)
+}
+
+// TestServeOrdersEventsBeforeReplies pins the delivery rule a view relies on:
+// events queued ahead of a reply arrive first, in order.
+func TestServeOrdersEventsBeforeReplies(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, events := f.dial(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, err := conn.Call(ctx, ctl.MethodState, nil, nil)
+		assert.NoError(t, err)
+	}()
+
+	ev := waitEvent(t, events)
+	assert.Equal(t, ctl.EventTurnStart, ev.Name)
+	<-done
+}
+
+// TestSubmitCarriesLine pins the typed helper: submit round trips its line and
+// the session-side echo event comes back through Serve.
+func TestSubmitCarriesLine(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, events := f.dial(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	require.NoError(t, conn.Submit(ctx, "hello session"))
+
+	ev := waitEvent(t, events)
+	assert.Equal(t, ctl.EventEcho, ev.Name)
+	var d ctl.EchoData
+	require.NoError(t, ev.Decode(&d))
+	assert.Equal(t, "hello session", d.Text)
+}
+
+// TestCloseWakesCallers pins teardown: a closed connection fails an in-flight
+// call that the session never answers, instead of hanging it.
+func TestCloseWakesCallers(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	errCh := make(chan error, 1)
+	go func() {
+		// events.replay is the fake's never-answered method; no call budget means
+		// the wait can only end through Close
+		_, err := conn.Call(context.Background(), ctl.MethodReplay, nil, nil)
+		errCh <- err
+	}()
+	time.AfterFunc(50*time.Millisecond, conn.Close)
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("call was not woken by Close")
+	}
+}
+
+// TestDiscoverFindsLiveSockets pins discovery over a real control dir: the
+// fake session's socket is found with its hello identity.
+func TestDiscoverFindsLiveSockets(t *testing.T) {
+	f := newFakeSession(t)
+	t.Setenv(config.EnvHome, f.home) // env pinned: not parallel
+
+	live, err := Discover()
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	assert.Equal(t, f.Path(), live[0].Path)
+}
+
+// TestResolveTargetForms pins the three target forms: an exact path, a session
+// id in the control dir, and a unique prefix.
+func TestResolveTargetForms(t *testing.T) {
+	f := newFakeSession(t)
+	t.Setenv(config.EnvHome, f.home) // env pinned: not parallel
+
+	path, _, err := Resolve(f.Path())
+	require.NoError(t, err)
+	assert.Equal(t, f.Path(), path)
+
+	live, derr := Discover()
+	require.NoError(t, derr)
+	require.Len(t, live, 1)
+
+	byID, _, err := Resolve(live[0].ID)
+	require.NoError(t, err)
+	assert.Equal(t, f.Path(), byID)
+
+	prefix := live[0].ID[:8]
+	byPrefix, _, err := Resolve(prefix)
+	require.NoError(t, err)
+	assert.Equal(t, f.Path(), byPrefix)
+
+	_, _, err = Resolve("zz-nothing")
+	require.Error(t, err)
+}

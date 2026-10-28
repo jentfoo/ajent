@@ -263,6 +263,8 @@ The CLI is deliberately small. Run `ajent --help` for the full list, and the imp
     --stats            one-shot: print a tool and token summary when the run ends
     --serve            run with no terminal, serving the session over the
                        control socket (needs control.enabled)
+    --attach <socket>  mirror a running session on this terminal and
+                       interact with it from either process
 ```
 
 Sessions are normally identified by an opaque id, and `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session, and `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
@@ -293,7 +295,17 @@ and the run stays up until it is ended. Serve mode requires `control.enabled`
 and refuses otherwise. A plain one-shot (`-p`, piped stdio) never opens a
 socket: it exits with its one turn, so there is nothing to attach to.
 
-The `ctl-demo/` module in the repository builds `ajent-ctl`, a minimal example
-controller: `ajent-ctl -socket ~/.ajent/control/<id>.sock` attaches, prints the
-session state and transcript, streams events until the session exits, and can
-drive one interactively when given actions on stdin.
+`ajent --attach <socket>` turns a second ajent process into that controller,
+with a full terminal of its own: it backfills the conversation, then mirrors
+streaming output, tool activity and status live, and every input works from
+either side — prompts, slash commands and `!shell` submit remotely, Esc and
+ctrl+c interrupt, Shift+Tab cycles the permission mode, double-Esc rewinds,
+and dialogs (approval prompts included) open in both terminals with the first
+answer winning. Attach claims the control seat; if another controller holds it
+the second process attaches as a read-only viewer instead. Detaching is local
+to the attached terminal: ctrl+c twice leaves the session running, and only
+`/exit` (from either side) ends it. The value may be a socket path or any
+unique prefix of a live session id; with no match, ajent lists what is running.
+This is also the easiest way to give a `--serve` run a terminal: start it head-
+less, then attach from anywhere and interact as if you had been there all
+along.

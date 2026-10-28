@@ -7,6 +7,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // Exit codes a script can branch on. They are the same for text and json output.
@@ -108,6 +109,7 @@ type RunOptions struct {
 	DenyTools  []string
 	Args       []string // positional arguments, joined into a bootstrap prompt
 	Serve      bool     // --serve: run with the control socket as the only front end
+	Attach     string   // --attach <socket>: mirror that running session over its control socket
 
 	SessMode     ResumeMode
 	SessTarget   string
@@ -125,4 +127,16 @@ type ServeOptions struct {
 	SessResolved SessionResolution
 	Warnings     []string
 	Scope        ToolScope
+}
+
+// AttachOptions carries what RunAttach needs: the socket to follow and the
+// resolved local terminal settings. The attached run opens no transcript, so
+// session and model options do not apply.
+type AttachOptions struct {
+	Socket   string
+	Mode     tui.Mode
+	Color    tui.ColorProfile
+	Palette  tui.Palette
+	Images   string
+	Warnings []string
 }

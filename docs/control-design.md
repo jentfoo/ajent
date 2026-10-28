@@ -3,12 +3,62 @@
 The control socket is ajent's second front end: a unix socket per live session
 over which any program can observe everything the local terminal renders, and —
 holding the control seat — operate the session exactly like the keyboard. The
-wire contract lives in `pkg/ctl` (leaf, imported by both sides); the server
-lives in `pkg/app` (`control*.go`) on top of the phase 33 seams (`sessionHub`,
+wire contract lives in `pkg/ctl` (leaf, imported by both sides); the controller
+side lives in `pkg/client` (dial, discovery, typed calls, event stream), so an
+external controller imports ajent and reuses it instead of reimplementing the
+protocol; the server and the two terminal front ends live in `pkg/app`
+(`control*.go`, `attach*.go`) on top of the phase 33 seams (`sessionHub`,
 `hubUI`, the interaction broker). This document records the decisions that must
 hold when changing any of them. Transport, events and the read-only methods are
 specified here only where the write half depends on them; the phase documents
 (`docs/phases/34a-*`, `34b-*`) carry the delivery history.
+
+## The client package
+
+`pkg/client` is everything an out-of-process controller needs, kept free of
+terminal and agent dependencies so external programs import it directly:
+`Dial` (hello read and protocol check), `Serve` (one reader goroutine; replies
+correlated by id, events delivered in arrival order to the handler), typed
+helpers for every method (`State`, `Transcript`, `Submit`, `Interrupt`,
+`ClaimSeat`, `Rewind`, `Resolve`), discovery over the control dir, and
+`CallWait` as the request budget callers without one of their own apply. The
+rules it keeps: a refused request surfaces as `*ctl.Error` (code inspectable,
+never smuggled through transport errors); `Close` wakes every in-flight call;
+no helper blocks past its ctx. It imports only `pkg/ctl` and `pkg/config`.
+
+## Attach mode
+
+`ajent --attach <socket>` is the client package's first in-tree consumer: a
+full terminal over the wire, so two ajent processes share one session and the
+user interacts with either. Decisions that shape it:
+
+- **One classification path, remotely.** Every submitted line rides `submit`;
+  the attached process runs no router, no agent loop and no transcript. The
+  remote run owns model, tools and permission mode; only paint settings (render
+  mode, theme) are local, so flags that configure a local run are refused at
+  parse time rather than silently ignored.
+- **The seat is claimed once, degraded honestly.** Attach claims the control
+  seat; when another controller holds it the process attaches as a read-only
+  viewer with the holder named. Detaching (ctrl+c twice, stdin EOF) frees the
+  seat by disconnection and never ends the remote session; `/exit` submitted
+  from either side does.
+- **Rendering mirrors the host's own sink calls.** Stream events replay through
+  the same `tui/sink` mapping the host terminal uses, so parity is structural;
+  committed history backfills through `session.Replay`. A call whose output
+  deltas already streamed locally commits them alone — the full-text body on
+  its `tool.result` exists for controllers without the stream and must not
+  render a second time. Editor drafts are dropped: two editors typing would
+  fight over one buffer.
+- **The watermark reconciles attach-time.** Events seen before backfill
+  completes buffer and apply only above the replies' watermark; below it the
+  rendered snapshot and transcript supersede them.
+- **Interactions race across processes.** A pending dialog opens locally on
+  announcement; first answer wins remotely, and a `settled` event cancels the
+  local racer before anything is sent. A surface that cannot show a dialog (or
+  an unknown kind) answers nothing rather than denying blind.
+- **Rewind rides the same gesture.** Double-Esc reads the tree from
+  `transcript.entries`, names the head with `session.rewind`, and every view —
+  including this one — redraws on the resulting `head` event.
 
 ## The seat
 
