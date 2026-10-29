@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net"
@@ -13,8 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/paths"
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // fakeSession is a minimal control-socket server: hello, then canned replies
@@ -24,6 +26,11 @@ type fakeSession struct {
 	home   string
 	mu     sync.Mutex
 	replay []ctl.Event // events staged for the next connection's stream
+
+	transcriptPath string // hello names this file when set; state.get reports head
+	head           string
+	log            []ctl.Event // answered for events.replay, filtered by since
+	hangReplay     bool        // never answer replay: the close-wakeup test hangs on it
 }
 
 // newFakeSession binds a socket in a short temp dir and starts accepting. It
@@ -87,9 +94,13 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 	enc := ctl.NewEncoder(conn)
 
 	// the greeting a real session writes before anything can queue behind it
+	f.mu.Lock()
+	path, head := f.transcriptPath, f.head
+	f.mu.Unlock()
 	err := enc.Encode(ctl.NewEvent(ctl.EventHello, 0, ctl.Hello{
 		Protocol: ctl.Protocol, Session: ctl.Session{ID: "01JFAKESESSIONID000000", Name: "fake"},
 		Workspace: "/repo", Cwd: "/repo", Interactive: true, PID: os.Getpid(),
+		TranscriptPath: path,
 	}))
 	if err != nil {
 		return
@@ -120,7 +131,7 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 			seq++
 			_ = enc.Encode(ctl.NewEvent(ctl.EventTurnStart, seq, ctl.TurnStartData{Model: "p/m"}))
 			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq,
-				Result: mustJSON(ctl.State{Session: ctl.Session{ID: "01JTEST"}})})
+				Result: mustJSON(ctl.State{Session: ctl.Session{ID: "01JTEST"}, Head: head})})
 		case ctl.MethodSubmit:
 			var p ctl.SubmitParams
 			_ = json.Unmarshal(req.Params, &p)
@@ -131,7 +142,23 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Result: mustJSON(ctl.InterruptResult{Stopped: "turn"})})
 		case ctl.MethodReplay:
-			// never answered: the hang a close-wakeup test needs
+			f.mu.Lock()
+			hang, log := f.hangReplay, append([]ctl.Event(nil), f.log...)
+			f.mu.Unlock()
+			if hang {
+				return // never answered: the close-wakeup test hangs on this
+			}
+			var p ctl.ReplayParams
+			_ = json.Unmarshal(req.Params, &p)
+			var past []ctl.Event
+			for _, ev := range log {
+				if ev.Seq > p.Since {
+					past = append(past, ev)
+				}
+			}
+			seq++
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq,
+				Result: mustJSON(ctl.ReplayResult{Events: past})})
 		default:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Error: ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)})
@@ -240,6 +267,7 @@ func TestSubmitCarriesLine(t *testing.T) {
 func TestCloseWakesCallers(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
+	f.hangReplay = true // the replay request this test sends is never answered
 	conn, _, _ := f.dial(t)
 
 	errCh := make(chan error, 1)
@@ -263,7 +291,7 @@ func TestCloseWakesCallers(t *testing.T) {
 // fake session's socket is found with its hello identity.
 func TestDiscoverFindsLiveSockets(t *testing.T) {
 	f := newFakeSession(t)
-	t.Setenv(config.EnvHome, f.home) // env pinned: not parallel
+	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
 
 	live, err := Discover()
 	require.NoError(t, err)
@@ -275,7 +303,7 @@ func TestDiscoverFindsLiveSockets(t *testing.T) {
 // id in the control dir, and a unique prefix.
 func TestResolveTargetForms(t *testing.T) {
 	f := newFakeSession(t)
-	t.Setenv(config.EnvHome, f.home) // env pinned: not parallel
+	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
 
 	path, _, err := Resolve(f.Path())
 	require.NoError(t, err)
@@ -296,4 +324,115 @@ func TestResolveTargetForms(t *testing.T) {
 
 	_, _, err = Resolve("zz-nothing")
 	require.Error(t, err)
+}
+
+// TestReplayReturnsEventsPastSince pins the reconnect helper: retained events
+// past a watermark arrive in order.
+func TestReplayReturnsEventsPastSince(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	f.log = []ctl.Event{
+		{Name: ctl.EventEcho, Seq: 3, Data: mustJSON(ctl.EchoData{Text: "old"})},
+		{Name: ctl.EventEcho, Seq: 7, Data: mustJSON(ctl.EchoData{Text: "new"})},
+	}
+	conn, _, _ := f.dial(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	evs, err := conn.Replay(ctx, 5)
+	require.NoError(t, err)
+	require.Len(t, evs, 1)
+	assert.Equal(t, uint64(7), evs[0].Seq)
+
+	// everything is past zero: the full retained history answers
+	evs, err = conn.Replay(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, evs, 2)
+}
+
+// recordTo writes one JSONL transcript of two chained entries and names it in
+// the fake's hello and state.get head.
+func recordTo(t *testing.T, f *fakeSession) (first, second session.Entry) {
+	t.Helper()
+
+	path := filepath.Join(f.home, "session.jsonl")
+	first = session.Entry{ID: "01ENTRYA", Type: session.TypeMessage, TS: 1,
+		Data: mustJSON(session.MessageData{})}
+	second = session.Entry{ID: "01ENTRYB", ParentID: first.ID,
+		Type: session.TypeSession, TS: 2}
+	var buf bytes.Buffer
+	for _, e := range []session.Entry{first, second} {
+		line, err := json.Marshal(e)
+		require.NoError(t, err)
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
+
+	f.mu.Lock()
+	f.transcriptPath = path
+	f.head = second.ID
+	f.mu.Unlock()
+	return first, second
+}
+
+// TestBackfillReadsRecordedBranch pins the bulk history source: one call
+// returns the snapshot with its watermark plus the branch through the
+// snapshot head, read from the file the hello named.
+func TestBackfillReadsRecordedBranch(t *testing.T) {
+	f := newFakeSession(t)
+	first, second := recordTo(t, f)
+	conn, _, _ := f.dial(t)
+
+	assert.Equal(t, f.transcriptPath, conn.Hello().TranscriptPath)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	snap, branch, seq, err := conn.Backfill(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, second.ID, snap.Head)
+	assert.Positive(t, seq) // the state.get watermark
+	require.Len(t, branch, 2)
+	assert.Equal(t, first.ID, branch[0].ID) // oldest first
+	assert.Equal(t, second.ID, branch[1].ID)
+}
+
+// TestBackfillWithoutRecording pins the legible refusal: a hello with no
+// transcript path answers an error naming it, never a confusing file failure.
+func TestBackfillWithoutRecording(t *testing.T) {
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
+	defer cancel()
+	_, _, _, err := conn.Backfill(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "recording is off")
+}
+
+// TestReadBranchSkipsTornTail pins the concurrent-append guarantee: a final
+// line the writer has not finished is skipped silently, complete lines stand.
+func TestReadBranchSkipsTornTail(t *testing.T) {
+	f := newFakeSession(t)
+	first, second := recordTo(t, f)
+	path := filepath.Join(f.home, "torn.jsonl")
+
+	var buf bytes.Buffer
+	for _, e := range []session.Entry{first, second} { // both fully written
+		line, err := json.Marshal(e)
+		require.NoError(t, err)
+		buf.Write(line)
+		buf.WriteByte('\n')
+	}
+	third, terr := json.Marshal(session.Entry{ID: "01ENTRYC", ParentID: second.ID,
+		Type: session.TypeMessage, TS: 3}) // the writer is mid-line on this one
+	require.NoError(t, terr)
+	buf.WriteString(string(third)[:len(string(third))-4])
+	require.NoError(t, os.WriteFile(path, buf.Bytes(), 0o600))
+
+	branch, err := ReadBranch(path, second.ID)
+	require.NoError(t, err)
+	require.Len(t, branch, 2) // the torn entry never half-appears
+	assert.Equal(t, first.ID, branch[0].ID)
+	assert.Equal(t, second.ID, branch[1].ID)
 }

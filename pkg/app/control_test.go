@@ -381,7 +381,8 @@ func TestControlCloseUnlinkSocket(t *testing.T) {
 }
 
 // TestControlHelloAnnouncesIdentity pins the hello contract: protocol version,
-// session identity, workspace, front-end shape, pid and build version.
+// session identity, workspace, front-end shape, pid and build version, plus
+// the transcript path bulk backfill reads.
 func TestControlHelloAnnouncesIdentity(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -396,6 +397,7 @@ func TestControlHelloAnnouncesIdentity(t *testing.T) {
 	assert.False(t, h.Serve)
 	assert.Equal(t, os.Getpid(), h.PID)
 	assert.Equal(t, version.Version, h.Version)
+	assert.Equal(t, rig.rec.w.Path(), h.TranscriptPath)
 }
 
 // TestControlHelloServeMode pins the serve shape: no terminal, socket only.

@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -10,14 +9,13 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -54,43 +52,17 @@ const (
 // control directory is created and pinned to 0700; a warning names any wider
 // mode found there, like models.json's permission check.
 func controlSocketPath(sessionID string) (string, string, error) {
-	dir, err := config.Dir()
+	dir, warn, err := paths.SubDir(controlDirName)
 	if err != nil {
 		return "", "", err
 	}
-	path := filepath.Join(dir, controlDirName, sessionID+".sock")
+	path := filepath.Join(dir, sessionID+".sock")
 	if len(path) >= controlSocketMax {
 		return "", "", fmt.Errorf(
 			"control socket path %s is %d bytes, over the %d-byte unix socket limit; move the ajent home closer to the filesystem root",
 			path, len(path), controlSocketMax)
 	}
-	ctlDir := filepath.Dir(path)
-	if err := os.MkdirAll(ctlDir, 0o700); err != nil {
-		return "", "", err
-	}
-	return path, tightenControlDir(ctlDir), nil
-}
-
-// tightenControlDir pins dir to 0700 and returns a warning when it was group
-// or world accessible, mirroring the models.json permission check. A failed
-// bind reports real filesystem trouble; this only narrows a slipped mode.
-func tightenControlDir(dir string) string {
-	if runtime.GOOS == "windows" {
-		return "" // mode bits are not meaningful
-	}
-	fi, err := os.Stat(dir)
-	if err != nil {
-		return ""
-	}
-	mode := fi.Mode().Perm()
-	if mode&0o077 == 0 {
-		return ""
-	}
-	found := fmt.Sprintf("control socket directory %s is group or world accessible (mode %o)", dir, mode)
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return found + "; chmod 700 it failed: " + err.Error()
-	}
-	return found + "; tightened to 0700"
+	return path, warn, nil
 }
 
 // bindControlListener binds the control socket at path. A file already there
@@ -149,6 +121,9 @@ type controlServer struct {
 	rec     *sessRec // transcript source for backfill; nil when recording is off
 	path    string
 	serve   bool // serve mode: the socket is the only front end
+	// transcriptPath locates the recorded transcript for hello, empty when
+	// recording is off: controllers backfill from this file, not over the wire
+	transcriptPath string
 
 	ln         net.Listener
 	mu         sync.Mutex
@@ -181,15 +156,20 @@ func startControl(hub *sessionHub, dialogs *interactionBroker, rec *sessRec, ser
 		hub: hub, dialogs: dialogs, rec: rec, path: path, serve: serve,
 		ln: ln, conns: make(map[*controlConn]struct{}),
 	}
+	if rec != nil && rec.w != nil {
+		srv.transcriptPath = rec.w.Path()
+	}
 	var warns []string
 	if warn != "" {
 		warns = append(warns, warn)
 	}
 
 	// observe everything before serving: stream events, rendered surfaces,
-	// dialogs and transcript appends, each republished as a seq'd event
+	// dialogs and transcript appends, each republished as a seq'd event.
+	// The control server owns the emitter set today; a second consumer would
+	// compose its own layer on top.
 	hub.Register(&ctlStreamSink{hub: hub})
-	hub.setEmitters(chainEmitters(hub.emitting(), controlEmitters(hub)))
+	hub.setEmitters(controlEmitters(hub))
 	dialogs.observe(controlDialogHooks(hub))
 	if rec != nil {
 		rec.onAppend = srv.entryAppended
@@ -312,35 +292,5 @@ func (s *controlServer) Close(reason string) {
 // entryAppended announces one transcript entry written after attach. Wired
 // onto the recorder wrapper success path, never fired for resume-time reads.
 func (s *controlServer) entryAppended(e session.Entry) {
-	s.hub.noteHead(e.ID) // appends extend the head; only a switch moves it loudly
 	s.hub.publish(ctl.EventEntryAppend, ctl.EntryData{Entry: ctlEntry(e)})
-}
-
-// transcript answers a transcript.entries request: the current branch, oldest
-// first, bounded by an optional entry id cursor.
-func (s *controlServer) transcript(params []byte) (ctl.TranscriptResult, *ctl.Error) {
-	var p ctl.TranscriptParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return ctl.TranscriptResult{}, ctl.Errf(ctl.CodeBadRequest, "params: %v", err)
-		}
-	}
-	if s.rec == nil || s.rec.w == nil {
-		return ctl.TranscriptResult{}, ctl.Errf(ctl.CodeUnavailable, "session recording is off")
-	}
-	entries, _, err := session.Read(s.rec.w.Path()) // read-only: never Open, which repairs
-	if err != nil {
-		return ctl.TranscriptResult{}, ctl.Errf(ctl.CodeUnavailable, "reading transcript: %v", err)
-	}
-	head := s.rec.w.Head()
-	branch := session.Branch(entries, head)
-	if p.After != "" {
-		i := slices.IndexFunc(branch, func(e session.Entry) bool { return e.ID == p.After })
-		if i < 0 {
-			return ctl.TranscriptResult{}, ctl.Errf(ctl.CodeBadRequest,
-				"after %q is not on the current branch; re-read the transcript", p.After)
-		}
-		branch = branch[i+1:]
-	}
-	return ctl.TranscriptResult{Head: head, Entries: ctlEntries(branch)}, nil
 }

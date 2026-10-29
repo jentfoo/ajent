@@ -126,11 +126,54 @@ func TestControlSeatRetake(t *testing.T) {
 	require.NoError(t, rp.DecodeResult(&res))
 	assert.True(t, res.Control)
 
+	// the takeover announces to every connection: the displaced holder downgrades
+	// without probing, and observers learn who drives now
+	var lostOne, lostTwo ctl.SeatLostData
+	require.NoError(t, one.collect(ctl.EventSeatLost, 1)[0].Decode(&lostOne))
+	require.NoError(t, two.collect(ctl.EventSeatLost, 1)[0].Decode(&lostTwo))
+	assert.Equal(t, "renamed", lostOne.From)
+	assert.Equal(t, "second", lostOne.To)
+
 	// the displaced holder writes no more: refusals name the new holder
 	rp = one.call("w", ctl.MethodInterrupt, map[string]any{})
 	require.NotNil(t, rp.Error)
 	assert.Equal(t, ctl.CodeObserver, rp.Error.Code)
 	assert.Contains(t, rp.Error.Message, "second")
+
+	// snapshots report the seat from each connection's side of it
+	rp = one.call("seat1", ctl.MethodState, map[string]any{})
+	require.Nil(t, rp.Error)
+	var stOne ctl.State
+	require.NoError(t, rp.DecodeResult(&stOne))
+	assert.True(t, stOne.Seat.Held)
+	assert.Equal(t, "second", stOne.Seat.Holder)
+	assert.False(t, stOne.Seat.Yours)
+
+	rp = two.call("seat2", ctl.MethodState, map[string]any{})
+	require.Nil(t, rp.Error)
+	var stTwo ctl.State
+	require.NoError(t, rp.DecodeResult(&stTwo))
+	assert.True(t, stTwo.Seat.Held)
+	assert.Equal(t, "second", stTwo.Seat.Holder)
+	assert.True(t, stTwo.Seat.Yours)
+}
+
+// TestControlMethodRegistrySeat pins the security property beside the table:
+// every mutating method declares seat-required, read methods never do.
+func TestControlMethodRegistrySeat(t *testing.T) {
+	t.Parallel()
+
+	for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
+		ctl.MethodInputSet, ctl.MethodRewind, ctl.MethodResolve} {
+		entry, ok := controlMethods[m]
+		require.True(t, ok, "%s must route through the registry", m)
+		assert.True(t, entry.seat, "%s must require the seat", m)
+	}
+	for _, m := range []string{ctl.MethodState, ctl.MethodReplay, ctl.MethodAttach} {
+		entry, ok := controlMethods[m]
+		require.True(t, ok, "%s must route through the registry", m)
+		assert.False(t, entry.seat, "%s must not require the seat", m)
+	}
 }
 
 // spyCycler records barrier cycles, the hub's permission-gate seam in tests.
@@ -305,13 +348,9 @@ func TestControlSubmitSteersAndInterrupts(t *testing.T) {
 
 	// the submitted prompt reached the transcript carrying its controller
 	// origin, byte-identical to the typed text: no marker rides the message
-	rp = c.call("tr", ctl.MethodTranscript, map[string]any{})
-	require.Nil(t, rp.Error)
-	var tr ctl.TranscriptResult
-	require.NoError(t, rp.DecodeResult(&tr))
 	var origins []string
-	for _, e := range tr.Entries {
-		if e.Type != string(session.TypeMessage) {
+	for _, e := range rigBranch(t, rig.rec) {
+		if e.Type != session.TypeMessage {
 			continue
 		}
 		var md session.MessageData
@@ -835,14 +874,10 @@ func TestControlRewindForksBranch(t *testing.T) {
 	require.NoError(t, ev.Decode(&hd))
 	assert.Equal(t, res.Head, hd.ID)
 
-	rp = c.call("tr", ctl.MethodTranscript, map[string]any{})
-	require.Nil(t, rp.Error)
-	var tr ctl.TranscriptResult
-	require.NoError(t, rp.DecodeResult(&tr))
-	assert.Equal(t, res.Head, tr.Head)
+	assert.Equal(t, res.Head, rig.rec.w.Head()) // the branch rebuilt without the second prompt
 	var texts []string
-	for _, e := range tr.Entries {
-		if e.Type != string(session.TypeMessage) {
+	for _, e := range rigBranch(t, rig.rec) {
+		if e.Type != session.TypeMessage {
 			continue
 		}
 		var md session.MessageData

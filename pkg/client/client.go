@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // Timeouts for one attach: connecting and reading the hello, then the budget
@@ -34,9 +35,10 @@ const (
 // events delivered in arrival order to the handler Serve runs, writes
 // serialized through the shared line encoder. Safe for concurrent use.
 type Conn struct {
-	conn net.Conn
-	dec  *ctl.Decoder
-	enc  *ctl.Encoder
+	conn  net.Conn
+	dec   *ctl.Decoder
+	enc   *ctl.Encoder
+	hello ctl.Hello // what this session announced at connect
 
 	mu      sync.Mutex
 	nextID  int
@@ -77,6 +79,7 @@ func Dial(path string) (*Conn, ctl.Hello, error) {
 			"session %s speaks control protocol %d, this build speaks %d; update ajent",
 			hello.Session.ID, hello.Protocol, ctl.Protocol)
 	}
+	c.hello = hello
 	return c, hello, nil
 }
 
@@ -219,12 +222,40 @@ func (c *Conn) State(ctx context.Context) (ctl.State, uint64, error) {
 	return st, seq, err
 }
 
-// Transcript reads the current branch, oldest first; the second return is the
-// watermark it was taken at.
-func (c *Conn) Transcript(ctx context.Context, after string) (ctl.TranscriptResult, uint64, error) {
-	var tr ctl.TranscriptResult
-	seq, err := c.Call(ctx, ctl.MethodTranscript, ctl.TranscriptParams{After: after}, &tr)
-	return tr, seq, err
+// Hello returns the greeting this session announced at connect: identity,
+// workspace, front-end shape and transcript path.
+func (c *Conn) Hello() ctl.Hello { return c.hello }
+
+// ReadBranch reads one recorded transcript file and returns its chain under
+// head, oldest first. Reading tolerates a torn final line, so reading while
+// the host appends is safe; entries landing after the branched head arrive as
+// their own events.
+func ReadBranch(path, head string) ([]session.Entry, error) {
+	entries, _, err := session.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	return session.Branch(entries, head), nil
+}
+
+// Backfill returns one controller's starting state: the snapshot with its
+// watermark plus the transcript branch through the snapshot head, read from
+// the file the hello named. Events past the watermark apply on top; an entry
+// landing between the snapshot and the read may appear both ways, so
+// consumers rendering appends dedupe by entry id.
+func (c *Conn) Backfill(ctx context.Context) (ctl.State, []session.Entry, uint64, error) {
+	snap, seq, err := c.State(ctx)
+	if err != nil {
+		return ctl.State{}, nil, 0, err
+	}
+	if c.hello.TranscriptPath == "" {
+		return ctl.State{}, nil, 0, errors.New("session recording is off: no transcript to read")
+	}
+	branch, err := ReadBranch(c.hello.TranscriptPath, snap.Head)
+	if err != nil {
+		return ctl.State{}, nil, 0, fmt.Errorf("reading transcript: %w", err)
+	}
+	return snap, branch, seq, nil
 }
 
 // Submit routes one line exactly as typed in the session's editor.
@@ -242,9 +273,19 @@ func (c *Conn) Interrupt(ctx context.Context) (string, error) {
 }
 
 // ModeCycle steps the permission mode like Shift+Tab, backwards when back.
-func (c *Conn) ModeCycle(ctx context.Context, back bool) error {
-	_, err := c.Call(ctx, ctl.MethodModeCycle, ctl.ModeCycleParams{Back: back}, nil)
-	return err
+// The returned name is the mode now in effect, empty when no gate exists.
+func (c *Conn) ModeCycle(ctx context.Context, back bool) (string, error) {
+	var res ctl.ModeResult
+	_, err := c.Call(ctx, ctl.MethodModeCycle, ctl.ModeCycleParams{Back: back}, &res)
+	return res.Mode, err
+}
+
+// Replay requests the retained events past since, in seq order. A since that
+// predates the ring answers *ctl.Error with CodeTooOld: re-snapshot instead.
+func (c *Conn) Replay(ctx context.Context, since uint64) ([]ctl.Event, error) {
+	var res ctl.ReplayResult
+	_, err := c.Call(ctx, ctl.MethodReplay, ctl.ReplayParams{Since: since}, &res)
+	return res.Events, err
 }
 
 // Rewind forks onto an earlier transcript entry and reports the new head.

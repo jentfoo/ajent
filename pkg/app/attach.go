@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"slices"
 	"sync"
 	"time"
 
@@ -55,7 +54,7 @@ func RunAttach(o AttachOptions) int {
 		ui.Notify(w, tui.LevelWarn)
 	}
 
-	view := newAttachView(ui, conn, root)
+	view := newAttachView(ui, conn, root, hello.TranscriptPath)
 
 	// the reader starts before anything requests: replies route through it, so a
 	// call issued first would wait forever. Lifecycle surfaces (dialogs, exit)
@@ -63,6 +62,7 @@ func RunAttach(o AttachOptions) int {
 	exited := make(chan struct{})
 	var exitOnce sync.Once
 	exitReason := ""
+	holderName := fmt.Sprintf("ajent attach (pid %d)", os.Getpid())
 	go conn.Serve(func(ev ctl.Event) {
 		switch ev.Name {
 		case ctl.EventSessionExit:
@@ -70,6 +70,13 @@ func RunAttach(o AttachOptions) int {
 			_ = ev.Decode(&d)
 			exitReason = d.Reason // reader-only until exited closes, which orders the read
 			exitOnce.Do(func() { close(exited) })
+			return
+		case ctl.EventSeatLost:
+			var d ctl.SeatLostData
+			if ev.Decode(&d) == nil && d.From == holderName {
+				// force-displaced: downgraded to observer without any write probing it
+				ui.Notify("control seat taken by "+seatLabel(d.To)+"; watching read-only", tui.LevelWarn)
+			}
 			return
 		case ctl.EventInteractionPending:
 			var d ctl.InteractionPendingData
@@ -89,8 +96,7 @@ func RunAttach(o AttachOptions) int {
 
 	// the seat makes this connection the session's one remote controller; a held
 	// seat degrades to watching instead of fighting over it
-	control, err := conn.ClaimSeat(context.Background(),
-		fmt.Sprintf("ajent attach (pid %d)", os.Getpid()), false)
+	control, err := conn.ClaimSeat(context.Background(), holderName, false)
 	var wire *ctl.Error
 	switch {
 	case err == nil:
@@ -121,7 +127,7 @@ func RunAttach(o AttachOptions) int {
 	}
 
 	view.setRunningIdle() // arm rewind only while the session is at rest
-	view.installRecall()  // ↑/↓ recall and ctrl+r search read this session's prompts over the wire
+	view.installRecall()  // ↑/↓ recall and ctrl+r search read this session's transcript
 
 	// submissions serialize through one worker so rapid lines keep their order
 	// on the wire, which is the queue order the remote pump applies.
@@ -254,28 +260,28 @@ func attachInterrupt(ui *tui.UI, conn *client.Conn) (string, error) {
 func attachModeCycle(ui *tui.UI, conn *client.Conn, back bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
 	defer cancel()
-	if err := conn.ModeCycle(ctx, back); err != nil {
+	if _, err := conn.ModeCycle(ctx, back); err != nil {
 		ui.Notify("mode change failed: "+err.Error(), tui.LevelWarn)
 	}
 }
 
-// rewindPicker opens the context-tree picker over the wire transcript and
+// rewindPicker opens the context-tree picker over the transcript file and
 // rewinds the session onto the chosen entry. Only the current branch is known
 // here, so abandoned forks appear once a remote rewind makes one current.
 func (v *attachView) rewindPicker() {
 	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
-	tr, _, err := v.conn.Transcript(ctx, "")
+	snap, _, err := v.conn.State(ctx)
 	cancel()
 	if err != nil {
 		v.ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	head := v.currentHead()
-	if head == "" || !slices.ContainsFunc(tr.Entries, func(e ctl.Entry) bool { return e.ID == head }) {
-		head = tr.Head
+	branch, rerr := client.ReadBranch(v.path, snap.Head)
+	if rerr != nil {
+		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
+		return
 	}
-
-	branch := wireEntries(tr.Entries)
+	head := snap.Head // wire-fresh: the tree matches what the session sits on now
 	tree := session.TreeRows(branch, head)
 	if len(tree) == 0 {
 		v.ui.Notify("nothing to rewind onto yet", tui.LevelInfo)

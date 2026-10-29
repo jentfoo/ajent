@@ -47,7 +47,7 @@ into a reference mirroring either surface.
 | `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
-| `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
+| `config-design.md` | `pkg/config`, `pkg/paths` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. `pkg/paths` is the ajent-home resolution both config and client-side packages share. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
 | `control-design.md` | `pkg/client`, `pkg/ctl` (+ the server in `pkg/app`) | The per-session control socket, serve mode and attach mode: the single control seat (claim, release-on-EOF, observer refusals), one routing path for every write method, transcript `origin` provenance for controller prompts, fail-open delivery with seq ordering and the watermark rule, the security model. |
@@ -119,8 +119,9 @@ Depth lives in the design docs above.
 - **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote (leaf).
 - **`pkg/command`** — `/slash`, `!shell`, prompt-line classification and completion.
 - **`pkg/compact`** — compaction: verbatim band, cut point, summary checkpoint.
-- **`pkg/config`** — layered settings with per-key provenance (leaf).
-- **`pkg/client`** — the control-socket client: dial, discovery, typed calls, event stream; importable by external controllers (imports only ctl/config).
+- **`pkg/paths`** — ajent home resolution: `AJENT_HOME`, config dir creation (leaf).
+- **`pkg/config`** — layered settings with per-key provenance (leaf, resolves its home via paths).
+- **`pkg/client`** — the control-socket client: dial, discovery, typed calls, event stream, file-based backfill; importable by external controllers (imports only ctl/paths/session).
 - **`pkg/ctl`** — control-socket wire types and line codec; the versioned protocol both the app server and controllers import (leaf).
 - **`pkg/httputil`** — the hardened outbound HTTP client (leaf).
 - **`pkg/img`** — image sniff/downscale for model input (leaf).

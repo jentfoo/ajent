@@ -19,12 +19,30 @@ specified here only where the write half depends on them; the phase documents
 terminal and agent dependencies so external programs import it directly:
 `Dial` (hello read and protocol check), `Serve` (one reader goroutine; replies
 correlated by id, events delivered in arrival order to the handler), typed
-helpers for every method (`State`, `Transcript`, `Submit`, `Interrupt`,
-`ClaimSeat`, `Rewind`, `Resolve`), discovery over the control dir, and
-`CallWait` as the request budget callers without one of their own apply. The
-rules it keeps: a refused request surfaces as `*ctl.Error` (code inspectable,
-never smuggled through transport errors); `Close` wakes every in-flight call;
-no helper blocks past its ctx. It imports only `pkg/ctl` and `pkg/config`.
+helpers for every method (`State`, `Submit`, `Interrupt`, `ClaimSeat`,
+`Rewind`, `Resolve`), discovery over the control dir, and `CallWait` as the
+request budget callers without one of their own apply. The rules it keeps: a
+refused request surfaces as `*ctl.Error` (code inspectable, never smuggled
+through transport errors); `Close` wakes every in-flight call; no helper
+blocks past its ctx. It imports only `pkg/ctl`, `pkg/paths` and `pkg/session`
+(for the entry types bulk history returns).
+
+## Backfill from the transcript file
+
+The hello names the recorded transcript's path on disk (empty when recording
+is off, which never serves), and `state.get` carries the head entry to branch
+it by: bulk catch-up reads the same append-only file the host records, at
+local speed and with no size bound crossing the wire. The client owns this
+glue so controllers need no protocol knowledge for it: `Conn.Backfill`
+returns the snapshot, its watermark and the branched history in one call,
+and `client.ReadBranch` covers head-tracked reads against a known file.
+Only post-attach appends
+announce as events, so a controller reconciles one full read against its live
+stream — an entry landing between the snapshot and the read may arrive both
+ways, and reconciling clients dedupe by entry id (appends that only track the
+head are no-ops). `session.Read` tolerates a torn final line, so reading while
+the host appends is safe. There is deliberately no transcript method on the
+socket.
 
 ## Attach mode
 
@@ -49,9 +67,9 @@ user interacts with either. Decisions that shape it:
   its `tool.result` exists for controllers without the stream and must not
   render a second time. Editor drafts are dropped: two editors typing would
   fight over one buffer.
-- **Recall reads the wire.** Plain ↑/↓ and ctrl+r draw their prompts from the
-  attached session's own transcript via `transcript.entries` — there is no
-  local editor-history store to consult, so recall never spans other sessions.
+- **Recall reads the file.** Plain ↑/↓ and ctrl+r draw their prompts from the
+  attached session's own transcript — there is no local editor-history store
+  to consult, so recall never spans other sessions.
   Secret-prefixed lines stay excluded, like every recall surface.
 - **The watermark reconciles attach-time.** Events seen before backfill
   completes buffer and apply only above the replies' watermark; below it the
@@ -60,11 +78,11 @@ user interacts with either. Decisions that shape it:
   announcement; first answer wins remotely, and a `settled` event cancels the
   local racer before anything is sent. A surface that cannot show a dialog (or
   an unknown kind) answers nothing rather than denying blind.
-- **Rewind rides the same gesture.** Double-Esc reads the tree from
-  `transcript.entries`, names the head with `session.rewind` — pre-filling this
-  editor with the rewound prompt, computed locally from the branch it already
-  read, exactly as a local rewind fills — and every view, including this one,
-  redraws on the resulting `head` event.
+- **Rewind rides the same gesture.** Double-Esc reads the tree from the
+  transcript file (the snapshot's head branches it), names the head with
+  `session.rewind` — pre-filling this editor with the rewound prompt, computed
+  locally from the branch it already read, exactly as a local rewind fills —
+  and every view, including this one, redraws on the resulting `head` event.
 
 ## The seat
 
@@ -79,11 +97,12 @@ holder named. The rules that matter:
   releases it immediately, so a dead controller never wedges the session and a
   replacement attaches at once, no timeout needed. `attach` from the current
   holder succeeds and refreshes its name, and `force: true` takes the seat from
-  a live one: the displaced holder's writes refuse naming the new holder from
-  then on, and it learns of the takeover on its next write rather than by
-  announcement. Death never answers anything: a controller
-  going away mid-dialog leaves the dialog open for the local human or the next
-  controller, exactly like the 34a hold-on-dialog policy.
+  a live one: every observer sees the takeover as a `seat.lost` event (the
+  displaced holder downgrades without probing), and the displaced holder's
+  writes refuse naming the new holder from then on. Death never answers
+  anything: a controller going away mid-dialog leaves the dialog open for the
+  local human or the next controller, exactly like the 34a hold-on-dialog
+  policy.
 - **The local TUI holds no seat and needs none.** Local keys keep working
   through their existing paths. Remote and local answers to the same
   interaction race through the broker and the first wins — this is the phase 33
@@ -144,8 +163,8 @@ Event delivery never blocks the session. Each connection stages outbound lines
 on its own goroutine behind a bounded queue; a peer that stops reading backs
 its writer up until the bounds (item count, bytes, stall window) trip and the
 connection is dropped. Overflow never stalls the pump, and reconnect is the
-client's job: `state.get` for truth, `transcript.entries` for backfill,
-`events.replay {since}` when the retained ring still holds the gap.
+client's job: `state.get` for truth, the hello-named transcript file for
+backfill, `events.replay {since}` when the retained ring still holds the gap.
 
 Every observable change is assigned one `seq` in the hub at emit time, before
 ring insert and fanout, so all connections see one total order and reconnects
@@ -205,7 +224,8 @@ Three, assigned one seq space together: **stream events** mirroring the agent
 sink one to one (the json one-shot's shapes plus `tool.result`), **session
 events** for the rendered surfaces outside the turn loop (`echo`, `notice`,
 `print`, `entry.append`, `status`, `activity`, `queued`, `editor`, `head`,
-`interaction.pending`/`settled`), and the `session.exit` lifecycle event last
-before close. Pending interactions are announcements; the seat decides who may
-answer them. Raw transcript payloads (including secret-prefixed prompts) are
-acceptable on this transport and nowhere else.
+`interaction.pending`/`settled`, `seat.lost` on a force takeover), and the
+`session.exit` lifecycle event last before close. Pending interactions are
+announcements; the seat decides who may answer them, and `state.get` reports
+the seat from each connection's side. Raw transcript payloads (including
+secret-prefixed prompts) are acceptable on this transport and nowhere else.

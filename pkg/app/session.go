@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -168,6 +170,11 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 	if err != nil {
 		return session.Info{}, err
 	}
+	// a pre-flight lookup runs before any front end exists, so its pin warning
+	// surfaces on stderr directly; the open-time store sees a clean mode after.
+	if w := store.Note(); w != "" {
+		_, _ = fmt.Fprintln(os.Stderr, "ajent: "+w)
+	}
 	cwd := config.Cwd()
 	if mode == ResumeSessionName {
 		info, found, ferr := store.FindNamed(cwd, target)
@@ -208,9 +215,15 @@ func newSession(ui *tui.UI, dialogs *interactionBroker, mode ResumeMode, target,
 	if err != nil {
 		return nil, err
 	}
-	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note, snapshot: snap}
+	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: mergeNotes(store.Note(), note), snapshot: snap}
 	r.hint = rootID(snap.entries)
 	return r, nil
+}
+
+// mergeNotes joins startup caveats into the one line sessRec.note carries.
+func mergeNotes(notes ...string) string {
+	keep := func(s string) bool { return s != "" }
+	return strings.Join(bulk.SliceFilter(keep, notes), "; ")
 }
 
 // openSession resolves mode onto a transcript writer, its open-time snapshot

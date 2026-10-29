@@ -16,6 +16,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // serveModelsJSON is one never-dialed provider, so the serve run starts with a
@@ -200,7 +201,7 @@ func TestServeRunEndsThroughExit(t *testing.T) {
 // onlySocket reports the one live control socket under the config dir.
 func onlySocket(t *testing.T) (string, bool) {
 	t.Helper()
-	dir, err := config.Dir()
+	dir, err := paths.Dir()
 	require.NoError(t, err)
 	entries, rerr := os.ReadDir(filepath.Join(dir, controlDirName))
 	if rerr != nil || len(entries) != 1 {

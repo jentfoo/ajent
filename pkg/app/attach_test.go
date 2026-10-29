@@ -59,7 +59,7 @@ func newAttachRigTerm(t *testing.T, rig *controlRig, term *tui.UI, out func() st
 
 	root, stopRoot := context.WithCancel(context.Background())
 	t.Cleanup(stopRoot)
-	view := newAttachView(term, conn, root)
+	view := newAttachView(term, conn, root, hello.TranscriptPath)
 	a := &attachRig{rig: rig, conn: conn, view: view, out: out,
 		events: make(chan ctl.Event, 512)}
 	go conn.Serve(func(ev ctl.Event) {
@@ -91,10 +91,19 @@ func TestAttachBackfillRendersHistory(t *testing.T) {
 		ctlWait, 5*time.Millisecond)
 }
 
-// TestAttachPromptsFromWire pins the recall source: the attached session's
+// rigBranch reads the recorded transcript's current branch, oldest first: the
+// same file path hello names, which is what the view itself reads.
+func rigBranch(t *testing.T, rec *sessRec) []session.Entry {
+	t.Helper()
+	entries, _, err := session.Read(rec.w.Path())
+	require.NoError(t, err)
+	return session.Branch(entries, rec.w.Head())
+}
+
+// TestAttachPromptsFromFile pins the recall source: the attached session's
 // recorded user prompts arrive newest first, and injected context, assistant
 // messages and secret-prefixed lines never surface.
-func TestAttachPromptsFromWire(t *testing.T) {
+func TestAttachPromptsFromFile(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "first prompt")
 		rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "secret: hunter2")})
@@ -126,8 +135,8 @@ func TestAttachPromptsFollowHead(t *testing.T) {
 	}, ctlWait, 5*time.Millisecond)
 }
 
-// TestAttachRewindPickerForksRemote pins the double-Esc flow over the wire:
-// the picker reads this tree from transcript.entries and a picked prompt
+// TestAttachRewindPickerForksRemote pins the double-Esc flow over the file:
+// the picker reads this tree from the recorded transcript and a picked prompt
 // rewinds the remote session onto its parent, forked away like a local rewind.
 func TestAttachRewindPickerForksRemote(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
@@ -144,9 +153,7 @@ func TestAttachRewindPickerForksRemote(t *testing.T) {
 	_, err := a.conn.ClaimSeat(ctx, "test", false)
 	require.NoError(t, err)
 
-	tr, _, err := a.conn.Transcript(ctx, "")
-	require.NoError(t, err)
-	branch := wireEntries(tr.Entries)
+	branch := rigBranch(t, rig.rec)
 	rowID := branch[len(branch)-1].ID // the newest recorded prompt is pickable last
 	wantHead, fill, ok := session.RewindTarget(branch, rowID)
 	require.True(t, ok)
@@ -176,11 +183,7 @@ func TestAttachRewindObserverRefused(t *testing.T) {
 
 	a := newAttachRig(t, rig) // no seat claimed: an observer
 
-	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
-	defer cancel()
-	tr, _, err := a.conn.Transcript(ctx, "")
-	require.NoError(t, err)
-	branch := wireEntries(tr.Entries)
+	branch := rigBranch(t, rig.rec)
 	rowID := branch[len(branch)-1].ID
 
 	require.Error(t, a.view.rewindToRow(branch, rowID))
@@ -205,9 +208,7 @@ func TestAttachRewindFillsEditor(t *testing.T) {
 	_, err := a.conn.ClaimSeat(ctx, "test", false)
 	require.NoError(t, err)
 
-	tr, _, err := a.conn.Transcript(ctx, "")
-	require.NoError(t, err)
-	branch := wireEntries(tr.Entries)
+	branch := rigBranch(t, rig.rec)
 
 	// the fill paints the editor into the live block...
 	require.NoError(t, a.view.rewindToRow(branch, branch[len(branch)-1].ID))
@@ -357,13 +358,13 @@ func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
 	term, out := pipeUI(t)
 	root, stopRoot := context.WithCancel(context.Background())
 	defer stopRoot()
-	view := newAttachView(term, nil, root)
+	view := newAttachView(term, nil, root, "")
 
 	stale := ctl.NewEvent(ctl.EventEcho, 5, ctl.EchoData{Text: "stale echo"})
 	fresh := ctl.NewEvent(ctl.EventEcho, 15, ctl.EchoData{Text: "fresh echo"})
 	view.handle(stale)
 	view.handle(fresh) // buffered too; the watermark decides which one applies
-	view.applyBackfill(ctl.State{}, ctl.TranscriptResult{}, 10)
+	view.applyBackfill(ctl.State{}, nil, 10)
 
 	require.Eventually(t, func() bool { return strings.Contains(out(), "fresh echo") },
 		2*time.Second, 5*time.Millisecond)

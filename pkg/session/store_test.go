@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // writeAt creates a session holding one message whose entry timestamps and file
@@ -42,6 +44,30 @@ func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
 	require.NoError(t, err)
 	restore()
 	require.NoError(t, os.Chtimes(w.Path(), at, at))
+}
+
+// TestNewStorePinsRoot covers the sessions root's permission policy: created
+// owner-only, and a wider existing mode tightened with a startup note.
+func TestNewStorePinsRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits are not meaningful")
+	}
+	// not parallel: AJENT_HOME pins the resolution
+	home := t.TempDir()
+	t.Setenv(paths.EnvHome, home)
+
+	store, err := NewStore()
+	require.NoError(t, err)
+	assert.Empty(t, store.Note())
+	fi, err := os.Stat(filepath.Join(home, sessionsRoot))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(paths.DirPerm), fi.Mode().Perm())
+
+	// a root that slipped wider is tightened with a note
+	require.NoError(t, os.Chmod(filepath.Join(home, sessionsRoot), 0o750))
+	store2, err := NewStore()
+	require.NoError(t, err)
+	assert.Contains(t, store2.Note(), "tightened to 0700")
 }
 
 func TestStoreDirDeterministic(t *testing.T) {
@@ -265,7 +291,7 @@ func TestStoreRemoveCursorBestEffort(t *testing.T) {
 
 	head := headPath(w.Path())
 	require.NoError(t, os.Remove(head))
-	require.NoError(t, os.Mkdir(head, sessionDirPerm))
+	require.NoError(t, os.Mkdir(head, paths.DirPerm))
 	require.NoError(t, os.WriteFile(filepath.Join(head, "lock"), []byte("x"), 0o600))
 
 	require.NoError(t, s.Remove(w.Path()))

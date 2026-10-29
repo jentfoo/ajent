@@ -192,48 +192,6 @@ func controlDialogHooks(hub *sessionHub) (func(interactionInfo), func(uint64, in
 	return begin, end
 }
 
-// chainEmitters layers add over base, base hooks firing first. The control
-// server attaches onto an empty driver-time set today; the composition keeps
-// a future driver-time emitter from being displaced.
-func chainEmitters(base, add hubEmitters) hubEmitters {
-	return hubEmitters{
-		Echo:       chain1(base.Echo, add.Echo),
-		EchoImages: chain1(base.EchoImages, add.EchoImages),
-		Notice:     chain3(base.Notice, add.Notice),
-		Print:      chain1(base.Print, add.Print),
-		Segment:    chain1(base.Segment, add.Segment),
-		Model:      chain3(base.Model, add.Model),
-		Idle:       chain1(base.Idle, add.Idle),
-		Spinning:   chain1(base.Spinning, add.Spinning),
-		Activity:   chain3(base.Activity, add.Activity),
-		Queued:     chain1(base.Queued, add.Queued),
-		Draft:      chain1(base.Draft, add.Draft),
-		Head:       chain1(base.Head, add.Head),
-	}
-}
-
-func chain1[T any](a, b func(T)) func(T) {
-	switch {
-	case a == nil:
-		return b
-	case b == nil:
-		return a
-	default:
-		return func(v T) { a(v); b(v) }
-	}
-}
-
-func chain3[A, B, C any](a, b func(A, B, C)) func(A, B, C) {
-	switch {
-	case a == nil:
-		return b
-	case b == nil:
-		return a
-	default:
-		return func(x A, y B, z C) { a(x, y, z); b(x, y, z) }
-	}
-}
-
 // --- conversions from hub and session types onto the wire ---
 
 // ctlStateFrom maps one hub snapshot onto the wire state.
@@ -242,6 +200,7 @@ func ctlStateFrom(s hubSnapshot) ctl.State {
 		Session:     ctl.Session{ID: s.SessionID, Name: s.SessionName},
 		Workspace:   s.Workspace,
 		Cwd:         s.Cwd,
+		Head:        s.Head,
 		Model:       ctlStateModel(s.Model),
 		Permission:  s.Permission,
 		Running:     s.Running,
@@ -254,10 +213,10 @@ func ctlStateFrom(s hubSnapshot) ctl.State {
 		Usage: ctl.UsageState{Turns: s.Usage.Turns, Total: ctlUsage(s.Usage.Total),
 			Child: ctlUsage(s.Usage.Child), ByModel: ctlUsageByModel(s.Usage.ByModel),
 			Estimated: s.Usage.Estimated},
-		Status: ctl.StatusRow{Spinner: s.Status.Spinner, Model: s.Status.Model,
-			ModelShort: s.Status.ModelShort, Tokens: s.Status.Tokens, MaxTokens: s.Status.MaxTokens,
-			Reserve: s.Status.Reserve, Compact: s.Status.Compact, Estimated: s.Status.Estimated,
-			Segments: ctlSegments(s.Status.Segments)},
+		Status: ctl.StatusRow{
+			Spinner:  s.Status.Spinner,
+			Segments: ctlSegments(s.Status.Segments),
+		},
 	}
 	if s.Tools != nil {
 		st.Tools = make([]ctl.ToolState, len(s.Tools))
@@ -313,12 +272,4 @@ func ctlImages(imgs []tui.Image) []ctl.ImageData {
 
 func ctlEntry(e session.Entry) ctl.Entry {
 	return ctl.Entry{ID: e.ID, ParentID: e.ParentID, Type: string(e.Type), TS: e.TS, Data: e.Data}
-}
-
-func ctlEntries(entries []session.Entry) []ctl.Entry {
-	out := make([]ctl.Entry, len(entries))
-	for i, e := range entries {
-		out[i] = ctlEntry(e)
-	}
-	return out
 }

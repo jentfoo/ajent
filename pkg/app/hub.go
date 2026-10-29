@@ -122,8 +122,8 @@ type hubDeps struct {
 // sessionHub is the in-process control plane of one running session: every
 // observable surface (turn events, TUI mutations, dialogs) and every control
 // entry (submit, interrupt, mode cycle) crosses it, so an out-of-process client
-// attaches here instead of reaching into the driver's locals. The TUI control
-// loop is its first consumer today; a socket server follows.
+// or the local terminal's control loop attaches here instead of reaching into
+// the driver's locals.
 type sessionHub struct {
 	ui *hubUI
 
@@ -140,7 +140,10 @@ type sessionHub struct {
 
 	sessionID   string // stable once the transcript opens
 	sessionName string
-	headID      string // transcript head entry id, moved by rewind and fork
+	headID      string // last head seen, so a rewind event fires only on a real move
+	// headFn reads the recorded transcript's live head. Installed at bind,
+	// before any loop starts; nil when recording is off.
+	headFn func() string
 
 	mu        sync.Mutex
 	sinks     []agent.Sink
@@ -195,14 +198,13 @@ func (h *sessionHub) bindSession(rec *sessRec) {
 	if rec == nil {
 		return
 	}
-	var head string
-	if rec.w != nil {
-		head = rec.w.Head()
-	}
 	h.mu.Lock()
 	h.sessionID = sessionHint(rec)
 	h.sessionName = session.NameOf(rec.snapshot.entries)
-	h.headID = head
+	if rec.w != nil {
+		h.headID = rec.w.Head()
+		h.headFn = rec.w.Head // live: snapshots never carry a stale head
+	}
 	h.mu.Unlock()
 }
 
@@ -228,15 +230,6 @@ func (h *sessionHub) setHead(id string) {
 	if f != nil {
 		f(id)
 	}
-}
-
-// noteHead records the transcript head after an append, silently: the head
-// event fires on a rewind or fork moving the head, never on forward appends,
-// so snapshots stay truthful without noisy events.
-func (h *sessionHub) noteHead(id string) {
-	h.mu.Lock()
-	h.headID = id
-	h.mu.Unlock()
 }
 
 // Interactive reports whether a local terminal renders the session. Serve mode
@@ -287,12 +280,15 @@ func (h *sessionHub) setEmitters(emit hubEmitters) {
 // order. Delivery is non-blocking by contract: a stage append or an
 // asynchronous drop, so a slow or gone consumer never stalls the caller.
 func (h *sessionHub) publish(name string, data any) {
+	// encoded before the lock: stream deltas ride this path per sink call and
+	// must not serialize behind every other hub surface
+	raw := ctl.EncodeData(data)
 	h.mu.Lock()
 	h.evSeq++
-	ev := ctl.NewEvent(name, h.evSeq, data)
+	ev := ctl.Event{Name: name, Seq: h.evSeq, Data: raw}
 	h.evRing = append(h.evRing, ev)
 	if n := len(h.evRing) - eventRingSize; n > 0 {
-		h.evRing = slices.Delete(h.evRing, 0, n)
+		h.evRing = h.evRing[n:] // reslice off the front: no per-publish memmove
 	}
 	for _, l := range h.evSubs {
 		l.deliver(ev)
@@ -604,7 +600,6 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 	snap := hubSnapshot{
 		SessionID:   h.sessionID,
 		SessionName: h.sessionName,
-		Head:        h.headID,
 		Workspace:   h.workspace,
 		Cwd:         h.cwd,
 		Model:       h.model,
@@ -612,6 +607,11 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 		Spinning:    h.spinning,
 		QueuedTexts: slices.Clone(h.queued),
 		Activity:    activityRows(h.activity),
+	}
+	if h.headFn != nil {
+		snap.Head = h.headFn() // live writer truth; the copy only gates head events
+	} else {
+		snap.Head = h.headID
 	}
 	segs := statusSegments(h.segments)
 	acct := h.acct

@@ -14,15 +14,15 @@ import (
 
 	"github.com/go-analyze/bulk"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 const (
-	sessionDirPerm = 0o700
-	maxSlugLen     = 64
+	sessionsRoot = "sessions"
+	maxSlugLen   = 64
 )
 
 var userHome = os.UserHomeDir // injectable for tests
@@ -52,19 +52,27 @@ var ErrNameConflict = errors.New("session name already in use")
 // directory is recognisable, the hash pinning it so a rename never collides.
 type Store struct {
 	root string
+	note string // startup caveat from pinning the root's mode, empty when clean
 }
 
-// NewStore returns the store rooted at <config dir>/sessions.
+// NewStore returns the store rooted at <config dir>/sessions, creating that
+// directory and pinning it to owner-only permissions. Note reports what the
+// pin found for callers with a user-facing surface; read-only lookups may
+// ignore it.
 func NewStore() (*Store, error) {
-	p, err := config.UserPath("sessions")
+	root, note, err := paths.SubDir(sessionsRoot)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{root: p}, nil
+	return &Store{root: root, note: note}, nil
 }
 
 // StoreAt returns a store with an explicit root, for tests.
 func StoreAt(root string) *Store { return &Store{root: root} }
+
+// Note reports the startup caveat pinning the sessions root produced, empty
+// when the directory was clean or newly created.
+func (s *Store) Note() string { return s.note }
 
 // Dir resolves the directory holding one workspace's sessions, creating it.
 func (s *Store) Dir(workspace string) (string, error) {
@@ -82,7 +90,7 @@ func (s *Store) Dir(workspace string) (string, error) {
 		dir = hash4(abs) // the home directory itself has nothing to encode
 	}
 	d := filepath.Join(s.root, dir)
-	if err := os.MkdirAll(d, sessionDirPerm); err != nil {
+	if err := os.MkdirAll(d, paths.DirPerm); err != nil {
 		return "", err
 	}
 	return d, nil

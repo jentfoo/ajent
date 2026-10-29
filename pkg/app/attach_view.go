@@ -18,14 +18,17 @@ import (
 )
 
 // attachView renders one remote session onto a local terminal: backfill from
-// the transcript and snapshot, then the live event stream applied through the
-// same sink mapping the host's own renderer uses. Events arrive on the reader
-// goroutine; nothing here may block on a request.
+// the transcript file and snapshot, then the live event stream applied through
+// the same sink mapping the host's own renderer uses. Events arrive on the
+// reader goroutine; nothing here may block on a request.
 type attachView struct {
 	ui   *tui.UI
 	sink *tuisink.Sink
 	conn *client.Conn
 	root context.Context // base for background requests issued off the reader goroutine
+	// path is the transcript file hello named; bulk reads (backfill, recall,
+	// redraw) come from it at local speed instead of over the socket
+	path string
 
 	mu      sync.Mutex
 	live    bool
@@ -51,24 +54,21 @@ type attachCall struct {
 
 // newAttachView builds the view over a connected client; root is cancelled at
 // teardown, taking any in-flight background redraw with it.
-func newAttachView(ui *tui.UI, conn *client.Conn, root context.Context) *attachView {
+func newAttachView(ui *tui.UI, conn *client.Conn, root context.Context, transcriptPath string) *attachView {
 	return &attachView{
 		ui: ui, sink: tuisink.New(ui), conn: conn, root: root,
+		path:    transcriptPath,
 		dialogs: make(map[uint64]context.CancelFunc),
 		calls:   make(map[string]*attachCall),
 	}
 }
 
 func (v *attachView) backfill(ctx context.Context) error {
-	snap, seqState, err := v.conn.State(ctx)
+	snap, branch, seq, err := v.conn.Backfill(ctx)
 	if err != nil {
 		return err
 	}
-	tr, seqTranscript, err := v.conn.Transcript(ctx, "")
-	if err != nil {
-		return err
-	}
-	v.applyBackfill(snap, tr, max(seqState, seqTranscript))
+	v.applyBackfill(snap, branch, seq)
 	return nil
 }
 
@@ -76,14 +76,14 @@ func (v *attachView) backfill(ctx context.Context) error {
 // or below the watermark are superseded by what was just rendered, everything
 // above applies. The window between hello and here is milliseconds wide; a
 // delta inside it may lose its first characters.
-func (v *attachView) applyBackfill(snap ctl.State, tr ctl.TranscriptResult, water uint64) {
+func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water uint64) {
 	v.mu.Lock()
-	v.head = tr.Head
+	v.head = snap.Head
 	buf := v.buf
 	v.live, v.buf = true, nil
 	v.mu.Unlock()
 
-	v.renderHistory(tr.Entries)
+	v.renderHistory(branch)
 	v.applySnapshot(snap)
 
 	for _, ev := range buf {
@@ -95,28 +95,18 @@ func (v *attachView) applyBackfill(snap ctl.State, tr ctl.TranscriptResult, wate
 
 // renderHistory commits one branch through the replay sink: user prompts above
 // their replies, tool headers carrying their bodies, exactly as a resume shows.
-func (v *attachView) renderHistory(entries []ctl.Entry) {
-	if len(entries) == 0 {
+func (v *attachView) renderHistory(branch []session.Entry) {
+	if len(branch) == 0 {
 		return
 	}
-	session.Replay(wireEntries(entries), v.sink, session.ReplayOptions{})
+	session.Replay(branch, v.sink, session.ReplayOptions{})
 }
 
 // installRecall wires plain ↑/↓ and ctrl+r onto the terminal, sourcing both
-// from this session's recorded prompts over the wire: there is no local store.
+// from this session's recorded prompts: there is no local store.
 func (v *attachView) installRecall() {
 	v.ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(dedupePrompts(v.prompts())) })
 	v.ui.SetPromptHistory(func() []string { return session.PromptTexts(v.prompts()) })
-}
-
-// wireEntries converts one transcript read onto the session tree types.
-func wireEntries(entries []ctl.Entry) []session.Entry {
-	branch := make([]session.Entry, len(entries))
-	for i, e := range entries {
-		branch[i] = session.Entry{ID: e.ID, ParentID: e.ParentID,
-			Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
-	}
-	return branch
 }
 
 // applySnapshot paints the chrome a snapshot holds truth for.
@@ -288,7 +278,7 @@ func (v *attachView) apply(ev ctl.Event) {
 
 	case ctl.EventEntryAppend:
 		var d ctl.EntryData
-		if ev.Decode(&d) == nil { // appends extend the head silently, like noteHead
+		if ev.Decode(&d) == nil { // appends extend the head silently; only a move redraws
 			v.setHead(d.Entry.ID)
 		}
 	case ctl.EventHead:
@@ -297,44 +287,42 @@ func (v *attachView) apply(ev ctl.Event) {
 			return
 		}
 		v.setHead(d.ID)
-		// off the reader goroutine: redraw reads a fresh transcript over the wire
-		go v.redraw(v.root)
+		// off the reader goroutine: redraw re-reads the transcript file
+		go v.redraw()
 	}
 }
 
 // prompts returns the session's recorded user prompts, newest first: the recall
-// source for plain ↑/↓ and ctrl+r search. It reads the branch over the wire,
-// caching until the head moves so gestures never re-read an unchanged session;
-// a failed read keeps the last good list.
+// source for plain ↑/↓ and ctrl+r search. It reads the transcript file, caching
+// until the head moves so gestures never re-read an unchanged branch; a failed
+// read keeps the last good list.
 func (v *attachView) prompts() []session.Prompt {
 	v.mu.Lock()
 	cached, labeled := v.promptsCache, v.promptsHead
 	head := v.head
 	v.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(v.root, client.CallWait)
-	tr, _, err := v.conn.Transcript(ctx, "")
-	cancel()
+	if cached != nil && labeled == head {
+		return cached // the branch has not moved since this cache was read
+	}
+	branch, err := client.ReadBranch(v.path, head)
 	if err != nil {
 		return cached
 	}
-	if cached != nil && labeled == head && tr.Head == head {
-		return cached // the branch has not moved since this cache was read
-	}
-	ps := branchPrompts(tr.Entries)
+	ps := branchPrompts(branch)
 	v.mu.Lock()
-	v.promptsCache, v.promptsHead = ps, tr.Head
+	v.promptsCache, v.promptsHead = ps, head
 	v.mu.Unlock()
 	return ps
 }
 
 // branchPrompts extracts one transcript branch's recorded user prompts, newest
-// first: the wire twin of session.filePrompts.
-func branchPrompts(entries []ctl.Entry) []session.Prompt {
+// first: the file twin of session.filePrompts.
+func branchPrompts(entries []session.Entry) []session.Prompt {
 	out := make([]session.Prompt, 0, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- { // append-only, reverse is newest first
 		e := entries[i]
-		if e.Type != string(session.TypeMessage) || len(e.Data) == 0 {
+		if e.Type != session.TypeMessage || len(e.Data) == 0 {
 			continue
 		}
 		var md session.MessageData
@@ -429,24 +417,22 @@ func (v *attachView) dropCalls() {
 	v.calls = make(map[string]*attachCall)
 }
 
-// redraw re-renders from the transcript after a rewind or fork moved the head,
-// whether that move was local or came from the other terminal.
-func (v *attachView) redraw(root context.Context) {
-	rctx, cancel := context.WithTimeout(root, client.CallWait)
-	defer cancel()
-	tr, _, err := v.conn.Transcript(rctx, "")
+// redraw re-renders from the transcript file after a rewind or fork moved the
+// head, whether that move was local or came from the other terminal.
+func (v *attachView) redraw() {
+	v.mu.Lock()
+	head := v.head
+	running := v.running
+	v.mu.Unlock()
+
+	branch, err := client.ReadBranch(v.path, head)
 	if err != nil {
 		v.ui.Notify("refresh after rewind failed: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	v.mu.Lock()
-	v.head = tr.Head
-	running := v.running
-	v.mu.Unlock()
-
 	v.ui.Reset()
 	v.ui.Divider() // mark where the restored branch begins, like a local rewind
-	v.renderHistory(tr.Entries)
+	v.renderHistory(branch)
 	v.ui.SetIdle(!running)
 }
 
@@ -478,13 +464,6 @@ func (v *attachView) setHead(id string) {
 	if id != "" {
 		v.head = id
 	}
-}
-
-// currentHead reads the last known head entry id.
-func (v *attachView) currentHead() string {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.head
 }
 
 // beginInteraction races a remote dialog against the local human: the first

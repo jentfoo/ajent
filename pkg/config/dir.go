@@ -1,45 +1,29 @@
 package config
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 const (
 	// DirName is the configuration directory, relative to the user home.
-	DirName = ".ajent"
+	DirName = paths.DirName
 	// EnvHome overrides the configuration directory entirely.
-	EnvHome = "AJENT_HOME"
+	EnvHome = paths.EnvHome
+
 	// CacheDirName holds disposable caches under the configuration directory.
 	CacheDirName = "cache"
-
-	dirPerm = 0o700
 )
 
 // ErrNoHome is returned when neither AJENT_HOME nor a user home directory is set.
-var ErrNoHome = errors.New("cannot locate the ajent configuration directory")
-
-var (
-	osEnv  = os.Getenv
-	osHome = os.UserHomeDir
-)
-
-// Dir returns the ajent configuration directory, creating it when missing.
-func Dir() (string, error) {
-	dir, err := resolveDir(osEnv, osHome)
-	if err != nil {
-		return "", err
-	} else if err = os.MkdirAll(dir, dirPerm); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
+var ErrNoHome = paths.ErrNoHome
 
 // UserPath returns name resolved inside the configuration directory, creating
-// it when missing like Dir does. Use Home to avoid that side effect.
+// it when missing. Use Home to avoid that side effect.
 func UserPath(name string) (string, error) {
-	dir, err := Dir()
+	dir, err := paths.Dir()
 	if err != nil {
 		return "", err
 	}
@@ -50,18 +34,18 @@ func UserPath(name string) (string, error) {
 // it. It honours AJENT_HOME and otherwise resolves <home>/.ajent, so callers that
 // only probe for a file's existence avoid an empty-dir side effect.
 func Home() (string, error) {
-	return resolveDir(osEnv, osHome)
+	return paths.Home()
 }
 
 // CachePath returns name resolved inside the configuration directory's cache
 // subdirectory, creating it when missing.
 func CachePath(name string) (string, error) {
-	dir, err := Dir()
+	dir, err := paths.Dir()
 	if err != nil {
 		return "", err
 	}
 	cd := filepath.Join(dir, CacheDirName)
-	if err = os.MkdirAll(cd, dirPerm); err != nil {
+	if err = os.MkdirAll(cd, paths.DirPerm); err != nil {
 		return "", err
 	}
 	return filepath.Join(cd, name), nil
@@ -79,18 +63,4 @@ func Cwd() string {
 // ProjectDir returns the configuration directory for a workspace.
 func ProjectDir(workspace string) string {
 	return filepath.Join(workspace, DirName)
-}
-
-// resolveDir returns the configuration directory for the given environment.
-func resolveDir(env func(string) string, home func() (string, error)) (string, error) {
-	if h := env(EnvHome); h != "" {
-		return h, nil
-	}
-	h, err := home()
-	if err != nil {
-		return "", err
-	} else if h == "" {
-		return "", ErrNoHome
-	}
-	return filepath.Join(h, DirName), nil
 }

@@ -12,53 +12,32 @@ import (
 // carries onto the transcript's message entries.
 const submitOriginController = "controller"
 
-// writeMethod reports whether one method mutates the session, and so needs the
-// control seat.
-func writeMethod(m string) bool {
-	switch m {
-	case ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-		ctl.MethodInputSet, ctl.MethodRewind, ctl.MethodResolve:
-		return true
-	}
-	return false
+// controlMethod routes one controller method: its handler and, beside it,
+// whether the call mutates and so requires the control seat.
+type controlMethod struct {
+	handle func(c *controlConn, params []byte) (any, *ctl.Error)
+	seat   bool
 }
 
-// dispatchWrite answers one seat-gated request: observer connections are
-// refused before any handler runs, so two controllers can never race a dialog
-// or interleave submits invisibly. The watermark reads first, keeping the
-// 34a rule that events racing the handler stay above the reply's seq.
-func (c *controlConn) dispatchWrite(req ctl.Request) {
-	seq := c.srv.hub.evWatermark()
-	if rerr := c.srv.seatRefusal(c); rerr != nil {
-		c.reply(req.ID, seq, nil, rerr)
-		return
-	}
-	var result any
-	var rerr *ctl.Error
-	switch req.Method {
-	case ctl.MethodSubmit:
-		result, rerr = c.srv.submit(req.Params)
-	case ctl.MethodInterrupt:
-		result, rerr = c.srv.interrupt()
-	case ctl.MethodModeCycle:
-		result, rerr = c.srv.modeCycle(req.Params)
-	case ctl.MethodInputSet:
-		result, rerr = c.srv.inputSet(req.Params)
-	case ctl.MethodRewind:
-		result, rerr = c.srv.rewind(req.Params)
-	case ctl.MethodResolve:
-		result, rerr = c.srv.resolve(req.Params)
-	default:
-		rerr = ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)
-	}
-	c.reply(req.ID, seq, result, rerr)
+// controlMethods is every method a controller may call. Adding one means adding
+// its entry here; the seat requirement sits beside the handler that obeys it.
+var controlMethods = map[string]controlMethod{
+	ctl.MethodState:  {handle: (*controlConn).stateGet},
+	ctl.MethodReplay: {handle: (*controlConn).replay},
+	ctl.MethodAttach: {handle: (*controlConn).attachCall}, // callable before any seat exists
+
+	ctl.MethodSubmit:    {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.submit(p) }},
+	ctl.MethodInterrupt: {seat: true, handle: func(c *controlConn, _ []byte) (any, *ctl.Error) { return c.srv.interrupt() }},
+	ctl.MethodModeCycle: {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.modeCycle(p) }},
+	ctl.MethodInputSet:  {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.inputSet(p) }},
+	ctl.MethodRewind:    {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.rewind(p) }},
+	ctl.MethodResolve:   {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.resolve(p) }},
 }
 
 // attach claims or declines the control seat for c. The seat is single: a
 // second claim errors naming the holder, force takes it from a live one (the
-// displaced holder's writes refuse naming the new holder), and re-attaching by
-// the current holder succeeds, refreshing its name. A plain attach stays an
-// observer.
+// displaced holder learns through seat.lost), and re-attaching by the current
+// holder succeeds, refreshing its name. A plain attach stays an observer.
 func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult, *ctl.Error) {
 	var p ctl.AttachParams
 	if rerr := decodeParams(params, &p); rerr != nil {
@@ -72,15 +51,28 @@ func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult,
 		holder = "controller"
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	displaced := "" // the live holder force-displaced, for its seat.lost event
+	var refusal *ctl.Error
 	switch {
 	case s.seat == c:
 		s.seatHolder = holder
 	case s.seat != nil && !p.Force:
-		return ctl.AttachResult{}, ctl.Errf(ctl.CodeSeatHeld,
+		refusal = ctl.Errf(ctl.CodeSeatHeld,
 			"control seat held by %s; attach again with force to take it", seatLabel(s.seatHolder))
 	default:
+		if s.seat != nil {
+			displaced = s.seatHolder
+		}
 		s.seat, s.seatHolder = c, holder
+	}
+	s.mu.Unlock()
+	if refusal != nil {
+		return ctl.AttachResult{}, refusal
+	}
+	if displaced != "" {
+		// off the server lock: publishing takes the hub lock, and no path may
+		// hold both at once
+		s.hub.publish(ctl.EventSeatLost, ctl.SeatLostData{From: displaced, To: holder})
 	}
 	return ctl.AttachResult{Control: true}, nil
 }
@@ -110,6 +102,43 @@ func (s *controlServer) seatRefusal(c *controlConn) *ctl.Error {
 	}
 	return ctl.Errf(ctl.CodeObserver,
 		"observer connection: nobody holds the control seat; attach with control first")
+}
+
+// seatState reports the control seat from this connection's side of it.
+func (s *controlServer) seatState(c *controlConn) ctl.SeatState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return ctl.SeatState{Held: s.seat != nil, Holder: s.seatHolder, Yours: s.seat == c}
+}
+
+// stateGet answers one snapshot read with the seat section from this
+// connection's view.
+func (c *controlConn) stateGet([]byte) (any, *ctl.Error) {
+	st := ctlStateFrom(c.srv.hub.Snapshot())
+	st.Seat = c.srv.seatState(c)
+	return st, nil
+}
+
+// replay answers one events.replay read over the retained ring.
+func (c *controlConn) replay(params []byte) (any, *ctl.Error) {
+	var p ctl.ReplayParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, ctl.Errf(ctl.CodeBadRequest, "params: %v", err)
+		}
+	}
+	evs, ok := c.srv.hub.eventsSince(p.Since)
+	if !ok {
+		return nil, ctl.Errf(ctl.CodeTooOld,
+			"seq %d predates the retained event history; re-snapshot with state.get", p.Since)
+	}
+	return ctl.ReplayResult{Events: evs}, nil
+}
+
+// attachCall adapts the attach method onto the registry shape.
+func (c *controlConn) attachCall(params []byte) (any, *ctl.Error) {
+	res, rerr := c.srv.attach(c, params)
+	return res, rerr
 }
 
 // submit routes one line exactly as typed in the editor: prompts, /commands,

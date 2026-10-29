@@ -176,7 +176,10 @@ The store maps workspaces to directories under `<config dir>/sessions`: a
 workspace is one `<root>/<slug>-<hash>` directory, so renaming a project does
 not orphan its sessions. The slug flattens the whole workspace path so a
 directory is recognisable at a glance, and it is lossy, so the hash pins identity.
-Names are never parsed back into a workspace.
+Names are never parsed back into a workspace. The root itself is created and
+pinned to owner-only permissions by `paths.SubDir` (see `config-design.md`), so
+a mode that slipped wider is tightened with a startup warning rather than
+silently kept.
 The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.

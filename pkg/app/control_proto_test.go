@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
@@ -125,11 +126,10 @@ func TestControlWatermarkAppliesOnce(t *testing.T) {
 	assert.Equal(t, "three", d.V)
 }
 
-// TestControlTranscriptBackfill pins the reconciliation source: entries match
-// session.Read/Branch for the live head, the after cursor resumes without
-// gaps, and entry.append events replayed against a snapshot reconstruct the
-// branch exactly. Pre-attach history never announces.
-func TestControlTranscriptBackfill(t *testing.T) {
+// TestControlBackfillSources pins the reconciliation sources: state.get
+// carries the head a transcript file read branches by (hello named its path),
+// and only post-attach appends announce. Pre-attach history never announces.
+func TestControlBackfillSources(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "recorded before attach")
@@ -137,67 +137,27 @@ func TestControlTranscriptBackfill(t *testing.T) {
 	c := dialControl(t, rig.path)
 	c.hello()
 
-	writeMessage(t, rig.rec, "written after attach")
-
-	var tr ctl.TranscriptResult
-	rp := c.call("t1", ctl.MethodTranscript, map[string]any{})
+	rp := c.call("s1", ctl.MethodState, map[string]any{})
 	require.Nil(t, rp.Error)
-	require.NoError(t, rp.DecodeResult(&tr))
+	var st ctl.State
+	require.NoError(t, rp.DecodeResult(&st))
+	assert.Equal(t, rig.rec.w.Head(), st.Head)
 
-	entries, _, err := session.Read(rig.rec.w.Path())
+	branch, err := client.ReadBranch(rig.rec.w.Path(), st.Head)
 	require.NoError(t, err)
-	branch := session.Branch(entries, rig.rec.w.Head())
-	require.Len(t, tr.Entries, len(branch))
-	for i := range branch {
-		assert.Equal(t, branch[i].ID, tr.Entries[i].ID)
-		assert.Equal(t, branch[i].ParentID, tr.Entries[i].ParentID)
-		assert.Equal(t, string(branch[i].Type), tr.Entries[i].Type)
-		assert.Equal(t, branch[i].TS, tr.Entries[i].TS)
-		assert.JSONEq(t, string(branch[i].Data), string(tr.Entries[i].Data))
-	}
-	assert.Equal(t, rig.rec.w.Head(), tr.Head)
+	require.Len(t, branch, 2) // the session entry and its recorded prompt
+	last := branch[len(branch)-1]
+	var md session.MessageData
+	require.NoError(t, json.Unmarshal(last.Data, &md))
+	assert.Equal(t, "recorded before attach", llm.JoinText(md.Message.Content))
+
+	writeMessage(t, rig.rec, "written after attach")
 
 	// exactly one append announced: the pre-attach entry never did
 	appended := c.collect(ctl.EventEntryAppend, 1)
 	var ed ctl.EntryData
 	require.NoError(t, appended[0].Decode(&ed))
-	assert.Equal(t, branch[len(branch)-1].ID, ed.Entry.ID)
-
-	// the after cursor resumes with no gaps and no repeats
-	mid := branch[1].ID
-	rp = c.call("t2", ctl.MethodTranscript, map[string]any{"after": mid})
-	require.Nil(t, rp.Error)
-	require.NoError(t, rp.DecodeResult(&tr))
-	require.NotEmpty(t, tr.Entries)
-	assert.Equal(t, mid, tr.Entries[0].ParentID)
-	assert.NotContains(t, entryIDs(tr.Entries), mid)
-
-	// an unknown cursor errors legibly rather than resuming wrong
-	rp = c.call("t3", ctl.MethodTranscript, map[string]any{"after": "nope"})
-	require.NotNil(t, rp.Error)
-	assert.Equal(t, ctl.CodeBadRequest, rp.Error.Code)
-}
-
-// TestControlTranscriptUnreadableRefused pins the refusal when the transcript
-// cannot be read: a legible error, never an empty answer.
-func TestControlTranscriptUnreadableRefused(t *testing.T) {
-	// not parallel: the rig pins AJENT_HOME
-	rig := newControlRig(t, nil)
-	require.NoError(t, os.Remove(rig.rec.w.Path()))
-	c := dialControl(t, rig.path)
-	c.hello()
-
-	rp := c.call("t1", ctl.MethodTranscript, map[string]any{})
-	require.NotNil(t, rp.Error)
-	assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
-}
-
-func entryIDs(entries []ctl.Entry) []string {
-	out := make([]string, len(entries))
-	for i, e := range entries {
-		out[i] = e.ID
-	}
-	return out
+	assert.Equal(t, branch[len(branch)-1].ID, ed.Entry.ParentID) // appends extend the head
 }
 
 // writeMessage records one message entry on the transcript.

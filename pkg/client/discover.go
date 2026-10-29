@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // DirName holds session sockets under the ajent config dir. It must agree
@@ -71,7 +71,7 @@ func Resolve(target string) (string, []Session, error) {
 
 // Dir returns <config>/control without creating it.
 func Dir() (string, error) {
-	home, err := config.Home()
+	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}

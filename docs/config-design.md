@@ -5,6 +5,16 @@ changes it. It is the single configuration system for ajent: layered loading
 with per-key provenance, a schema-derived environment binding, session overrides
 that survive resume, and an ordered writer that preserves unknown keys.
 
+## The home directory
+
+`pkg/paths` resolves the ajent home (honoring `AJENT_HOME`) as a leaf both this
+package and client-side packages import directly. Everything it creates under
+the home is pinned to owner-only access (`DirPerm`, 0700). `SubDir` materializes
+a named subdirectory — the control socket dir, the sessions root — tightening a
+group or world accessible mode in place and reporting what it found as a
+warning; callers surface that beside their other startup output (the notice
+line interactively, stderr under serve and CLI paths).
+
 ## Layers
 
 Configuration resolves lowest to highest precedence:

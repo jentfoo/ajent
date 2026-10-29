@@ -12,6 +12,10 @@ type Hello struct {
 	Serve       bool    `json:"serve"`       // the socket is the only front end
 	PID         int     `json:"pid"`
 	Version     string  `json:"version"`
+	// TranscriptPath locates the recorded transcript on disk, empty when
+	// recording is off. Controllers backfill from this file: bulk catch-up
+	// never rides the socket.
+	TranscriptPath string `json:"transcriptPath,omitempty"`
 }
 
 // Session names the transcript a controller attaches to.
@@ -304,18 +308,6 @@ type ResolveParams struct {
 	Cancel  bool    `json:"cancel,omitempty"`
 }
 
-// TranscriptParams bounds a transcript.entries reply with an entry id cursor:
-// only entries after it are returned.
-type TranscriptParams struct {
-	After string `json:"after,omitempty"`
-}
-
-// TranscriptResult is the current branch, oldest first, plus its head entry.
-type TranscriptResult struct {
-	Head    string  `json:"head"`
-	Entries []Entry `json:"entries"`
-}
-
 // ReplayParams asks for the events past a seq the client already holds.
 type ReplayParams struct {
 	Since uint64 `json:"since"`
@@ -326,12 +318,20 @@ type ReplayResult struct {
 	Events []Event `json:"events"`
 }
 
+// SeatLostData announces one force takeover of the control seat: From names
+// the displaced holder (empty when it never announced one), To its successor.
+type SeatLostData struct {
+	From string `json:"from,omitempty"`
+	To   string `json:"to"`
+}
+
 // State is the state.get result: one consistent read of everything a
 // controller polls.
 type State struct {
 	Session     Session       `json:"session"`
 	Workspace   string        `json:"workspace"`
 	Cwd         string        `json:"cwd"`
+	Head        string        `json:"head"` // transcript head entry id, for branching a file read
 	Model       ModelState    `json:"model"`
 	Permission  string        `json:"permission"` // barrier mode name, "" when no gate exists
 	Tools       []ToolState   `json:"tools"`
@@ -344,6 +344,15 @@ type State struct {
 	QueuedTexts []string      `json:"queuedTexts"`
 	Activity    []ActivityRow `json:"activity"`
 	Status      StatusRow     `json:"status"`
+	Seat        SeatState     `json:"seat"`
+}
+
+// SeatState reports the control seat: whether anyone holds it, who, and
+// whether this connection is the holder.
+type SeatState struct {
+	Held   bool   `json:"held"`
+	Holder string `json:"holder,omitempty"` // announced name of the holder
+	Yours  bool   `json:"yours"`
 }
 
 // ModelState is the model a snapshot read, capabilities included.
@@ -385,15 +394,9 @@ type ActivityRow struct {
 	Rank int    `json:"rank"`
 }
 
-// StatusRow is the status line the local terminal renders.
+// StatusRow is the status line's own chrome: the spinner glyph and keyed
+// segments. Model labels live in State, context numbers in Context.
 type StatusRow struct {
-	Spinner    string    `json:"spinner,omitempty"`
-	Model      string    `json:"model,omitempty"`
-	ModelShort string    `json:"modelShort,omitempty"`
-	Tokens     int       `json:"tokens"`
-	MaxTokens  int       `json:"maxTokens"`
-	Reserve    int       `json:"reserve"`
-	Compact    int       `json:"compact"`
-	Estimated  bool      `json:"estimated"`
-	Segments   []Segment `json:"segments"`
+	Spinner  string    `json:"spinner,omitempty"`
+	Segments []Segment `json:"segments"`
 }

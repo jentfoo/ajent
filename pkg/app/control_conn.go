@@ -84,6 +84,7 @@ func newControlConn(srv *controlServer, nc net.Conn) *controlConn {
 		Workspace: snap.Workspace, Cwd: snap.Cwd,
 		Interactive: srv.hub.Interactive(), Serve: srv.serve,
 		PID: os.Getpid(), Version: version.Version,
+		TranscriptPath: srv.transcriptPath,
 	}))
 	_ = c.flushHello() // the hello must land before anything can queue behind it
 	return c
@@ -301,43 +302,23 @@ func (c *controlConn) flushBuffer() error {
 	return err
 }
 
-// dispatch answers one request. The watermark is read before the handler
-// gathers its result, so events racing the read stay above the reply's seq.
+// dispatch answers one request through the method registry. The watermark
+// reads before anything runs, so events racing the reply stay above its seq;
+// a seat refusal lands after it for the same reason.
 func (c *controlConn) dispatch(req ctl.Request) {
-	switch req.Method {
-	case ctl.MethodState:
-		seq := c.srv.hub.evWatermark()
-		c.reply(req.ID, seq, ctlStateFrom(c.srv.hub.Snapshot()), nil)
-	case ctl.MethodTranscript:
-		seq := c.srv.hub.evWatermark()
-		res, rerr := c.srv.transcript(req.Params)
-		c.reply(req.ID, seq, res, rerr)
-	case ctl.MethodReplay:
-		seq := c.srv.hub.evWatermark()
-		var p ctl.ReplayParams
-		if len(req.Params) > 0 {
-			if err := json.Unmarshal(req.Params, &p); err != nil {
-				c.reply(req.ID, seq, nil, ctl.Errf(ctl.CodeBadRequest, "params: %v", err))
-				return
-			}
-		}
-		evs, ok := c.srv.hub.eventsSince(p.Since)
-		if !ok {
-			c.reply(req.ID, seq, nil, ctl.Errf(ctl.CodeTooOld,
-				"seq %d predates the retained event history; re-snapshot with state.get", p.Since))
-			return
-		}
-		c.reply(req.ID, seq, ctl.ReplayResult{Events: evs}, nil)
-	case ctl.MethodAttach:
-		seq := c.srv.hub.evWatermark()
-		res, rerr := c.srv.attach(c, req.Params)
-		c.reply(req.ID, seq, res, rerr)
-	default:
-		if writeMethod(req.Method) {
-			c.dispatchWrite(req)
-			return
-		}
+	m, ok := controlMethods[req.Method]
+	if !ok {
 		c.reply(req.ID, c.srv.hub.evWatermark(), nil,
 			ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method))
+		return
 	}
+	seq := c.srv.hub.evWatermark()
+	if m.seat {
+		if rerr := c.srv.seatRefusal(c); rerr != nil {
+			c.reply(req.ID, seq, nil, rerr)
+			return
+		}
+	}
+	result, rerr := m.handle(c, req.Params)
+	c.reply(req.ID, seq, result, rerr)
 }

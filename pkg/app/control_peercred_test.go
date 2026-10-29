@@ -100,34 +100,3 @@ func TestWriteControlRefusal(t *testing.T) {
 		t.Fatal("timed out waiting for the refused event")
 	}
 }
-
-func TestTightenControlDir(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("mode bits are not meaningful")
-	}
-	t.Parallel()
-
-	t.Run("already tight", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.Chmod(dir, 0o700))
-		assert.Empty(t, tightenControlDir(dir))
-		fi, err := os.Stat(dir)
-		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
-	})
-
-	t.Run("group accessible", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.Chmod(dir, 0o750))
-		warn := tightenControlDir(dir)
-		assert.NotEmpty(t, warn)
-		assert.Contains(t, warn, "tightened to 0700")
-		fi, err := os.Stat(dir)
-		require.NoError(t, err)
-		assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
-	})
-
-	t.Run("absent dir", func(t *testing.T) {
-		assert.Empty(t, tightenControlDir(filepath.Join(t.TempDir(), "missing")))
-	})
-}

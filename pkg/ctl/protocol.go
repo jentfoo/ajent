@@ -17,9 +17,8 @@ const Protocol = 1
 // Method names a controller may call. The read-only set answers any
 // connection; every write method requires the control seat.
 const (
-	MethodState      = "state.get"
-	MethodTranscript = "transcript.entries"
-	MethodReplay     = "events.replay"
+	MethodState  = "state.get"
+	MethodReplay = "events.replay"
 
 	MethodAttach    = "attach"
 	MethodSubmit    = "submit"
@@ -67,6 +66,11 @@ const (
 	EventHead               = "head"
 	EventInteractionPending = "interaction.pending"
 	EventInteractionSettled = "interaction.settled"
+
+	// EventSeatLost announces a force takeover of the control seat: the displaced
+	// holder downgrades to observer without probing with a write, and observers
+	// learn who drives now. Never fires on release-by-disconnect.
+	EventSeatLost = "seat.lost"
 
 	// EventRefused replaces hello when the connection is not admitted: the
 	// kernel-verified peer fails the session's identity check. Peers read it,
@@ -130,11 +134,17 @@ type Event struct {
 // NewEvent builds one event, encoding data once. An unencodable payload drops
 // rather than corrupting the stream.
 func NewEvent(name string, seq uint64, data any) Event {
+	return Event{Name: name, Seq: seq, Data: EncodeData(data)}
+}
+
+// EncodeData marshals one event payload; an unencodable value drops. Callers
+// that assign the seq under a lock encode before taking it.
+func EncodeData(data any) json.RawMessage {
 	raw, err := json.Marshal(data)
 	if err != nil {
-		return Event{Name: name, Seq: seq}
+		return nil // dropped rather than corrupting the stream
 	}
-	return Event{Name: name, Seq: seq, Data: raw}
+	return raw
 }
 
 // Decode unmarshals the event payload into v. An event without a payload
