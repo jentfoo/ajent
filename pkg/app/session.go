@@ -154,6 +154,15 @@ func skipNewerNote(skipped int, newest session.Info) string {
 	return fmt.Sprintf("skipping %d sessions (newest %s): newer session format", skipped, newest.Label())
 }
 
+// stderrNote carries a store warning on stderr; the CLI paths printing it run
+// before any front end exists.
+func stderrNote(w string) {
+	if w == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, "ajent: "+w)
+}
+
 // CheckSessionTarget verifies that a requested session exists before the TUI
 // opens, so an id or name fails fast rather than silently starting fresh. It
 // returns the resolution for the open to adopt as a locator; a zero Info
@@ -172,9 +181,7 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 	}
 	// a pre-flight lookup runs before any front end exists, so its pin warning
 	// surfaces on stderr directly; the open-time store sees a clean mode after.
-	if w := store.Note(); w != "" {
-		_, _ = fmt.Fprintln(os.Stderr, "ajent: "+w)
-	}
+	stderrNote(store.Note())
 	cwd := config.Cwd()
 	if mode == ResumeSessionName {
 		info, found, ferr := store.FindNamed(cwd, target)
@@ -215,15 +222,12 @@ func newSession(ui *tui.UI, dialogs *interactionBroker, mode ResumeMode, target,
 	if err != nil {
 		return nil, err
 	}
-	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: mergeNotes(store.Note(), note), snapshot: snap}
+	// startup caveats join into the one line sessRec.note carries
+	note = strings.Join(bulk.SliceFilter(func(s string) bool { return s != "" },
+		[]string{store.Note(), note}), "; ")
+	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note, snapshot: snap}
 	r.hint = rootID(snap.entries)
 	return r, nil
-}
-
-// mergeNotes joins startup caveats into the one line sessRec.note carries.
-func mergeNotes(notes ...string) string {
-	keep := func(s string) bool { return s != "" }
-	return strings.Join(bulk.SliceFilter(keep, notes), "; ")
 }
 
 // openSession resolves mode onto a transcript writer, its open-time snapshot

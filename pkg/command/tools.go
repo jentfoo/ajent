@@ -112,7 +112,7 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 			label = l
 		}
 		items[i] = tui.PickItem{Label: rw.Name, Group: label}
-		allOn := !slices.ContainsFunc(rw.Names, func(n string) bool { _, ok := enabled[n]; return !ok })
+		allOn := tools.AllPresent(rw.Names, enabled)
 		if allOn {
 			initial = append(initial, i)
 		}

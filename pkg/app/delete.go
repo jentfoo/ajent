@@ -22,9 +22,7 @@ type DeleteOptions struct {
 func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
 	store, err := session.NewStore()
 	if err == nil {
-		if w := store.Note(); w != "" { // the CLI has no notice surface: stderr carries it
-			_, _ = fmt.Fprintln(os.Stderr, "ajent: "+w)
-		}
+		stderrNote(store.Note())
 		cwd := config.Cwd()
 		if o.Target != "" {
 			err = session.DeleteSession(out, store, cwd, o.Target)

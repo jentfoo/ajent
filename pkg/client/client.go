@@ -83,6 +83,28 @@ func Dial(path string) (*Conn, ctl.Hello, error) {
 	return c, hello, nil
 }
 
+// helloLine decodes one raw control line as the peer's hello event, mapping a
+// refusal to an error carrying the reason it named.
+func helloLine(raw json.RawMessage) (ctl.Hello, error) {
+	in, err := ctl.DecodeIncoming(raw)
+	if err != nil || in.Event == nil {
+		return ctl.Hello{}, errors.New("first control line was not a hello event")
+	}
+	if in.Event.Name == ctl.EventRefused { // identity check failed: the reason says what the kernel saw
+		var rd ctl.RefusedData
+		_ = in.Event.Decode(&rd)
+		return ctl.Hello{}, fmt.Errorf("session refused this connection: %s", rd.Reason)
+	}
+	if in.Event.Name != ctl.EventHello {
+		return ctl.Hello{}, errors.New("first control line was not a hello event")
+	}
+	var hello ctl.Hello
+	if err := in.Event.Decode(&hello); err != nil {
+		return hello, fmt.Errorf("decoding control hello: %w", err)
+	}
+	return hello, nil
+}
+
 // readHello reads the first line under a deadline, so an unresponsive peer
 // cannot hold the dial open.
 func (c *Conn) readHello() (ctl.Hello, error) {
@@ -94,24 +116,9 @@ func (c *Conn) readHello() (ctl.Hello, error) {
 
 	var raw json.RawMessage
 	if err := c.dec.Decode(&raw); err != nil {
-		return hello, fmt.Errorf("reading control hello: %w", err)
+		return ctl.Hello{}, fmt.Errorf("reading control hello: %w", err)
 	}
-	in, err := ctl.DecodeIncoming(raw)
-	if err != nil || in.Event == nil {
-		return hello, errors.New("first control line was not a hello event")
-	}
-	if in.Event.Name == ctl.EventRefused { // identity check failed: the reason says what the kernel saw
-		var rd ctl.RefusedData
-		_ = in.Event.Decode(&rd)
-		return hello, fmt.Errorf("session refused this connection: %s", rd.Reason)
-	}
-	if in.Event.Name != ctl.EventHello {
-		return hello, errors.New("first control line was not a hello event")
-	}
-	if err := in.Event.Decode(&hello); err != nil {
-		return hello, fmt.Errorf("decoding control hello: %w", err)
-	}
-	return hello, nil
+	return helloLine(raw)
 }
 
 // Serve decodes lines until the peer goes away or one turns to garbage,

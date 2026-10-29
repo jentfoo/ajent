@@ -15,10 +15,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/paths"
 )
 
-// DirName holds session sockets under the ajent config dir. It must agree
-// with the server's bind location in pkg/app.
-const DirName = "control"
-
 // Session is one live session's socket with the identity its hello announced.
 type Session struct {
 	Path string
@@ -69,13 +65,13 @@ func Resolve(target string) (string, []Session, error) {
 	}
 }
 
-// Dir returns <config>/control without creating it.
+// Dir returns <config>/<control socket dir> without creating it.
 func Dir() (string, error) {
 	home, err := paths.Home()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, DirName), nil
+	return filepath.Join(home, paths.ControlDirName), nil
 }
 
 // Discover probes every socket in the control dir and returns the live ones,
@@ -127,12 +123,5 @@ func probeHello(path string) (hello ctl.Hello, err error) {
 	if err = ctl.NewDecoder(conn).Decode(&raw); err != nil {
 		return ctl.Hello{}, err
 	}
-	in, derr := ctl.DecodeIncoming(raw)
-	if derr != nil || in.Event == nil || in.Event.Name != ctl.EventHello {
-		return ctl.Hello{}, errors.New("first control line was not a hello event")
-	}
-	if derr = in.Event.Decode(&hello); derr != nil {
-		return ctl.Hello{}, derr
-	}
-	return hello, nil
+	return helloLine(raw)
 }

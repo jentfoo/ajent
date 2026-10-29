@@ -128,7 +128,7 @@ func (s *ctlStreamSink) TurnEnd(r agent.TurnResult) {
 }
 
 // controlEmitters builds the hub observer hooks republishing each rendered
-// surface as its control event. One emitter per phase 33 surface, not a second
+// surface as its control event. One emitter per TUI surface, not a second
 // status implementation.
 func controlEmitters(hub *sessionHub) hubEmitters {
 	return hubEmitters{

@@ -41,7 +41,7 @@ func newFakeSession(t *testing.T) *fakeSession {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 
-	dir := filepath.Join(home, DirName)
+	dir := filepath.Join(home, paths.ControlDirName)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "01JFAKESESSIONID000000.sock"))
 	require.NoError(t, err)

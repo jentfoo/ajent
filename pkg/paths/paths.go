@@ -16,6 +16,10 @@ const (
 	DirName = ".ajent"
 	// EnvHome overrides the configuration directory entirely.
 	EnvHome = "AJENT_HOME"
+	// ControlDirName is the session socket directory under the configuration
+	// directory, apart from sessions/ so transcript tooling never sweeps it and
+	// a stale file is never mistaken for a transcript.
+	ControlDirName = "control"
 )
 
 // DirPerm pins every directory ajent creates under its home to owner-only

@@ -236,8 +236,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		opts.Sinks = append(opts.Sinks, hub.sink()) // hub fans out after the renderer
 	}
 	if rec != nil {
-		// recorder first, hub after: the order 34a's clients rely on. Serve mode
-		// wraps the hub sink directly, no renderer existing
+		// recorder first, hub after: attach clients reconcile the transcript with
+		// live events, so an entry is recorded before its event can reach them.
+		// Serve mode wraps the hub sink directly, no renderer existing
 		opts.Sinks = []agent.Sink{rec.rec.Sink(sink)}
 		if term != nil {
 			opts.Sinks = append(opts.Sinks, hub.sink())
@@ -271,7 +272,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// tool and stage their output for delivery to the model. Built before the
 	// steer queue, whose delivery paths flush staged output into the batch.
 	stager := command.NewStager(appRoot, toolsReg, sink)
-	hub.stager = stager // prompts submitted while a turn runs queue here: they render as dimmed rows,
+	hub.stager = stager
+	// prompts submitted while a turn runs queue here: they render as dimmed rows,
 	// hand over at the next step boundary (or the next turn), and recover to the
 	// editor on interrupt or Alt+Up. Staged shell output rides whichever prompt
 	// delivers, never a submission that might be recalled or aborted.

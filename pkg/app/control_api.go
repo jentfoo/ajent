@@ -122,10 +122,8 @@ func (c *controlConn) stateGet([]byte) (any, *ctl.Error) {
 // replay answers one events.replay read over the retained ring.
 func (c *controlConn) replay(params []byte) (any, *ctl.Error) {
 	var p ctl.ReplayParams
-	if len(params) > 0 {
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, ctl.Errf(ctl.CodeBadRequest, "params: %v", err)
-		}
+	if rerr := decodeParams(params, &p); rerr != nil {
+		return nil, rerr
 	}
 	evs, ok := c.srv.hub.eventsSince(p.Since)
 	if !ok {

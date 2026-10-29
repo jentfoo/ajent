@@ -21,11 +21,6 @@ import (
 )
 
 const (
-	// controlDirName holds session sockets under the ajent config dir, apart
-	// from sessions/ so listing and deletion tooling never sweeps one mid-run
-	// and a stale file is never mistaken for a transcript.
-	controlDirName = "control"
-
 	// controlSocketMax is the sun_path budget the enable path guards: linux
 	// allows 108 bytes, darwin 104, and 100 leaves room for the terminator.
 	controlSocketMax = 100
@@ -52,7 +47,7 @@ const (
 // control directory is created and pinned to 0700; a warning names any wider
 // mode found there, like models.json's permission check.
 func controlSocketPath(sessionID string) (string, string, error) {
-	dir, warn, err := paths.SubDir(controlDirName)
+	dir, warn, err := paths.SubDir(paths.ControlDirName)
 	if err != nil {
 		return "", "", err
 	}

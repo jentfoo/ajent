@@ -320,7 +320,7 @@ func TestControlSocketPathLayoutAndLength(t *testing.T) {
 	path, warn, err := controlSocketPath(id)
 	require.NoError(t, err)
 	assert.Empty(t, warn) // a fresh directory carries the right mode already
-	assert.Equal(t, filepath.Join(home, controlDirName, id+".sock"), path)
+	assert.Equal(t, filepath.Join(home, paths.ControlDirName, id+".sock"), path)
 	fi, err := os.Stat(filepath.Dir(path))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
@@ -467,7 +467,7 @@ func onlySocket(t *testing.T) (string, bool) {
 	t.Helper()
 	dir, err := paths.Dir()
 	require.NoError(t, err)
-	entries, rerr := os.ReadDir(filepath.Join(dir, controlDirName))
+	entries, rerr := os.ReadDir(filepath.Join(dir, paths.ControlDirName))
 	if rerr != nil || len(entries) != 1 {
 		return "", false
 	}
@@ -475,7 +475,7 @@ func onlySocket(t *testing.T) (string, bool) {
 	if !strings.HasSuffix(name, ".sock") {
 		return "", false
 	}
-	return filepath.Join(dir, controlDirName, name), true
+	return filepath.Join(dir, paths.ControlDirName, name), true
 }
 
 // TestServeRun pins the serve contract end to end: without control.enabled the

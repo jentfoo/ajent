@@ -2,15 +2,13 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"sync"
-	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/ctl"
-	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -182,7 +180,7 @@ func (v *attachView) apply(ev ctl.Event) {
 	case ctl.EventToolOutput:
 		var d ctl.ToolOutputData
 		if ev.Decode(&d) == nil {
-			v.markStreamed(d.ID)
+			v.callFor(d.ID).streamed = true // deltas render below; the result path must not repeat them
 			v.sink.ToolOutput(d.ID, d.Delta)
 		}
 	case ctl.EventToolProgress:
@@ -317,42 +315,24 @@ func (v *attachView) prompts() []session.Prompt {
 }
 
 // branchPrompts extracts one transcript branch's recorded user prompts, newest
-// first: the file twin of session.filePrompts.
+// first, minus secret-prefixed lines.
 func branchPrompts(entries []session.Entry) []session.Prompt {
-	out := make([]session.Prompt, 0, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- { // append-only, reverse is newest first
-		e := entries[i]
-		if e.Type != session.TypeMessage || len(e.Data) == 0 {
-			continue
-		}
-		var md session.MessageData
-		if err := json.Unmarshal(e.Data, &md); err != nil {
-			continue
-		}
-		if md.Message.Role != llm.RoleUser || md.Injected {
-			continue // assistant/tool messages and system-injected context are not prompts
-		}
-		txt := llm.JoinText(md.Message.Content)
-		if txt == "" || session.HasSecretPrefix(secretPrefix, txt) {
-			continue // secret-prefixed lines never resurface on a recall surface
-		}
-		out = append(out, session.Prompt{Text: txt, At: time.UnixMilli(e.TS).UTC()})
-	}
-	return out
+	ps := session.PromptsOf(entries)
+	return bulk.SliceFilter(func(p session.Prompt) bool {
+		return !session.HasSecretPrefix(secretPrefix, p.Text)
+	}, ps)
 }
 
 // dedupePrompts keeps each text's newest occurrence; the list is newest first.
 func dedupePrompts(ps []session.Prompt) []session.Prompt {
-	out := make([]session.Prompt, 0, len(ps))
 	seen := make(map[string]struct{}, len(ps))
-	for _, p := range ps {
+	return bulk.SliceFilter(func(p session.Prompt) bool {
 		if _, dup := seen[p.Text]; dup {
-			continue
+			return false
 		}
 		seen[p.Text] = struct{}{}
-		out = append(out, p)
-	}
-	return out
+		return true
+	}, ps)
 }
 
 // applyStatus forwards one status-row change. Spinning is ignored: the turn
@@ -402,14 +382,6 @@ func (v *attachView) takeCall(id string) *attachCall {
 	return c
 }
 
-// markStreamed records that this surface already rendered one call's output.
-func (v *attachView) markStreamed(id string) {
-	if id == "" {
-		return
-	}
-	v.callFor(id).streamed = true
-}
-
 // dropCalls forgets every tracked call; turn end is the natural boundary.
 func (v *attachView) dropCalls() {
 	v.mu.Lock()
@@ -445,14 +417,6 @@ func (v *attachView) setRunning(running bool) {
 		return
 	}
 	v.running = running
-	v.mu.Unlock()
-	v.ui.SetIdle(!running)
-}
-
-// setRunningIdle syncs the editor's rest state once, after backfill.
-func (v *attachView) setRunningIdle() {
-	v.mu.Lock()
-	running := v.running
 	v.mu.Unlock()
 	v.ui.SetIdle(!running)
 }
@@ -548,7 +512,7 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 		}
 		return ctl.ResolveParams{ID: d.ID, Indexes: &idx}, true
 	case "select":
-		i, err := dl.SelectContext(ctx, d.Prompt, optionItems(opts))
+		i, err := dl.SelectContext(ctx, d.Prompt, tuiOptions(opts))
 		if err != nil {
 			return noUIOrCancel(err, cancel, skip)
 		}
@@ -558,10 +522,7 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 		if err != nil {
 			return noUIOrCancel(err, cancel, skip)
 		}
-		i := 1 // "No" is the offered pair's second row
-		if yes {
-			i = 0
-		}
+		i := boolToInt(yes) // "No" is the offered pair's second row
 		return ctl.ResolveParams{ID: d.ID, Index: &i}, true
 	case "input", "secret":
 		var text string
@@ -576,7 +537,7 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 		}
 		return ctl.ResolveParams{ID: d.ID, Text: &text}, true
 	case "ask":
-		ans, err := dl.Ask(ctx, tui.Question{Text: d.Prompt, Options: optionItems(opts)})
+		ans, err := dl.Ask(ctx, tui.Question{Text: d.Prompt, Options: tuiOptions(opts)})
 		if err != nil {
 			return noUIOrCancel(err, cancel, skip)
 		}
@@ -590,7 +551,7 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 		}
 	case "decision":
 		dec := dl.OpenDecision(tui.DecisionRequest{Prompt: d.Prompt, Context: d.Subject,
-			Options: optionItems(opts)})
+			Options: tuiOptions(opts)})
 		r, err := dec.Wait(ctx)
 		if err != nil {
 			return noUIOrCancel(err, cancel, skip)
@@ -618,15 +579,6 @@ func pickItems(opts []string) []tui.PickItem {
 		items[i] = tui.PickItem{Label: o}
 	}
 	return items
-}
-
-// optionItems renders option labels as select rows.
-func optionItems(opts []string) []tui.Option {
-	options := make([]tui.Option, len(opts))
-	for i, o := range opts {
-		options[i] = tui.Option{Label: o}
-	}
-	return options
 }
 
 // wireLevel maps a notice event's level onto the terminal's.

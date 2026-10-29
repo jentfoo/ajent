@@ -450,7 +450,7 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 		case covered[g]: // already emitted as one row, skip its remaining members
 		default:
 			members := g.Tools
-			if allPresent(members, present) {
+			if AllPresent(members, present) {
 				rows = append(rows, Row{Name: g.Name, Source: g.Source, Names: slices.Clone(members)})
 				covered[g] = true
 				for _, m := range members {
@@ -465,8 +465,8 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 	return rows
 }
 
-// allPresent reports whether every member appears in present.
-func allPresent(members []string, present map[string]struct{}) bool {
+// AllPresent reports whether every member appears in present.
+func AllPresent(members []string, present map[string]struct{}) bool {
 	return !slices.ContainsFunc(members, func(m string) bool { _, ok := present[m]; return !ok })
 }
 

@@ -126,8 +126,11 @@ func RunAttach(o AttachOptions) int {
 		ui.Notify("watching read-only: writes need the control seat", tui.LevelWarn)
 	}
 
-	view.setRunningIdle() // arm rewind only while the session is at rest
-	view.installRecall()  // ↑/↓ recall and ctrl+r search read this session's transcript
+	view.mu.Lock()
+	running := view.running
+	view.mu.Unlock()
+	ui.SetIdle(!running) // arm rewind only while the session is at rest
+	view.installRecall() // ↑/↓ recall and ctrl+r search read this session's transcript
 
 	// submissions serialize through one worker so rapid lines keep their order
 	// on the wire, which is the queue order the remote pump applies.

@@ -133,7 +133,7 @@ type sessionHub struct {
 	stager     *command.Stager
 	barrier    barrierModeCycler // permission gate, a cycler when wired
 	initCtl    *initController
-	rewindTo   func(head string) (string, error) // rewind/fork onto a named entry, ending a plan workflow first
+	rewindTo   func(head string) (string, error) // rewind/fork to an entry; ends a plan first
 	tools      *tools.Registry
 	workspace  string
 	cwd        string
@@ -659,12 +659,12 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 }
 
 // ledger returns the accounting to read numbers from. While the agent is idle
-// the pointer is recaptured under the agent state lock; mid-turn the last
-// capture serves, since a turn never replaces the ledger, only mutates it
-// under its own lock.
+// the pointer is recaptured under the agent state lock; mid-turn (or without an
+// agent) the last capture serves, since a turn never replaces the ledger, only
+// mutates it under its own lock.
 func (h *sessionHub) ledger(cached *tokens.Accounting) *tokens.Accounting {
 	var t *tokens.Accounting
-	if h.ag != nil && h.ag.WithState(func(st *agent.State) { t = st.Tokens }) {
+	if h.ag != nil && h.ag.WithState(func(st *agent.State) { t = st.Tokens }) && t != nil {
 		h.mu.Lock()
 		h.acct = t
 		h.mu.Unlock()
@@ -676,15 +676,7 @@ func (h *sessionHub) ledger(cached *tokens.Accounting) *tokens.Accounting {
 // syncLedger recaptures the ledger after a state switch (rewind, fork,
 // compaction) replaced it, so snapshots keep reading the live one.
 func (h *sessionHub) syncLedger() {
-	if h.ag == nil {
-		return
-	}
-	var t *tokens.Accounting
-	if h.ag.WithState(func(st *agent.State) { t = st.Tokens }) && t != nil {
-		h.mu.Lock()
-		h.acct = t
-		h.mu.Unlock()
-	}
+	_ = h.ledger(nil)
 }
 
 // toolSnapshot reads the registry as /tools does: one row per toggleable unit,
@@ -697,20 +689,14 @@ func toolSnapshot(reg *tools.Registry) []hubTool {
 		out = append(out, hubTool{
 			Name:     row.Name,
 			Source:   row.Source,
-			Enabled:  allPresent(row.Names, enabled),
+			Enabled:  tools.AllPresent(row.Names, enabled),
 			ReadOnly: allReadOnly(reg, row.Names),
 		})
 	}
 	return out
 }
 
-func allPresent(names []string, enabled map[string]struct{}) bool {
-	return !slices.ContainsFunc(names, func(n string) bool {
-		_, ok := enabled[n]
-		return !ok
-	})
-}
-
+// allReadOnly reports whether every name is marked read-only.
 func allReadOnly(reg *tools.Registry, names []string) bool {
 	return !slices.ContainsFunc(names, func(n string) bool { return !reg.ReadOnly(n) })
 }
