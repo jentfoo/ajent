@@ -121,6 +121,7 @@ func RunAttach(o AttachOptions) int {
 	}
 
 	view.setRunningIdle() // arm rewind only while the session is at rest
+	view.installRecall()  // ↑/↓ recall and ctrl+r search read this session's prompts over the wire
 
 	// submissions serialize through one worker so rapid lines keep their order
 	// on the wire, which is the queue order the remote pump applies.
@@ -274,11 +275,7 @@ func (v *attachView) rewindPicker() {
 		head = tr.Head
 	}
 
-	branch := make([]session.Entry, len(tr.Entries))
-	for i, e := range tr.Entries {
-		branch[i] = session.Entry{ID: e.ID, ParentID: e.ParentID,
-			Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
-	}
+	branch := wireEntries(tr.Entries)
 	tree := session.TreeRows(branch, head)
 	if len(tree) == 0 {
 		v.ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
@@ -300,15 +297,26 @@ func (v *attachView) rewindPicker() {
 	if err != nil {
 		return // cancelled
 	}
-
-	rctx, rcancel := context.WithTimeout(context.Background(), client.CallWait)
-	defer rcancel()
-	newHead, rerr := v.conn.Rewind(rctx, tree[picked].ID)
-	if rerr != nil {
+	if rerr := v.rewindToRow(branch, tree[picked].ID); rerr != nil {
 		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
-		return
+	}
+}
+
+// rewindToRow names rowID as the new head over the wire and pre-fills this
+// editor with its prompt, matching what a local double-Esc lands on: edit or
+// resend it as the restored branch's first message.
+func (v *attachView) rewindToRow(branch []session.Entry, rowID string) error {
+	rctx, rcancel := context.WithTimeout(context.Background(), client.CallWait)
+	newHead, err := v.conn.Rewind(rctx, rowID)
+	rcancel()
+	if err != nil {
+		return err
+	}
+	if _, fill, ok := session.RewindTarget(branch, rowID); ok && fill != "" {
+		v.ui.SetInput(fill)
 	}
 	v.setHead(newHead) // the head event redraws every view including this one
+	return nil
 }
 
 // attachRemoteEnded announces the session's exit and reports success: the

@@ -2,16 +2,25 @@ package app
 
 import (
 	"context"
+	"io"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -35,6 +44,14 @@ func newAttachRig(t *testing.T, rig *controlRig) *attachRig {
 	t.Helper()
 
 	term, out := pipeUI(t)
+	return newAttachRigTerm(t, rig, term, out)
+}
+
+// newAttachRigTerm is newAttachRig over one chosen terminal, so picker tests
+// can drive the attach surface's own input.
+func newAttachRigTerm(t *testing.T, rig *controlRig, term *tui.UI, out func() string) *attachRig {
+	t.Helper()
+
 	conn, hello, err := client.Dial(rig.path)
 	require.NoError(t, err)
 	t.Cleanup(conn.Close)
@@ -72,6 +89,172 @@ func TestAttachBackfillRendersHistory(t *testing.T) {
 
 	require.Eventually(t, func() bool { return strings.Contains(a.out(), "what changed") },
 		ctlWait, 5*time.Millisecond)
+}
+
+// TestAttachPromptsFromWire pins the recall source: the attached session's
+// recorded user prompts arrive newest first, and injected context, assistant
+// messages and secret-prefixed lines never surface.
+func TestAttachPromptsFromWire(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+		rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "secret: hunter2")})
+		rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleAssistant, "an answer")})
+		rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "injected"), Injected: true})
+		writeMessage(t, rec, "second prompt")
+	})
+	a := newAttachRig(t, rig)
+
+	ps := a.view.prompts()
+	assert.Equal(t, []string{"second prompt", "first prompt"}, session.PromptTexts(ps))
+}
+
+// TestAttachPromptsFollowHead pins the freshness rule: prompts submitted after
+// attach join the recall list once their entry.append moves the head.
+func TestAttachPromptsFollowHead(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "before attach")
+	})
+	a := newAttachRig(t, rig)
+
+	ps := a.view.prompts()
+	require.Len(t, ps, 1)
+	assert.Equal(t, "before attach", ps[0].Text)
+
+	writeMessage(t, rig.rec, "after attach")
+	require.Eventually(t, func() bool {
+		return len(a.view.prompts()) == 2
+	}, ctlWait, 5*time.Millisecond)
+}
+
+// TestAttachRewindPickerForksRemote pins the double-Esc flow over the wire:
+// the picker reads this tree from transcript.entries and a picked prompt
+// rewinds the remote session onto its parent, forked away like a local rewind.
+func TestAttachRewindPickerForksRemote(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+		writeMessage(t, rec, "second prompt")
+	})
+	wireAttachRewind(t, rig)
+
+	term, feed, out := pipeInputUI(t)
+	a := newAttachRigTerm(t, rig, term, out)
+
+	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
+	defer cancel()
+	_, err := a.conn.ClaimSeat(ctx, "test", false)
+	require.NoError(t, err)
+
+	tr, _, err := a.conn.Transcript(ctx, "")
+	require.NoError(t, err)
+	branch := wireEntries(tr.Entries)
+	rowID := branch[len(branch)-1].ID // the newest recorded prompt is pickable last
+	wantHead, fill, ok := session.RewindTarget(branch, rowID)
+	require.True(t, ok)
+	assert.Equal(t, "second prompt", fill)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.view.rewindPicker()
+	}()
+	feed("second\n") // the pick overlay reads one line as its filter in plain mode
+	select {
+	case <-done:
+	case <-time.After(ctlWait):
+		t.Fatal("rewind picker did not complete")
+	}
+	assert.Equal(t, wantHead, rig.rec.w.Head()) // the remote session forked onto it
+}
+
+// TestAttachRewindObserverRefused pins the refusal path: a rewind from a
+// connection without the control seat moves nothing.
+func TestAttachRewindObserverRefused(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+	})
+	wireAttachRewind(t, rig)
+
+	a := newAttachRig(t, rig) // no seat claimed: an observer
+
+	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
+	defer cancel()
+	tr, _, err := a.conn.Transcript(ctx, "")
+	require.NoError(t, err)
+	branch := wireEntries(tr.Entries)
+	rowID := branch[len(branch)-1].ID
+
+	require.Error(t, a.view.rewindToRow(branch, rowID))
+	assert.Equal(t, rig.rec.w.Head(), branch[len(branch)-1].ID) // nothing moved
+}
+
+// TestAttachRewindFillsEditor pins the double-Esc tail: rewinding pre-fills
+// this editor with the picked prompt so it can be edited or re-sent as the
+// restored branch's first message, exactly like a local rewind.
+func TestAttachRewindFillsEditor(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+		writeMessage(t, rec, "second prompt")
+	})
+	wireAttachRewind(t, rig)
+
+	term, feed, out := ptyUI(t)
+	a := newAttachRigTerm(t, rig, term, out)
+
+	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
+	defer cancel()
+	_, err := a.conn.ClaimSeat(ctx, "test", false)
+	require.NoError(t, err)
+
+	tr, _, err := a.conn.Transcript(ctx, "")
+	require.NoError(t, err)
+	branch := wireEntries(tr.Entries)
+
+	// the fill paints the editor into the live block...
+	require.NoError(t, a.view.rewindToRow(branch, branch[len(branch)-1].ID))
+	require.Eventually(t, func() bool { return strings.Contains(out(), "second prompt") },
+		ctlWait, 5*time.Millisecond)
+	// ...and submitting proves what the buffer held
+	feed("\r")
+	select {
+	case line := <-term.Messages():
+		assert.Equal(t, "second prompt", line)
+	case <-time.After(ctlWait):
+		t.Fatal("rewind did not pre-fill the editor")
+	}
+}
+
+// TestAttachRunSearchesHistory pins the ctrl+r wiring end to end: an attached
+// view's search source loads from the wire transcript, and accepting the match
+// fills this terminal's editor so submitting re-sends the recorded prompt.
+func TestAttachRunSearchesHistory(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "searchable prompt")
+	})
+
+	term, feed, out := ptyUI(t)
+	a := newAttachRigTerm(t, rig, term, out)
+	a.view.installRecall()
+
+	feed("\x12") // ctrl+r opens the search over the wire source
+	require.Eventually(t, func() bool {
+		ok, _ := term.Searching()
+		return ok
+	}, ctlWait, 5*time.Millisecond)
+
+	feed("search") // typed keys filter; the match paints once the source delivers
+	// the committed history line already painted one copy at backfill: only an
+	// actually delivered, filtered overlay match adds a second
+	require.Eventually(t, func() bool {
+		return strings.Count(out(), "able prompt") >= 2
+	}, ctlWait, 5*time.Millisecond)
+
+	feed("\r\r") // accept the match into the editor, then submit it
+	select {
+	case line := <-term.Messages():
+		assert.Equal(t, "searchable prompt", line)
+	case <-time.After(ctlWait):
+		t.Fatal("history search did not fill the editor")
+	}
 }
 
 // TestAttachViewStreamsLiveEvents pins surface parity for committed history:
@@ -354,4 +537,108 @@ func TestAttachDecisionNoUILeavesDialogOpen(t *testing.T) {
 			Subject: "bash: rm -rf", Options: []string{"Allow", "Deny"}})
 	assert.False(t, ok)
 	assert.Zero(t, params)
+}
+
+// pipeInputUI opens a plain-mode TUI over pipes like pipeUI, also returning
+// the input writer so tests can drive dialogs that read one line.
+func pipeInputUI(t *testing.T) (*tui.UI, func(string), func() string) {
+	t.Helper()
+
+	inR, inW, err := os.Pipe()
+	require.NoError(t, err)
+	outR, outW, err := os.Pipe()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = inR.Close()
+		_ = inW.Close()
+		_ = outR.Close()
+		_ = outW.Close()
+	})
+	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	var mu sync.Mutex
+	var sb strings.Builder
+	go func() { _, _ = io.Copy(&lockedWriter{mu: &mu, sb: &sb}, outR) }()
+	return ui, func(data string) { _, _ = io.WriteString(inW, data) }, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return sb.String()
+	}
+}
+
+// ptyUI runs one inline-mode terminal over a real pty: the returned writer
+// feeds keys and submits land on Messages. Plain mode has no key loop, which
+// hides editor fills; TERM must name a real terminal or ResolveMode downgrades
+// to plain before anything can be observed.
+func ptyUI(t *testing.T) (*tui.UI, func(string), func() string) {
+	t.Helper()
+	t.Setenv("TERM", "xterm")
+
+	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = master.Close() })
+
+	var unlock int32 // TIOCSPTLCK: zero unlocks the slave
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCSPTLCK,
+		uintptr(unsafe.Pointer(&unlock)))
+	require.Zero(t, errno)
+
+	var ptyNo int32
+	_, _, errno = syscall.Syscall(syscall.SYS_IOCTL, master.Fd(), syscall.TIOCGPTN,
+		uintptr(unsafe.Pointer(&ptyNo)))
+	require.Zero(t, errno)
+
+	slave, err := os.OpenFile("/dev/pts/"+strconv.Itoa(int(ptyNo)), os.O_RDWR, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = slave.Close() })
+
+	ui, err := tui.New(tui.Options{In: slave, Out: slave, Mode: tui.ModeInline})
+	require.NoError(t, err)
+	t.Cleanup(ui.Close)
+
+	var mu sync.Mutex
+	var sb strings.Builder
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := master.Read(buf) // blocks until the terminal paints or closes
+			if n > 0 {
+				mu.Lock()
+				sb.Write(buf[:n])
+				mu.Unlock()
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+	return ui, func(keys string) { _, _ = master.WriteString(keys) }, func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return sb.String()
+	}
+}
+
+// wireAttachRewind arms the rewind seam over one rig with a live agent and
+// registry, so session.rewind requests rebuild the branch like the driver's.
+func wireAttachRewind(t *testing.T, rig *controlRig) {
+	t.Helper()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return &llm.ScriptedProvider{}, nil },
+		Sinks:    []agent.Sink{rig.rec.rec.Sink(rig.hub.sink())},
+		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+	rig.hub.ag = ag
+	rig.hub.syncLedger()
+	rig.hub.rewindTo = func(head string) (string, error) {
+		return rig.rec.rewindTo(rig.hub.ui, ag, reg, head)
+	}
 }

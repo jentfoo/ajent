@@ -49,6 +49,10 @@ user interacts with either. Decisions that shape it:
   its `tool.result` exists for controllers without the stream and must not
   render a second time. Editor drafts are dropped: two editors typing would
   fight over one buffer.
+- **Recall reads the wire.** Plain ↑/↓ and ctrl+r draw their prompts from the
+  attached session's own transcript via `transcript.entries` — there is no
+  local editor-history store to consult, so recall never spans other sessions.
+  Secret-prefixed lines stay excluded, like every recall surface.
 - **The watermark reconciles attach-time.** Events seen before backfill
   completes buffer and apply only above the replies' watermark; below it the
   rendered snapshot and transcript supersede them.
@@ -57,8 +61,10 @@ user interacts with either. Decisions that shape it:
   local racer before anything is sent. A surface that cannot show a dialog (or
   an unknown kind) answers nothing rather than denying blind.
 - **Rewind rides the same gesture.** Double-Esc reads the tree from
-  `transcript.entries`, names the head with `session.rewind`, and every view —
-  including this one — redraws on the resulting `head` event.
+  `transcript.entries`, names the head with `session.rewind` — pre-filling this
+  editor with the rewound prompt, computed locally from the branch it already
+  read, exactly as a local rewind fills — and every view, including this one,
+  redraws on the resulting `head` event.
 
 ## The seat
 

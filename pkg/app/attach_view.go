@@ -2,12 +2,15 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -30,6 +33,10 @@ type attachView struct {
 	running bool        // remote turn in flight; drives SetIdle so Esc keeps its interrupt role
 	head    string      // last known transcript head entry id
 	dialogs map[uint64]context.CancelFunc
+	// promptsCache is the last good recall list, labeled with the head it was
+	// read at. prompts() is the only writer, off the reader goroutine.
+	promptsCache []session.Prompt
+	promptsHead  string
 	// calls tracks one in-flight tool call each: its completion hook and whether
 	// this surface already streamed the output deltas. Written and read only on
 	// the reader goroutine.
@@ -92,12 +99,24 @@ func (v *attachView) renderHistory(entries []ctl.Entry) {
 	if len(entries) == 0 {
 		return
 	}
+	session.Replay(wireEntries(entries), v.sink, session.ReplayOptions{})
+}
+
+// installRecall wires plain ↑/↓ and ctrl+r onto the terminal, sourcing both
+// from this session's recorded prompts over the wire: there is no local store.
+func (v *attachView) installRecall() {
+	v.ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(dedupePrompts(v.prompts())) })
+	v.ui.SetPromptHistory(func() []string { return session.PromptTexts(v.prompts()) })
+}
+
+// wireEntries converts one transcript read onto the session tree types.
+func wireEntries(entries []ctl.Entry) []session.Entry {
 	branch := make([]session.Entry, len(entries))
 	for i, e := range entries {
 		branch[i] = session.Entry{ID: e.ID, ParentID: e.ParentID,
 			Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
 	}
-	session.Replay(branch, v.sink, session.ReplayOptions{})
+	return branch
 }
 
 // applySnapshot paints the chrome a snapshot holds truth for.
@@ -281,6 +300,71 @@ func (v *attachView) apply(ev ctl.Event) {
 		// off the reader goroutine: redraw reads a fresh transcript over the wire
 		go v.redraw(v.root)
 	}
+}
+
+// prompts returns the session's recorded user prompts, newest first: the recall
+// source for plain ↑/↓ and ctrl+r search. It reads the branch over the wire,
+// caching until the head moves so gestures never re-read an unchanged session;
+// a failed read keeps the last good list.
+func (v *attachView) prompts() []session.Prompt {
+	v.mu.Lock()
+	cached, labeled := v.promptsCache, v.promptsHead
+	head := v.head
+	v.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(v.root, client.CallWait)
+	tr, _, err := v.conn.Transcript(ctx, "")
+	cancel()
+	if err != nil {
+		return cached
+	}
+	if cached != nil && labeled == head && tr.Head == head {
+		return cached // the branch has not moved since this cache was read
+	}
+	ps := branchPrompts(tr.Entries)
+	v.mu.Lock()
+	v.promptsCache, v.promptsHead = ps, tr.Head
+	v.mu.Unlock()
+	return ps
+}
+
+// branchPrompts extracts one transcript branch's recorded user prompts, newest
+// first: the wire twin of session.filePrompts.
+func branchPrompts(entries []ctl.Entry) []session.Prompt {
+	out := make([]session.Prompt, 0, len(entries))
+	for i := len(entries) - 1; i >= 0; i-- { // append-only, reverse is newest first
+		e := entries[i]
+		if e.Type != string(session.TypeMessage) || len(e.Data) == 0 {
+			continue
+		}
+		var md session.MessageData
+		if err := json.Unmarshal(e.Data, &md); err != nil {
+			continue
+		}
+		if md.Message.Role != llm.RoleUser || md.Injected {
+			continue // assistant/tool messages and system-injected context are not prompts
+		}
+		txt := llm.JoinText(md.Message.Content)
+		if txt == "" || session.HasSecretPrefix(secretPrefix, txt) {
+			continue // secret-prefixed lines never resurface on a recall surface
+		}
+		out = append(out, session.Prompt{Text: txt, At: time.UnixMilli(e.TS).UTC()})
+	}
+	return out
+}
+
+// dedupePrompts keeps each text's newest occurrence; the list is newest first.
+func dedupePrompts(ps []session.Prompt) []session.Prompt {
+	out := make([]session.Prompt, 0, len(ps))
+	seen := make(map[string]struct{}, len(ps))
+	for _, p := range ps {
+		if _, dup := seen[p.Text]; dup {
+			continue
+		}
+		seen[p.Text] = struct{}{}
+		out = append(out, p)
+	}
+	return out
 }
 
 // applyStatus forwards one status-row change. Spinning is ignored: the turn
