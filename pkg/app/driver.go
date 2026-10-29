@@ -156,8 +156,16 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// interactive run needs the deliberate config opt-in.
 	var ctlSrv *controlServer
 	if serve || set.Settings().Control.Enabled {
-		var cerr error
-		ctlSrv, cerr = startControl(hub, dialogs, rec, serve)
+		srv, warns, cerr := startControl(hub, dialogs, rec, serve)
+		for _, warn := range warns {
+			// serve mode has no terminal: the supervisor's stderr is the surface
+			if serve {
+				_, _ = fmt.Fprintln(os.Stderr, "ajent: control: "+warn)
+			} else {
+				ui.Notify("control: "+warn, tui.LevelWarn)
+			}
+		}
+		ctlSrv = srv
 		if cerr != nil {
 			if serve {
 				return "", fmt.Errorf("control socket: %w", cerr)

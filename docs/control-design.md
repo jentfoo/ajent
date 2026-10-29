@@ -176,14 +176,28 @@ it:
 
 ## Security model
 
-Same-user local only, stated as such: the socket directory is 0700, the socket
-0600, and there is no token or handshake secret. That is the entire model —
-anything that can connect is already the user. Two corollaries are enforced
-anyway, because they are cheap: secret-prefixed prompts and secret dialog
-answers never appear in events, drafts or outcomes (`InputSecret` text reaches
-its caller and nothing else), and a socket whose peer is dead (a SIGKILL
-leftover) is unlinked and rebound while a live one refuses a second ajent
-naming the session. A non-socket file at the path is never removed.
+Same-user local only, and verified rather than assumed. The control directory
+is pinned to 0700 (a wider mode found at startup is tightened with a warning,
+the same treatment models.json's permissions get), the socket itself is 0600,
+and there is no token or handshake secret because none would mean anything on
+one machine: what makes a controller trusted is that it runs as this user, and
+the kernel says so, not the peer. Accept time reads the credential snapshot
+the operating system keeps for the connection (SO_PEERCRED on linux,
+LOCAL_PEERCRED on darwin): any other uid closes at once with a `refused`
+event in place of hello, naming what the check saw, and the connecting pid is
+logged where the platform attests one — the host-side twin of --attach logging
+the host pid it dials. A platform that cannot attest credentials refuses
+every connection rather than widening the model silently. Connect and refusal
+lines never enter the control event stream: they are transport lifecycle, not
+session state, so publishing them would consume seqs and replay back to every
+observer.
+
+Two corollaries are enforced anyway, because they are cheap: secret-prefixed
+prompts and secret dialog answers never appear in events, drafts or outcomes
+(`InputSecret` text reaches its caller and nothing else), and a socket whose
+peer is dead (a SIGKILL leftover) is unlinked and rebound while a live one
+refuses a second ajent naming the session. A non-socket file at the path is
+never removed.
 
 ## Event families
 

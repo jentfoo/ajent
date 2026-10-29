@@ -68,6 +68,11 @@ const (
 	EventInteractionPending = "interaction.pending"
 	EventInteractionSettled = "interaction.settled"
 
+	// EventRefused replaces hello when the connection is not admitted: the
+	// kernel-verified peer fails the session's identity check. Peers read it,
+	// then the socket closes.
+	EventRefused = "refused"
+
 	// EventSessionExit is the last event before the socket closes.
 	EventSessionExit = "session.exit"
 )

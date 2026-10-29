@@ -488,10 +488,12 @@ func (m *Manager) enqueue(id string) {
 	if !slices.Contains(m.pending, id) {
 		m.pending = append(m.pending, id)
 	}
-	if !slices.Contains(m.noticeBatch, id) { // a re-armed delivery must not double-name it
-		m.noticeBatch = append(m.noticeBatch, id)
-		slices.SortFunc(m.noticeBatch, byJobNumber)
+	if slices.Contains(m.noticeBatch, id) { // a re-arm racing its own completion already named it
+		m.mu.Unlock()
+		return
 	}
+	m.noticeBatch = append(m.noticeBatch, id)
+	slices.SortFunc(m.noticeBatch, byJobNumber)
 	batch := slices.Clone(m.noticeBatch)
 	m.mu.Unlock()
 	text := "Sub-agents " + strings.Join(batch, ", ") + " completed" // names the batch for the keyed UI notice

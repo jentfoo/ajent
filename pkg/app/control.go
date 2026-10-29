@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 const (
@@ -41,25 +43,54 @@ const (
 	// connDrainWait bounds the flush of queued lines once a connection stops,
 	// so shutdown never hangs on a peer that stopped reading.
 	connDrainWait = 250 * time.Millisecond
+
+	// controlNoticeKey keys notices about the socket itself (refusals, verified
+	// connects), replacing rather than stacking across connections.
+	controlNoticeKey = "control"
 )
 
 // controlSocketPath builds <config>/control/<session>.sock, refusing a path
-// over the unix socket budget rather than letting the bind truncate it.
-func controlSocketPath(sessionID string) (string, error) {
+// over the unix socket budget rather than letting the bind truncate it. The
+// control directory is created and pinned to 0700; a warning names any wider
+// mode found there, like models.json's permission check.
+func controlSocketPath(sessionID string) (string, string, error) {
 	dir, err := config.Dir()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	path := filepath.Join(dir, controlDirName, sessionID+".sock")
 	if len(path) >= controlSocketMax {
-		return "", fmt.Errorf(
+		return "", "", fmt.Errorf(
 			"control socket path %s is %d bytes, over the %d-byte unix socket limit; move the ajent home closer to the filesystem root",
 			path, len(path), controlSocketMax)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", err
+	ctlDir := filepath.Dir(path)
+	if err := os.MkdirAll(ctlDir, 0o700); err != nil {
+		return "", "", err
 	}
-	return path, nil
+	return path, tightenControlDir(ctlDir), nil
+}
+
+// tightenControlDir pins dir to 0700 and returns a warning when it was group
+// or world accessible, mirroring the models.json permission check. A failed
+// bind reports real filesystem trouble; this only narrows a slipped mode.
+func tightenControlDir(dir string) string {
+	if runtime.GOOS == "windows" {
+		return "" // mode bits are not meaningful
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return ""
+	}
+	mode := fi.Mode().Perm()
+	if mode&0o077 == 0 {
+		return ""
+	}
+	found := fmt.Sprintf("control socket directory %s is group or world accessible (mode %o)", dir, mode)
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return found + "; chmod 700 it failed: " + err.Error()
+	}
+	return found + "; tightened to 0700"
 }
 
 // bindControlListener binds the control socket at path. A file already there
@@ -129,25 +160,30 @@ type controlServer struct {
 
 // startControl binds the session's control socket and starts serving it,
 // attaching the control observers first so every observable change from here
-// on fans out. Connections are served only once start runs, after driver
-// wiring completes; Close unlinks the socket, callers run it on every return
-// path.
-func startControl(hub *sessionHub, dialogs *interactionBroker, rec *sessRec, serve bool) (*controlServer, error) {
+// on fans out. Returned warnings are startup-level (a tightened directory
+// mode), meant for the same surface as a failed start. Connections are served
+// only once start runs, after driver wiring completes; Close unlinks the
+// socket, callers run it on every return path.
+func startControl(hub *sessionHub, dialogs *interactionBroker, rec *sessRec, serve bool) (*controlServer, []string, error) {
 	snap := hub.Snapshot()
 	if snap.SessionID == "" {
-		return nil, errors.New("control needs a recorded session; none is open")
+		return nil, nil, errors.New("control needs a recorded session; none is open")
 	}
-	path, err := controlSocketPath(snap.SessionID)
+	path, warn, err := controlSocketPath(snap.SessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ln, err := bindControlListener(path, snap.SessionID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	srv := &controlServer{
 		hub: hub, dialogs: dialogs, rec: rec, path: path, serve: serve,
 		ln: ln, conns: make(map[*controlConn]struct{}),
+	}
+	var warns []string
+	if warn != "" {
+		warns = append(warns, warn)
 	}
 
 	// observe everything before serving: stream events, rendered surfaces,
@@ -159,7 +195,7 @@ func startControl(hub *sessionHub, dialogs *interactionBroker, rec *sessRec, ser
 		rec.onAppend = srv.entryAppended
 		rec.rec.WatchAppend(srv.entryAppended)
 	}
-	return srv, nil
+	return srv, warns, nil
 }
 
 // start begins serving connections. Called after driver wiring completes so
@@ -176,8 +212,52 @@ func (s *controlServer) acceptLoop() {
 		if err != nil {
 			return // closed, or the listener died: nothing left to accept
 		}
+		if !s.admit(nc) {
+			continue
+		}
 		s.track(nc)
 	}
+}
+
+// admit verifies one accepted connection before anything is served. The
+// peer's credentials come from the kernel's connect-time snapshot, never the
+// wire, so a connect from any other uid closes at once with a refused event
+// in place of hello.
+func (s *controlServer) admit(nc net.Conn) bool {
+	peer, perr := peerCredentials(nc)
+	if perr == nil && !peer.sameUser() {
+		perr = fmt.Errorf("peer uid %d is not this session's user %d", peer.UID, os.Geteuid())
+	}
+	if perr != nil {
+		writeControlRefusal(nc, perr)
+		_ = nc.Close()
+		s.logControl(tui.LevelWarn, "refused control connection: "+perr.Error())
+		return false
+	}
+	s.logPeer(peer)
+	return true
+}
+
+// logPeer records the verified peer, the host-side twin of --attach logging
+// the host pid it dials.
+func (s *controlServer) logPeer(peer peerIdentity) {
+	msg := fmt.Sprintf("control connection from uid %d", peer.UID)
+	if peer.PID > 0 {
+		msg = fmt.Sprintf("control connection from pid %d (uid %d)", peer.PID, peer.UID)
+	}
+	s.logControl(tui.LevelInfo, msg)
+}
+
+// logControl pins one socket-lifecycle line to the local surface: a keyed
+// notice in an interactive run, stderr under serve mode where no terminal
+// renders. These never enter the control event stream: connect noise would
+// consume seqs and replay back to every observer.
+func (s *controlServer) logControl(level tui.Level, msg string) {
+	if s.hub.ui.UI != nil {
+		s.hub.ui.UI.NotifyKeyed(controlNoticeKey, msg, level)
+		return
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "ajent: control: %s\n", msg)
 }
 
 // track admits one accepted socket as a connection.

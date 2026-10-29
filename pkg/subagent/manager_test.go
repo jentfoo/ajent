@@ -579,6 +579,7 @@ func TestOrphanedCompletionRecovered(t *testing.T) {
 	j.mu.Unlock()
 	require.True(t, orphan)
 	m.onComplete(j)
+	m.onComplete(j) // a re-arm racing its own completion must not fire twice
 
 	require.Equal(t, 1, c.noticeCount())
 	assert.Equal(t, "Sub-agent "+id+" completed", c.lastNotice())

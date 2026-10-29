@@ -94,7 +94,15 @@ func (c *Conn) readHello() (ctl.Hello, error) {
 		return hello, fmt.Errorf("reading control hello: %w", err)
 	}
 	in, err := ctl.DecodeIncoming(raw)
-	if err != nil || in.Event == nil || in.Event.Name != ctl.EventHello {
+	if err != nil || in.Event == nil {
+		return hello, errors.New("first control line was not a hello event")
+	}
+	if in.Event.Name == ctl.EventRefused { // identity check failed: the reason says what the kernel saw
+		var rd ctl.RefusedData
+		_ = in.Event.Decode(&rd)
+		return hello, fmt.Errorf("session refused this connection: %s", rd.Reason)
+	}
+	if in.Event.Name != ctl.EventHello {
 		return hello, errors.New("first control line was not a hello event")
 	}
 	if err := in.Event.Decode(&hello); err != nil {

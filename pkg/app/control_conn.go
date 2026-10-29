@@ -199,6 +199,16 @@ func (c *controlConn) detach(flush bool) {
 	})
 }
 
+// writeControlRefusal sends one refused event in place of hello, so a peer the
+// identity check turned away reads why instead of a bare EOF. Best effort: the
+// close that follows is the authoritative signal.
+func writeControlRefusal(nc net.Conn, reason error) {
+	bw := bufio.NewWriterSize(nc, 512)
+	_ = ctl.NewEncoder(bw).Encode(ctl.NewEvent(ctl.EventRefused, 0,
+		ctl.RefusedData{Reason: reason.Error()}))
+	_ = bw.Flush()
+}
+
 // readLoop decodes requests until the peer goes away or the line turns to
 // garbage, dispatching each on this goroutine.
 func (c *controlConn) readLoop() {

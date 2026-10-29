@@ -226,6 +226,13 @@ type InteractionSettledData struct {
 	Chat      bool   `json:"chat,omitempty"`
 }
 
+// RefusedData explains why a connection was closed instead of greeted. It
+// rides an event because there is no request id to answer; the reason names
+// what the kernel-verified credential check saw.
+type RefusedData struct {
+	Reason string `json:"reason"`
+}
+
 // SessionExitData is the last event before the socket closes.
 type SessionExitData struct {
 	Reason string `json:"reason,omitempty"`

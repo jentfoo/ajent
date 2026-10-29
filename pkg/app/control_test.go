@@ -80,7 +80,7 @@ func newControlRigUI(t *testing.T, pre func(rec *sessRec), term *tui.UI) *contro
 		pre(rec)
 	}
 
-	srv, err := startControl(hub, broker, rec, term == nil)
+	srv, _, err := startControl(hub, broker, rec, term == nil)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -137,7 +137,7 @@ func finishControlRig(t *testing.T, hub *sessionHub, broker *interactionBroker, 
 		hub.setHead(rec.w.Head())
 	}
 
-	srv, err := startControl(hub, broker, rec, serve)
+	srv, _, err := startControl(hub, broker, rec, serve)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -290,8 +290,9 @@ func TestControlSocketPathLayoutAndLength(t *testing.T) {
 	t.Setenv(config.EnvHome, home)
 
 	id := "01J8Z9Q5W2K7D4R3M6T0V1B2C"
-	path, err := controlSocketPath(id)
+	path, warn, err := controlSocketPath(id)
 	require.NoError(t, err)
+	assert.Empty(t, warn) // a fresh directory carries the right mode already
 	assert.Equal(t, filepath.Join(home, controlDirName, id+".sock"), path)
 	fi, err := os.Stat(filepath.Dir(path))
 	require.NoError(t, err)
@@ -304,7 +305,7 @@ func TestControlSocketPathLayoutAndLength(t *testing.T) {
 		deep = filepath.Join(deep, "very-long-directory-name-padding-the-path")
 	}
 	t.Setenv(config.EnvHome, deep)
-	_, err = controlSocketPath(id)
+	_, _, err = controlSocketPath(id)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unix socket limit")
 }

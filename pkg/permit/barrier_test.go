@@ -1322,8 +1322,10 @@ func TestAskerAuto(t *testing.T) {
 
 	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
+		entered := make(chan context.Context, 1)
 		cancelled := make(chan struct{})
 		classify := func(ctx context.Context, _ Subject) Class {
+			entered <- ctx // announce the in-flight call carrying this context
 			<-ctx.Done()
 			close(cancelled)
 			return ClassUnsure
@@ -1335,18 +1337,22 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		waitDialog(t, p).answer(int(optDeny)) // the user answers before classification returns
+		dlg := waitDialog(t, p)
+		select { // the classifier is in flight before answering, so a cancel that
+		// wins the scheduling race legitimately skips the call entirely
+		case <-entered:
+		case <-t.Context().Done():
+			t.Fatal("classification never started")
+		}
+		dlg.answer(int(optDeny)) // the user answers before classification returns
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
-		require.Eventually(t, func() bool {
-			select {
-			case <-cancelled:
-				return true
-			default:
-				return false
-			}
-		}, time.Second, 10*time.Millisecond)
+		select { // deterministic: the answer path cancels before runAsk returns
+		case <-cancelled:
+		case <-t.Context().Done():
+			t.Fatal("answering did not cancel the in-flight classification")
+		}
 	})
 
 	// auto also classifies MCP/extension calls
