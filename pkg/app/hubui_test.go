@@ -3,6 +3,7 @@ package app
 import (
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -42,6 +43,37 @@ type emitLog struct {
 	queues  [][]string
 	drafts  []string
 	heads   []string
+}
+
+// rowsSeen-style snapshots final assertions read; each copies under the lock.
+func (l *emitLog) noticesSeen() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.notices)
+}
+
+func (l *emitLog) printsSeen() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.prints)
+}
+
+func (l *emitLog) echoesSeen() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.echoes)
+}
+
+func (l *emitLog) segsSeen() []tui.Segment {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.segs)
+}
+
+func (l *emitLog) draftsSeen() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.drafts)
 }
 
 func (l *emitLog) emitters() hubEmitters {
@@ -142,12 +174,10 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	assert.Equal(t, 1, segs)
 	assert.Equal(t, 2, acts)
 
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	assert.Equal(t, []string{"|plain notice", "subagent|keyed"}, log.notices)
-	assert.Equal(t, []string{"# printed"}, log.prints)
-	assert.Equal(t, []string{"typed line"}, log.echoes)
-	require.Len(t, log.segs, 1)
+	assert.Equal(t, []string{"|plain notice", "subagent|keyed"}, log.noticesSeen())
+	assert.Equal(t, []string{"# printed"}, log.printsSeen())
+	assert.Equal(t, []string{"typed line"}, log.echoesSeen())
+	require.Len(t, log.segsSeen(), 1)
 	assert.Equal(t, segMCP, log.segs[0].Key)
 	assert.Equal(t, []string{"p/big"}, log.models)
 	assert.Equal(t, []string{"job:1:reading", "misc:note"}, log.acts)
@@ -197,12 +227,10 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	ui.SetInput("filled")
 	ui.PrependInput("recovered")
 
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	assert.Equal(t, []string{"|plain", "subagent|keyed"}, log.notices)
-	assert.Equal(t, []string{"# printed"}, log.prints)
-	assert.Equal(t, []string{"typed line"}, log.echoes)
-	require.Len(t, log.segs, 1)
+	assert.Equal(t, []string{"|plain", "subagent|keyed"}, log.noticesSeen())
+	assert.Equal(t, []string{"# printed"}, log.printsSeen())
+	assert.Equal(t, []string{"typed line"}, log.echoesSeen())
+	require.Len(t, log.segsSeen(), 1)
 	require.Len(t, log.models, 1)
 	require.Len(t, log.acts, 1)
 	require.Len(t, log.queues, 1)
@@ -225,10 +253,9 @@ func TestHubUISegmentRemoval(t *testing.T) {
 	hub.mu.Unlock()
 	assert.False(t, present)
 
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	require.Len(t, log.segs, 2)
-	assert.Empty(t, log.segs[1].Text)
+	segs := log.segsSeen()
+	require.Len(t, segs, 2)
+	assert.Empty(t, segs[1].Text)
 }
 
 func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
@@ -249,9 +276,7 @@ func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
 		return len(log.drafts) == 1
 	}, 2*time.Second, 5*time.Millisecond)
 
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	assert.Equal(t, []string{""}, log.drafts)
+	assert.Equal(t, []string{""}, log.draftsSeen())
 }
 
 func TestHubUIIdleAndSpinTrack(t *testing.T) {

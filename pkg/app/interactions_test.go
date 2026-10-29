@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"runtime"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -145,6 +146,19 @@ func newBroker(ui localDialogs) (*interactionBroker, *dialogLog) {
 	return newInteractionBroker(ui, onBegin, onEnd), l
 }
 
+// beginsSeen and endsSeen return recorded traffic snapshots.
+func (l *dialogLog) beginsSeen() []interactionInfo {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.begins)
+}
+
+func (l *dialogLog) endsSeen() []endRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.ends)
+}
+
 func TestBrokerResolvesLocally(t *testing.T) {
 	t.Parallel()
 
@@ -183,19 +197,17 @@ func TestBrokerResolvesLocally(t *testing.T) {
 
 	// every dialog announced exactly what it asked and settled once
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.ends) == 6
+		return len(log.endsSeen()) == 6
 	}, 2*time.Second, 5*time.Millisecond)
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	require.Len(t, log.begins, 6)
-	assert.Equal(t, dialogPick, log.begins[0].Kind)
-	assert.Equal(t, []string{"a", "b"}, log.begins[0].Shapes.options)
-	assert.Equal(t, dialogSecret, log.begins[4].Kind)
+	begins := log.beginsSeen()
+	require.Len(t, begins, 6)
+	assert.Equal(t, dialogPick, begins[0].Kind)
+	assert.Equal(t, []string{"a", "b"}, begins[0].Shapes.options)
+	assert.Equal(t, dialogSecret, begins[4].Kind)
 	// the secret's outcome never carries its text
-	assert.Empty(t, log.ends[4].outcome.Text)
-	assert.True(t, log.ends[4].outcome.Answered)
+	ends := log.endsSeen()
+	assert.Empty(t, ends[4].outcome.Text)
+	assert.True(t, ends[4].outcome.Answered)
 }
 
 func TestBrokerNoLocalHoldsForRemote(t *testing.T) {
@@ -210,24 +222,19 @@ func TestBrokerNoLocalHoldsForRemote(t *testing.T) {
 
 	// one Begin announcing the dialog, no End yet
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.begins) == 1
+		return len(log.beginsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
-	assert.Equal(t, "select", log.begins[0].Kind.String())
+	assert.Equal(t, "select", log.beginsSeen()[0].Kind.String())
 
 	require.NoError(t, b.Resolve(1, interactionAnswer{Index: 1}))
 	require.NoError(t, <-resolved)
 
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.ends) == 1
+		return len(log.endsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	assert.True(t, log.ends[0].outcome.Answered)
-	assert.Equal(t, 1, log.ends[0].outcome.Index)
+	ends := log.endsSeen()
+	assert.True(t, ends[0].outcome.Answered)
+	assert.Equal(t, 1, ends[0].outcome.Index)
 }
 
 func TestBrokerFirstResolutionWins(t *testing.T) {
@@ -296,9 +303,7 @@ func TestBrokerEndIdempotent(t *testing.T) {
 	// a stale id is unknown, never a silent no-op
 	require.ErrorIs(t, b.Resolve(99, interactionAnswer{}), ErrInteractionUnknown)
 
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	require.Len(t, log.ends, 1)
+	require.Len(t, log.endsSeen(), 1)
 }
 
 func TestBrokerLocalErrNoUIStaysOpen(t *testing.T) {
@@ -338,16 +343,11 @@ func TestBrokerDecisionRacesRemote(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.begins) == 1
+		return len(log.beginsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
-	log.mu.Lock()
-	kind := log.begins[0].Kind
-	subject := log.begins[0].Subject
-	log.mu.Unlock()
-	assert.Equal(t, dialogDecision, kind)
-	assert.Equal(t, "rm -rf /tmp/x", subject)
+	begins := log.beginsSeen()
+	assert.Equal(t, dialogDecision, begins[0].Kind)
+	assert.Equal(t, "rm -rf /tmp/x", begins[0].Subject)
 
 	go d.Resolve(0)
 	idx, werr := d.Wait(t.Context())
@@ -357,13 +357,9 @@ func TestBrokerDecisionRacesRemote(t *testing.T) {
 	d.Close() // resolved already: a no-op
 
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.ends) == 1
+		return len(log.endsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	assert.True(t, log.ends[0].outcome.Answered)
+	assert.True(t, log.endsSeen()[0].outcome.Answered)
 }
 
 func TestBrokerDecisionEscIsDenied(t *testing.T) {
@@ -435,17 +431,14 @@ func TestBrokerCancelledContextSettles(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.begins) == 1
+		return len(log.beginsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
 	cancel()
 	<-done
 
 	// every path ends: the cancel settles with no answer
-	log.mu.Lock()
-	defer log.mu.Unlock()
-	require.Len(t, log.ends, 1)
-	assert.False(t, log.ends[0].outcome.Answered)
-	assert.True(t, log.ends[0].outcome.Cancelled)
+	ends := log.endsSeen()
+	require.Len(t, ends, 1)
+	assert.False(t, ends[0].outcome.Answered)
+	assert.True(t, ends[0].outcome.Cancelled)
 }

@@ -753,7 +753,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
 		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify})
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		d := runAsk(b, ctx, "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)

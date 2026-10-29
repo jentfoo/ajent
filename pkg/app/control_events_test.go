@@ -86,7 +86,7 @@ func TestControlStreamParity(t *testing.T) {
 	}
 	assert.Equal(t, calls.calls, names)
 	for i := 1; i < len(all); i++ {
-		assert.Equal(t, all[i-1].Seq+1, all[i].Seq, "seq must be dense")
+		assert.Equal(t, all[i-1].Seq+1, all[i].Seq)
 	}
 
 	// key payloads carry the oneshot shapes

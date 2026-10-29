@@ -340,7 +340,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 				Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 			})
 
-			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 			stager.Run("sleep 30", false)
 			require.True(t, stager.Pending())
 
@@ -350,7 +350,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			hub.ag = ag
 			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
 			hub.stager = stager
-			go controlLoop(context.Background(), controls,
+			go controlLoop(t.Context(), controls,
 				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
@@ -432,14 +432,14 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			waitReady, takeReady := stagePair(t)
 			hub := newTestHub(ui)
 			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
-			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 
 			quit := make(chan struct{})
 			controls := make(chan tui.Control, 4)
 			hub.ag = ag
 			hub.q = q
 			hub.stager = stager
-			go controlLoop(context.Background(), controls,
+			go controlLoop(t.Context(), controls,
 				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
@@ -498,7 +498,7 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+	stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 	var mu sync.Mutex
 	var barEst int
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
@@ -514,7 +514,7 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	hub.ag = ag
 	hub.q = q
 	hub.stager = stager
-	go controlLoop(context.Background(), controls,
+	go controlLoop(t.Context(), controls,
 		newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 	errCh := make(chan error, 1)

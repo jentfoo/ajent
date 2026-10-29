@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net"
 	"os"
@@ -29,8 +28,9 @@ type fakeSession struct {
 
 	transcriptPath string // hello names this file when set; state.get reports head
 	head           string
-	log            []ctl.Event // answered for events.replay, filtered by since
-	hangReplay     bool        // never answer replay: the close-wakeup test hangs on it
+	log            []ctl.Event   // answered for events.replay, filtered by since
+	hangReplay     bool          // never answer replay: the close-wakeup test hangs on it
+	hung           chan struct{} // closed once a hangReplay request reaches serveConn
 }
 
 // newFakeSession binds a socket in a short temp dir and starts accepting. It
@@ -43,10 +43,10 @@ func newFakeSession(t *testing.T) *fakeSession {
 
 	dir := filepath.Join(home, DirName)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", filepath.Join(dir, "01JFAKESESSIONID000000.sock"))
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "01JFAKESESSIONID000000.sock"))
 	require.NoError(t, err)
 
-	f := &fakeSession{ln: ln, home: home}
+	f := &fakeSession{ln: ln, home: home, hung: make(chan struct{})}
 	t.Cleanup(func() { _ = ln.Close() })
 	go f.acceptLoop()
 	return f
@@ -146,7 +146,8 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 			hang, log := f.hangReplay, append([]ctl.Event(nil), f.log...)
 			f.mu.Unlock()
 			if hang {
-				return // never answered: the close-wakeup test hangs on this
+				close(f.hung) // the request arrived: any waiting caller may rely on it
+				return        // never answered: the close-wakeup test hangs on this
 			}
 			var p ctl.ReplayParams
 			_ = json.Unmarshal(req.Params, &p)
@@ -183,9 +184,7 @@ func TestDialReadsHello(t *testing.T) {
 	conn, hello, events := f.dial(t)
 	assert.Equal(t, ctl.Protocol, hello.Protocol)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	stopped, err := conn.Interrupt(ctx)
+	stopped, err := conn.Interrupt(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "turn", stopped)
 
@@ -213,9 +212,7 @@ func TestCallReportsWireError(t *testing.T) {
 	f := newFakeSession(t)
 	conn, _, _ := f.dial(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	_, err := conn.Call(ctx, "no-such-method", nil, nil)
+	_, err := conn.Call(t.Context(), "no-such-method", nil, nil)
 	require.Error(t, err)
 	var wire *ctl.Error
 	require.ErrorAs(t, err, &wire)
@@ -229,13 +226,10 @@ func TestServeOrdersEventsBeforeReplies(t *testing.T) {
 	f := newFakeSession(t)
 	conn, _, events := f.dial(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, err := conn.Call(ctx, ctl.MethodState, nil, nil)
+		_, err := conn.Call(t.Context(), ctl.MethodState, nil, nil)
 		assert.NoError(t, err)
 	}()
 
@@ -251,9 +245,7 @@ func TestSubmitCarriesLine(t *testing.T) {
 	f := newFakeSession(t)
 	conn, _, events := f.dial(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	require.NoError(t, conn.Submit(ctx, "hello session"))
+	require.NoError(t, conn.Submit(t.Context(), "hello session"))
 
 	ev := waitEvent(t, events)
 	assert.Equal(t, ctl.EventEcho, ev.Name)
@@ -274,10 +266,11 @@ func TestCloseWakesCallers(t *testing.T) {
 	go func() {
 		// events.replay is the fake's never-answered method; no call budget means
 		// the wait can only end through Close
-		_, err := conn.Call(context.Background(), ctl.MethodReplay, nil, nil)
+		_, err := conn.Call(t.Context(), ctl.MethodReplay, nil, nil)
 		errCh <- err
 	}()
-	time.AfterFunc(50*time.Millisecond, conn.Close)
+	<-f.hung // the request reached the server: the call is registered in flight
+	conn.Close()
 
 	select {
 	case err := <-errCh:
@@ -305,25 +298,32 @@ func TestResolveTargetForms(t *testing.T) {
 	f := newFakeSession(t)
 	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
 
-	path, _, err := Resolve(f.Path())
+	live, err := Discover()
 	require.NoError(t, err)
-	assert.Equal(t, f.Path(), path)
-
-	live, derr := Discover()
-	require.NoError(t, derr)
 	require.Len(t, live, 1)
 
-	byID, _, err := Resolve(live[0].ID)
-	require.NoError(t, err)
-	assert.Equal(t, f.Path(), byID)
+	t.Run("exact_path", func(t *testing.T) {
+		path, _, rerr := Resolve(f.Path())
+		require.NoError(t, rerr)
+		assert.Equal(t, f.Path(), path)
+	})
 
-	prefix := live[0].ID[:8]
-	byPrefix, _, err := Resolve(prefix)
-	require.NoError(t, err)
-	assert.Equal(t, f.Path(), byPrefix)
+	t.Run("session_id", func(t *testing.T) {
+		byID, _, rerr := Resolve(live[0].ID)
+		require.NoError(t, rerr)
+		assert.Equal(t, f.Path(), byID)
+	})
 
-	_, _, err = Resolve("zz-nothing")
-	require.Error(t, err)
+	t.Run("unique_prefix", func(t *testing.T) {
+		byPrefix, _, rerr := Resolve(live[0].ID[:8])
+		require.NoError(t, rerr)
+		assert.Equal(t, f.Path(), byPrefix)
+	})
+
+	t.Run("unknown_refused", func(t *testing.T) {
+		_, _, rerr := Resolve("zz-nothing")
+		require.Error(t, rerr)
+	})
 }
 
 // TestReplayReturnsEventsPastSince pins the reconnect helper: retained events
@@ -337,15 +337,13 @@ func TestReplayReturnsEventsPastSince(t *testing.T) {
 	}
 	conn, _, _ := f.dial(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	evs, err := conn.Replay(ctx, 5)
+	evs, err := conn.Replay(t.Context(), 5)
 	require.NoError(t, err)
 	require.Len(t, evs, 1)
 	assert.Equal(t, uint64(7), evs[0].Seq)
 
 	// everything is past zero: the full retained history answers
-	evs, err = conn.Replay(ctx, 0)
+	evs, err = conn.Replay(t.Context(), 0)
 	require.NoError(t, err)
 	require.Len(t, evs, 2)
 }
@@ -386,9 +384,7 @@ func TestBackfillReadsRecordedBranch(t *testing.T) {
 
 	assert.Equal(t, f.transcriptPath, conn.Hello().TranscriptPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	snap, branch, seq, err := conn.Backfill(ctx)
+	snap, branch, seq, err := conn.Backfill(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, second.ID, snap.Head)
 	assert.Positive(t, seq) // the state.get watermark
@@ -403,9 +399,7 @@ func TestBackfillWithoutRecording(t *testing.T) {
 	f := newFakeSession(t)
 	conn, _, _ := f.dial(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), CallWait)
-	defer cancel()
-	_, _, _, err := conn.Backfill(ctx)
+	_, _, _, err := conn.Backfill(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "recording is off")
 }

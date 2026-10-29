@@ -258,26 +258,29 @@ func TestCliFlagsValidate(t *testing.T) {
 	// --attach configures no local run: every such flag refuses rather than being ignored
 	t.Run("attach_refuses_local_run_flags", func(t *testing.T) {
 		for _, tc := range []struct {
+			name  string
 			argv  []string
 			match string
 		}{
-			{[]string{"--attach", "/x.sock", "-p", "hi"}, "takes no prompt"},
-			{[]string{"--attach", "/x.sock", "extra"}, "socket path only"},
-			{[]string{"--attach", "/x.sock", "--serve"}, "mutually exclusive"},
-			{[]string{"--attach", "/x.sock", "--resume"}, "does not open a local one"},
-			{[]string{"--attach", "/x.sock", "--continue"}, "does not open a local one"},
-			{[]string{"--attach=/x.sock", "--session", "s"}, "does not open a local one"},
-			{[]string{"--attach", "/x.sock", "--allow-all"}, "no permission barrier"},
-			{[]string{"--attach", "/x.sock", "-m", "p/m"}, "only applies to a local run"},
-			{[]string{"--attach", "/x.sock", "--system", "x"}, "only applies to a local run"},
-			{[]string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
-			{[]string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
+			{"prompt", []string{"--attach", "/x.sock", "-p", "hi"}, "takes no prompt"},
+			{"positional_arg", []string{"--attach", "/x.sock", "extra"}, "socket path only"},
+			{"serve_exclusive", []string{"--attach", "/x.sock", "--serve"}, "mutually exclusive"},
+			{"resume_refused", []string{"--attach", "/x.sock", "--resume"}, "does not open a local one"},
+			{"continue_refused", []string{"--attach", "/x.sock", "--continue"}, "does not open a local one"},
+			{"session_refused", []string{"--attach=/x.sock", "--session", "s"}, "does not open a local one"},
+			{"allow_all_refused", []string{"--attach", "/x.sock", "--allow-all"}, "no permission barrier"},
+			{"model_refused", []string{"--attach", "/x.sock", "-m", "p/m"}, "only applies to a local run"},
+			{"system_prompt_refused", []string{"--attach", "/x.sock", "--system", "x"}, "only applies to a local run"},
+			{"output_format_refused", []string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
+			{"delete_combined", []string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
 		} {
-			f, perr := parseFlags(tc.argv)
-			require.NoError(t, perr, "%v", tc.argv)
-			verr := f.validate()
-			require.Error(t, verr, "%v", tc.argv)
-			assert.Contains(t, verr.Error(), tc.match, "%v", tc.argv)
+			t.Run(tc.name, func(t *testing.T) {
+				f, perr := parseFlags(tc.argv)
+				require.NoError(t, perr)
+				verr := f.validate()
+				require.Error(t, verr)
+				assert.Contains(t, verr.Error(), tc.match)
+			})
 		}
 	})
 }

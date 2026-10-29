@@ -76,8 +76,8 @@ func TestWriteControlRefusal(t *testing.T) {
 	t.Parallel()
 
 	server, client := net.Pipe()
-	defer func() { _ = server.Close() }()
-	defer func() { _ = client.Close() }()
+	t.Cleanup(func() { _ = server.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 
 	done := make(chan string, 1)
 	go func() {

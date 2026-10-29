@@ -1339,45 +1339,46 @@ func TestNormalizeInputPreparedSkips(t *testing.T) {
 	assert.Equal(t, "hello", lastUserText(p))
 }
 
-func TestPromptBatchPerItemProvenance(t *testing.T) {
+// TestPromptBatch pins the per-input annotations that survive a batch submit:
+// injected flags and submitter origins land on their own user-message rows.
+func TestPromptBatch(t *testing.T) {
 	t.Parallel()
 
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
-	a := newTestAgent(nil, p, nil)
-	var marks []bool
-	a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
-		if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
-			marks = append(marks, mi.Injected)
-		}
+	t.Run("per_item_provenance", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		var marks []bool
+		a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
+			if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
+				marks = append(marks, mi.Injected)
+			}
+		})
+
+		// a mixed batch lands as two rows: the typed prompt and the injected context
+		require.NoError(t, a.PromptBatch(t.Context(), []Input{
+			{Text: "typed"},
+			{Text: "sys", Injected: true},
+		}))
+		assert.Equal(t, []bool{false, true}, marks)
 	})
 
-	// a mixed batch lands as two rows: the typed prompt and the injected context
-	require.NoError(t, a.PromptBatch(t.Context(), []Input{
-		{Text: "typed"},
-		{Text: "sys", Injected: true},
-	}))
-	assert.Equal(t, []bool{false, true}, marks)
-}
+	t.Run("origin_stamped", func(t *testing.T) {
+		// a non-editor origin rides the input onto its appended user message,
+		// while injected rows carry none
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		var origins []string
+		a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
+			if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
+				origins = append(origins, mi.Origin)
+			}
+		})
 
-// TestPromptBatchOriginStamped pins the submitter annotation: a non-editor
-// origin rides the input onto its appended user message, while injected rows
-// carry none.
-func TestPromptBatchOriginStamped(t *testing.T) {
-	t.Parallel()
-
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
-	a := newTestAgent(nil, p, nil)
-	var origins []string
-	a.opts.OnMessage = append(a.opts.OnMessage, func(mi MessageInfo) {
-		if mi.Message.Role == llm.RoleUser && !llm.OnlyToolResults(mi.Message.Content) {
-			origins = append(origins, mi.Origin)
-		}
+		require.NoError(t, a.PromptBatch(t.Context(), []Input{
+			{Text: "typed"},
+			{Text: "remote", Origin: "controller"},
+			{Text: "sys", Injected: true},
+		}))
+		assert.Equal(t, []string{"", "controller", ""}, origins)
 	})
-
-	require.NoError(t, a.PromptBatch(t.Context(), []Input{
-		{Text: "typed"},
-		{Text: "remote", Origin: "controller"},
-		{Text: "sys", Injected: true},
-	}))
-	assert.Equal(t, []string{"", "controller", ""}, origins)
 }

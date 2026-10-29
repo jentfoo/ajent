@@ -1,0 +1,358 @@
+package app
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tui"
+)
+
+// TestAttachBackfillRendersHistory pins the attach promise: committed history
+// renders through replay and the snapshot paints the model label.
+func TestAttachBackfillRendersHistory(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "what changed")
+	})
+	a := newAttachRig(t, rig)
+
+	require.Eventually(t, func() bool { return strings.Contains(a.out(), "what changed") },
+		ctlWait, 5*time.Millisecond)
+}
+
+// TestAttachPrompts pins the recall source: the attached session's recorded
+// user prompts arrive newest first, injected context, assistant messages and
+// secret-prefixed lines never surface, and prompts submitted after attach join
+// the list once their entry.append moves the head.
+func TestAttachPrompts(t *testing.T) {
+	t.Run("from_file", func(t *testing.T) {
+		rig := newControlRig(t, func(rec *sessRec) {
+			writeMessage(t, rec, "first prompt")
+			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "secret: hunter2")})
+			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleAssistant, "an answer")})
+			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "injected"), Injected: true})
+			writeMessage(t, rec, "second prompt")
+		})
+		a := newAttachRig(t, rig)
+
+		ps := a.view.prompts()
+		assert.Equal(t, []string{"second prompt", "first prompt"}, session.PromptTexts(ps))
+	})
+
+	t.Run("follow_head", func(t *testing.T) {
+		rig := newControlRig(t, func(rec *sessRec) {
+			writeMessage(t, rec, "before attach")
+		})
+		a := newAttachRig(t, rig)
+
+		ps := a.view.prompts()
+		require.Len(t, ps, 1)
+		assert.Equal(t, "before attach", ps[0].Text)
+
+		writeMessage(t, rig.rec, "after attach")
+		require.Eventually(t, func() bool {
+			return len(a.view.prompts()) == 2
+		}, ctlWait, 5*time.Millisecond)
+	})
+}
+
+// TestAttachRunSearchesHistory pins the ctrl+r wiring end to end: an attached
+// view's search source loads from the wire transcript, and accepting the match
+// fills this terminal's editor so submitting re-sends the recorded prompt.
+func TestAttachRunSearchesHistory(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "searchable prompt")
+	})
+
+	term, feed, out := ptyUI(t)
+	a := newAttachRigTerm(t, rig, term, out)
+	a.view.installRecall()
+
+	feed("\x12") // ctrl+r opens the search over the wire source
+	require.Eventually(t, func() bool {
+		ok, _ := term.Searching()
+		return ok
+	}, ctlWait, 5*time.Millisecond)
+
+	feed("search") // typed keys filter; the match paints once the source delivers
+	// the committed history line already painted one copy at backfill: only an
+	// actually delivered, filtered overlay match adds a second
+	require.Eventually(t, func() bool {
+		return strings.Count(out(), "able prompt") >= 2
+	}, ctlWait, 5*time.Millisecond)
+
+	feed("\r\r") // accept the match into the editor, then submit it
+	select {
+	case line := <-term.Messages():
+		assert.Equal(t, "searchable prompt", line)
+	case <-time.After(ctlWait):
+		t.Fatal("history search did not fill the editor")
+	}
+}
+
+// TestAttachViewStreams pins surface parity for committed history: an echo,
+// keyed and unkeyed notices, /command print output, text deltas and tool
+// starts, outputs and results each reach the attached terminal as the host's
+// renderer would show them. Status-line chrome (segments, queued rows,
+// activity) forwards through the same tui setters the host uses; its rendering
+// is pkg/tui's own tested behavior, not capturable in plain scrollback.
+func TestAttachViewStreams(t *testing.T) {
+	t.Run("live_events", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.ui.UserEcho("typed on host")
+		rig.hub.ui.NotifyKeyed("subagent", "one job", tui.LevelInfo) // parked until the next commit flushes it
+		rig.hub.ui.Print("## printed block")
+		rig.hub.ui.Notify("plain notice", tui.LevelWarn)
+
+		require.Eventually(t, func() bool {
+			out := a.out()
+			return strings.Contains(out, "typed on host") &&
+				strings.Contains(out, "one job") &&
+				strings.Contains(out, "printed block") &&
+				strings.Contains(out, "plain notice")
+		}, ctlWait, 5*time.Millisecond)
+	})
+
+	t.Run("turn_text", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.publish(ctl.EventTextDelta, ctl.TextData{Delta: "partial "})
+		rig.hub.publish(ctl.EventTextDelta, ctl.TextData{Delta: "answer"})
+		rig.hub.publish(ctl.EventTextEnd, nil)
+
+		require.Eventually(t, func() bool { return strings.Contains(a.out(), "partial answer") },
+			ctlWait, 5*time.Millisecond)
+	})
+
+	t.Run("tool_header_and_result", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.publish(ctl.EventToolStart, ctl.ToolStartData{ID: "t1", Name: "bash", Label: "bash: ls"})
+		rig.hub.publish(ctl.EventToolOutput, ctl.ToolOutputData{ID: "t1", Delta: "file.go\n"})
+		rig.hub.publish(ctl.EventToolResult, ctl.ToolResultData{ID: "t1", Name: "bash"})
+
+		require.Eventually(t, func() bool {
+			out := a.out()
+			return strings.Contains(out, "bash: ls") && strings.Contains(out, "file.go")
+		}, ctlWait, 5*time.Millisecond)
+	})
+
+	t.Run("tool_streams_once", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.publish(ctl.EventToolStart, ctl.ToolStartData{ID: "t1", Name: "bash", Label: "bash: date"})
+		rig.hub.publish(ctl.EventToolOutput,
+			ctl.ToolOutputData{ID: "t1", Delta: "Wed Oct 28 16:32:04 MDT 2026\n"})
+		rig.hub.publish(ctl.EventToolResult, ctl.ToolResultData{ID: "t1", Name: "bash",
+			Output: "Wed Oct 28 16:32:04 MDT 2026\n"}) // the no-stream controller's copy
+
+		// a notice published after the result commits later in the same order, so
+		// seeing it proves every earlier commit (a duplicate included) has flushed
+		rig.hub.publish(ctl.EventNotice, ctl.NoticeData{Text: "stream settled"})
+		require.Eventually(t, func() bool {
+			return strings.Contains(a.out(), "stream settled")
+		}, ctlWait, 5*time.Millisecond)
+
+		assert.Equal(t, 1, strings.Count(a.out(), "Wed Oct 28 16:32:04"))
+	})
+
+	t.Run("non_streaming_result", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.publish(ctl.EventToolStart, ctl.ToolStartData{ID: "t2", Name: "write"})
+		rig.hub.publish(ctl.EventToolResult, ctl.ToolResultData{ID: "t2", Name: "write",
+			Output: "wrote notes.go"})
+
+		require.Eventually(t, func() bool {
+			return strings.Count(a.out(), "wrote notes.go") == 1
+		}, ctlWait, 5*time.Millisecond)
+	})
+}
+
+// TestAttachViewWatermarkDropsStaleEvents pins the connect-time rule: events
+// at or below the backfill watermark are superseded by what was just rendered.
+func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
+	t.Parallel()
+
+	term, out := pipeUI(t)
+	root, stopRoot := context.WithCancel(t.Context())
+	t.Cleanup(stopRoot)
+	view := newAttachView(term, nil, root, "")
+
+	stale := ctl.NewEvent(ctl.EventEcho, 5, ctl.EchoData{Text: "stale echo"})
+	fresh := ctl.NewEvent(ctl.EventEcho, 15, ctl.EchoData{Text: "fresh echo"})
+	view.handle(stale)
+	view.handle(fresh) // buffered too; the watermark decides which one applies
+	view.applyBackfill(ctl.State{}, nil, 10)
+
+	require.Eventually(t, func() bool { return strings.Contains(out(), "fresh echo") },
+		2*time.Second, 5*time.Millisecond)
+	// both echoes would flush through the same paint path: if fresh landed, a
+	// wrongly-applied stale would have landed beside it
+	assert.NotContains(t, out(), "stale echo")
+}
+
+// blockingPick is a local surface whose dialogs return only when their ctx
+// ends, standing in for a human mid-dialog.
+type blockingPick struct {
+	mode tui.Mode
+}
+
+func (b *blockingPick) Mode() tui.Mode { return b.mode }
+
+func (b *blockingPick) PickContext(ctx context.Context, _ string, _ []tui.PickItem, _ tui.PickOptions) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func (b *blockingPick) MultiPickContext(_ context.Context, _ string, _ []tui.PickItem, _ tui.MultiPickOptions) ([]int, error) {
+	return nil, tui.ErrNoUI
+}
+
+func (b *blockingPick) SelectContext(ctx context.Context, _ string, _ []tui.Option) (int, error) {
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+func (b *blockingPick) ConfirmContext(ctx context.Context, _ string) (bool, error) {
+	i, err := b.SelectContext(ctx, "", nil)
+	return i == 0, err
+}
+
+func (b *blockingPick) InputContext(context.Context, string, string) (string, error) {
+	return "", tui.ErrNoUI
+}
+
+func (b *blockingPick) InputSecretContext(ctx context.Context, label, placeholder string) (string, error) {
+	return b.InputContext(ctx, label, placeholder)
+}
+
+func (b *blockingPick) Ask(context.Context, tui.Question) (tui.Answer, error) {
+	return tui.Answer{}, tui.ErrNoUI
+}
+
+func (b *blockingPick) OpenDecision(tui.DecisionRequest) *tui.Decision {
+	return &tui.Decision{}
+}
+
+// TestAttachAnswerLocal pins the dialog mapping: each announced kind asks its
+// matching local surface and lands on the right resolve shape, a cancelled ctx
+// reports no usable answer, an unknown kind shows nothing, and a surface that
+// cannot show an approval dialog never answers it with a denial.
+func TestAttachAnswerLocal(t *testing.T) {
+	// not parallel: the canned surfaces hand out answers in order
+
+	t.Run("shapes", func(t *testing.T) {
+		local := &scriptedLocal{mode: tui.ModeAlt, picks: []int{1},
+			selects: []int{0}, inputs: []string{"typed answer", "sk"},
+			asks: []tui.Answer{{Text: "own words", Chat: true}}}
+
+		t.Run("pick_answers_index", func(t *testing.T) {
+			params, ok := answerLocal(t.Context(), local,
+				ctl.InteractionPendingData{ID: 1, Kind: "pick", Prompt: "choose",
+					Options: []string{"a", "b"}})
+			require.True(t, ok)
+			require.NotNil(t, params.Index)
+			assert.Equal(t, 1, *params.Index)
+		})
+
+		t.Run("confirm_answers_select", func(t *testing.T) {
+			params, ok := answerLocal(t.Context(), local,
+				ctl.InteractionPendingData{ID: 2, Kind: "confirm", Prompt: "sure?",
+					Options: []string{"Yes", "No"}})
+			require.True(t, ok)
+			require.NotNil(t, params.Index)
+			assert.Equal(t, 0, *params.Index)
+		})
+
+		t.Run("input_answers_text", func(t *testing.T) {
+			params, ok := answerLocal(t.Context(), local,
+				ctl.InteractionPendingData{ID: 3, Kind: "input", Prompt: "name"})
+			require.True(t, ok)
+			require.NotNil(t, params.Text)
+			assert.Equal(t, "typed answer", *params.Text)
+		})
+
+		t.Run("ask_answers_chat", func(t *testing.T) {
+			params, ok := answerLocal(t.Context(), local,
+				ctl.InteractionPendingData{ID: 4, Kind: "ask", Prompt: "why",
+					Options: []string{"one"}})
+			require.True(t, ok)
+			require.NotNil(t, params.Text)
+			assert.Equal(t, "own words", *params.Text)
+			assert.True(t, params.Chat)
+		})
+
+		t.Run("secret_answers_hidden", func(t *testing.T) {
+			params, ok := answerLocal(t.Context(), local,
+				ctl.InteractionPendingData{ID: 5, Kind: "secret", Prompt: "key"})
+			require.True(t, ok)
+			require.NotNil(t, params.Text)
+			assert.Equal(t, "sk", *params.Text)
+		})
+	})
+
+	t.Run("cancelled_ctx_no_answer", func(t *testing.T) {
+		local := &blockingPick{mode: tui.ModeAlt}
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel() // the settled event's cancellation, arrived first
+		_, ok := answerLocal(ctx, local,
+			ctl.InteractionPendingData{ID: 9, Kind: "pick", Prompt: "choose",
+				Options: []string{"a"}})
+		assert.False(t, ok)
+	})
+
+	t.Run("unknown_kind_leaves_open", func(t *testing.T) {
+		params, ok := answerLocal(t.Context(), &scriptedLocal{mode: tui.ModeAlt},
+			ctl.InteractionPendingData{ID: 1, Kind: "mystery", Prompt: "?"})
+		assert.False(t, ok)
+		assert.Zero(t, params)
+	})
+
+	t.Run("decision_without_ui_leaves_open", func(t *testing.T) {
+		params, ok := answerLocal(t.Context(), &blockingPick{mode: tui.ModeAlt},
+			ctl.InteractionPendingData{ID: 1, Kind: "decision", Prompt: "approve?",
+				Subject: "bash: rm -rf", Options: []string{"Allow", "Deny"}})
+		assert.False(t, ok)
+		assert.Zero(t, params)
+	})
+}
+
+// TestAttachSettledCancelsLocalRacer pins the race rule end to end: a settled
+// event ends the local dialog and no resolve leaves the process.
+func TestAttachSettledCancelsLocalRacer(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	a.view.registerDialog(7, cancel)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.view.raceDialog(ctx, ctl.InteractionPendingData{ID: 7, Kind: "pick",
+			Prompt: "choose", Options: []string{"a"}})
+	}()
+	a.view.settleInteraction(7) // the remote side answered first
+
+	select {
+	case <-done:
+	case <-time.After(ctlWait):
+		t.Fatal("settled did not cancel the local racer")
+	}
+}

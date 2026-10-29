@@ -5,6 +5,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -197,7 +200,7 @@ func (c *ctlClient) next() ctl.Incoming {
 	c.t.Helper()
 	select {
 	case in, ok := <-c.inc:
-		require.True(c.t, ok, "control socket closed unexpectedly")
+		require.True(c.t, ok)
 		return in
 	case <-time.After(ctlWait):
 		c.t.Fatal("timed out waiting for a control line")
@@ -209,7 +212,7 @@ func (c *ctlClient) next() ctl.Incoming {
 func (c *ctlClient) hello() ctl.Hello {
 	c.t.Helper()
 	in := c.next()
-	require.NotNil(c.t, in.Event, "first line should be the hello event, got %+v", in)
+	require.NotNil(c.t, in.Event)
 	require.Equal(c.t, ctl.EventHello, in.Event.Name)
 	var h ctl.Hello
 	require.NoError(c.t, in.Event.Decode(&h))
@@ -237,7 +240,7 @@ func (c *ctlClient) nextEvent() ctl.Event {
 	c.t.Helper()
 	for {
 		in := c.next()
-		require.NotNil(c.t, in.Event, "expected an event line, got a reply")
+		require.NotNil(c.t, in.Event)
 		return *in.Event
 	}
 }
@@ -274,11 +277,35 @@ func (c *ctlClient) drainUntil(until func() bool) {
 	for !until() {
 		select {
 		case _, ok := <-c.inc:
-			require.True(c.t, ok, "control socket closed while draining: %v", c.closeErr)
+			require.True(c.t, ok)
 		case <-time.After(ctlWait):
 			c.t.Fatal("timed out draining control lines")
 		}
 	}
+}
+
+// awaitExit reads until session.exit arrives.
+func (c *ctlClient) awaitExit(t *testing.T) {
+	t.Helper()
+	for {
+		in := c.next()
+		if in.Event != nil && in.Event.Name == ctl.EventSessionExit {
+			return
+		}
+	}
+}
+
+// awaitSeatFree waits for release-on-EOF after a holder disconnects.
+func (rig *controlRig) awaitSeatFree(t *testing.T) {
+	t.Helper()
+	require.Eventually(t, rig.srv.seatFree, ctlWait*2, 5*time.Millisecond)
+}
+
+// seatFree reports whether no connection holds the control seat.
+func (s *controlServer) seatFree() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.seat == nil
 }
 
 // TestControlSocketPathLayoutAndLength pins the socket location and the sun_path
@@ -310,60 +337,55 @@ func TestControlSocketPathLayoutAndLength(t *testing.T) {
 	assert.Contains(t, err.Error(), "unix socket limit")
 }
 
-// TestBindControlListenerStaleRebind covers the SIGKILL leftover: a socket file
-// whose peer is dead (ECONNREFUSED) is unlinked and rebound.
-func TestBindControlListenerStaleRebind(t *testing.T) {
+// TestBindControlListener covers bind's socket-file contract: a SIGKILL leftover
+// with a dead peer is unlinked and rebound, an alive peer refuses the bind,
+// and a non-socket file is never deleted.
+func TestBindControlListener(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "s.sock")
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
-	require.NoError(t, err)
-	ul, ok := ln.(*net.UnixListener)
-	require.True(t, ok)
-	ul.SetUnlinkOnClose(false) // die without cleaning up, like a SIGKILL
-	require.NoError(t, ln.Close())
-	_, err = (&net.Dialer{}).DialContext(t.Context(), "unix", path) // dead peer probes refuse
-	require.Error(t, err)
+	t.Run("stale_rebind", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "s.sock")
+		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
+		require.NoError(t, err)
+		ul, ok := ln.(*net.UnixListener)
+		require.True(t, ok)
+		ul.SetUnlinkOnClose(false) // die without cleaning up, like a SIGKILL
+		require.NoError(t, ln.Close())
+		_, err = (&net.Dialer{}).DialContext(t.Context(), "unix", path) // dead peer probes refuse
+		require.Error(t, err)
 
-	ln2, err := bindControlListener(path, "sess-1")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln2.Close() })
+		ln2, err := bindControlListener(path, "sess-1")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln2.Close() })
 
-	c, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path) // rebound socket accepts
-	require.NoError(t, err)
-	_ = c.Close()
-}
+		c, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path) // rebound socket accepts
+		require.NoError(t, err)
+		_ = c.Close()
+	})
 
-// TestBindControlListenerRefusesLivePeer pins the second-ajent refusal: an
-// alive socket names its session and the bind fails.
-func TestBindControlListenerRefusesLivePeer(t *testing.T) {
-	t.Parallel()
+	t.Run("refuses_live_peer", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "s.sock")
+		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln.Close() })
 
-	path := filepath.Join(t.TempDir(), "s.sock")
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ln.Close() })
+		_, err = bindControlListener(path, "01JSESS")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "01JSESS")
+		assert.Contains(t, err.Error(), "already running")
+	})
 
-	_, err = bindControlListener(path, "01JSESS")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "01JSESS")
-	assert.Contains(t, err.Error(), "already running")
-}
+	t.Run("refuses_foreign_file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "s.sock")
+		require.NoError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
 
-// TestBindControlListenerRefusesForeignFile keeps a non-socket file at the
-// path: something else owns it and the bind never deletes it.
-func TestBindControlListenerRefusesForeignFile(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "s.sock")
-	require.NoError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
-
-	_, err := bindControlListener(path, "s")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not a socket")
-	data, rerr := os.ReadFile(path)
-	require.NoError(t, rerr)
-	assert.Equal(t, "not a socket", string(data))
+		_, err := bindControlListener(path, "s")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not a socket")
+		data, rerr := os.ReadFile(path)
+		require.NoError(t, rerr)
+		assert.Equal(t, "not a socket", string(data))
+	})
 }
 
 // TestControlCloseUnlinksSocket pins the shutdown contract: Close removes the
@@ -409,4 +431,166 @@ func TestControlHelloServeMode(t *testing.T) {
 	h := c.hello()
 	assert.False(t, h.Interactive)
 	assert.True(t, h.Serve)
+}
+
+// serveModelsJSON is one never-dialed provider, so the serve run starts with a
+// model configured and skips first-run setup.
+const serveModelsJSON = `{
+  "defaultModel": "fake/m1",
+  "providers": {
+    "fake": {
+      "api": "openai-completions",
+      "flavor": "generic",
+      "baseUrl": "http://127.0.0.1:1",
+      "models": [{ "id": "m1", "contextWindow": 100000, "maxTokens": 4096 }]
+    }
+  }
+}`
+
+// writeServeHome configures an isolated home with control enabled and a model.
+func writeServeHome(t *testing.T, controlEnabled bool) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv(config.EnvHome, home)
+	require.NoError(t, os.WriteFile(filepath.Join(home, llm.ModelsFileName), []byte(serveModelsJSON), 0o600))
+	var conf string
+	if controlEnabled {
+		conf = `{"control": {"enabled": true}}`
+	} else {
+		conf = `{}`
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(home, config.ConfigFileName), []byte(conf), 0o600))
+}
+
+// onlySocket reports the one live control socket under the config dir.
+func onlySocket(t *testing.T) (string, bool) {
+	t.Helper()
+	dir, err := paths.Dir()
+	require.NoError(t, err)
+	entries, rerr := os.ReadDir(filepath.Join(dir, controlDirName))
+	if rerr != nil || len(entries) != 1 {
+		return "", false
+	}
+	name := entries[0].Name()
+	if !strings.HasSuffix(name, ".sock") {
+		return "", false
+	}
+	return filepath.Join(dir, controlDirName, name), true
+}
+
+// TestServeRun pins the serve contract end to end: without control.enabled the
+// run refuses with a usage error; with it, the socket binds before serving, a
+// controller attaches and polls, SIGTERM ends the run cleanly with every
+// connection seeing session.exit before the socket unlinks, and /exit through
+// submit is the controller's kill switch.
+func TestServeRun(t *testing.T) {
+	// not parallel: AJENT_HOME isolates config, socket dir and sessions
+
+	t.Run("needs_control_enabled", func(t *testing.T) {
+		writeServeHome(t, false)
+
+		assert.Equal(t, ExitUsage, Run(RunOptions{Serve: true}))
+	})
+
+	t.Run("lifecycle_sigterm", func(t *testing.T) {
+		writeServeHome(t, true)
+
+		code := make(chan int, 1)
+		go func() { code <- Run(RunOptions{Serve: true}) }()
+
+		// the socket appears before the run accepts, one per session
+		var path string
+		require.Eventually(t, func() bool {
+			p, ok := onlySocket(t)
+			if ok {
+				path = p
+			}
+			return ok
+		}, 10*time.Second, 10*time.Millisecond)
+
+		// a controller attaches: serve front end, session identity, pollable state
+		c := dialControl(t, path)
+		h := c.hello()
+		assert.True(t, h.Serve)
+		assert.False(t, h.Interactive)
+		assert.NotEmpty(t, h.Session.ID)
+
+		rp := c.call("s1", ctl.MethodState, map[string]any{})
+		require.Nil(t, rp.Error)
+
+		// SIGTERM ends the run: the signal handler installed before the bind, so
+		// the socket above proves the signal will be caught
+		require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+
+		select {
+		case exit := <-code:
+			assert.Equal(t, ExitOK, exit)
+		case <-time.After(ctlWait):
+			t.Fatal("the serve run never exited on SIGTERM")
+		}
+
+		// session.exit lands before the socket is gone
+		exitSeen := false
+		for !exitSeen {
+			in := c.next()
+			if in.Event != nil && in.Event.Name == ctl.EventSessionExit {
+				exitSeen = true
+			}
+		}
+		require.Eventually(t, func() bool {
+			_, derr := os.Stat(path)
+			return os.IsNotExist(derr)
+		}, 5*time.Second, 10*time.Millisecond)
+	})
+
+	t.Run("ends_through_exit", func(t *testing.T) {
+		writeServeHome(t, true)
+
+		code := make(chan int, 1)
+		go func() { code <- Run(RunOptions{Serve: true}) }()
+
+		var path string
+		require.Eventually(t, func() bool {
+			p, ok := onlySocket(t)
+			if ok {
+				path = p
+			}
+			return ok
+		}, 10*time.Second, 10*time.Millisecond)
+
+		ctlConn := dialControl(t, path)
+		h := ctlConn.hello()
+		assert.True(t, h.Serve)
+		rp := ctlConn.call("seat", ctl.MethodAttach, map[string]any{"control": true, "holder": "ci"})
+		require.Nil(t, rp.Error)
+
+		// a second observer sees the same exit sequence
+		obs := dialControl(t, path)
+		obs.hello()
+
+		rp = ctlConn.call("exit", ctl.MethodSubmit, map[string]any{"line": "/exit"})
+		require.Nil(t, rp.Error)
+
+		select {
+		case exit := <-code:
+			assert.Equal(t, ExitOK, exit)
+		case <-time.After(ctlWait):
+			t.Fatal("the serve run never exited on /exit")
+		}
+
+		// every connection receives session.exit then EOF, and the socket unlinks
+		for _, c := range []*ctlClient{ctlConn, obs} {
+			c.awaitExit(t)
+			select {
+			case _, ok := <-c.inc:
+				assert.False(t, ok) // EOF follows session.exit
+			case <-time.After(ctlWait):
+				t.Fatal("EOF never followed session.exit")
+			}
+		}
+		require.Eventually(t, func() bool {
+			_, derr := os.Stat(path)
+			return os.IsNotExist(derr)
+		}, 5*time.Second, 10*time.Millisecond)
+	})
 }

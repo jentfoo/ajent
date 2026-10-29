@@ -54,26 +54,6 @@ func (f *fakeQueueUI) lastQueued() []string {
 	return f.queued[len(f.queued)-1]
 }
 
-// TestSteerQueueAbortDropsWhenHeadless pins the serve rule: an interrupt with
-// no editor to recover into drops the queued prompts instead of pretending a
-// recall happened.
-func TestSteerQueueAbortDropsWhenHeadless(t *testing.T) {
-	t.Parallel()
-
-	waitReady, takeReady := stagePair(t)
-	fake := &fakeQueueUI{headless: true}
-	q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
-	q.draining = true
-	q.offer(agent.Input{Text: "held work"}, "held work", 0)
-	require.Equal(t, 1, q.pending())
-
-	q.abort()
-
-	assert.Equal(t, 0, q.pending())
-	assert.Empty(t, fake.prepended)    // nothing recovered: no editor exists
-	assert.Empty(t, fake.lastQueued()) // rows cleared
-}
-
 func TestSteerQueue(t *testing.T) {
 	t.Parallel()
 
@@ -468,6 +448,23 @@ func TestSteerQueue(t *testing.T) {
 		assert.Empty(t, fake.prepended) // no rows: the editor draft stays untouched
 		assert.Empty(t, fake.lastQueued())
 		require.GreaterOrEqual(t, cleared, 1) // the submit reserve releases anyway
+	})
+
+	t.Run("abort_drops_when_headless", func(t *testing.T) {
+		// pins the serve rule: an interrupt with no editor to recover into drops
+		// the queued prompts instead of pretending a recall happened
+		waitReady, takeReady := stagePair(t)
+		fake := &fakeQueueUI{headless: true}
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q.draining = true
+		q.offer(agent.Input{Text: "held work"}, "held work", 0)
+		require.Equal(t, 1, q.pending())
+
+		q.abort()
+
+		assert.Equal(t, 0, q.pending())
+		assert.Empty(t, fake.prepended)    // nothing recovered: no editor exists
+		assert.Empty(t, fake.lastQueued()) // rows cleared
 	})
 
 	t.Run("take_attaches_staged", func(t *testing.T) {

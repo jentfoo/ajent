@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -51,7 +50,7 @@ func newHubRig(t *testing.T) *hubRig {
 	term, _ := pipeUI(t)
 	hub := newTestHub(term)
 	rig := &hubRig{hub: hub, ui: hub.ui, pump: make(chan pumpLine, 16), gate: &typingGate{}}
-	rig.stager = command.NewStager(context.Background(), realTools(t), agent.NopSink{})
+	rig.stager = command.NewStager(t.Context(), realTools(t), agent.NopSink{})
 	t.Cleanup(rig.stager.Cancel)
 	rig.router = &lineRouter{
 		ui: hub.ui, stager: rig.stager, gate: rig.gate,
@@ -190,6 +189,13 @@ func TestHubRegisterFanout(t *testing.T) {
 	}, 5*time.Second, 5*time.Millisecond)
 }
 
+// sinkOrder returns the recorded fan-out sequence.
+func sinkOrder(mu *sync.Mutex, out *[]string) []string {
+	mu.Lock()
+	defer mu.Unlock()
+	return slices.Clone(*out)
+}
+
 // TestHubObserverOrder pins registration-order fanout across two observers.
 func TestHubObserverOrder(t *testing.T) {
 	t.Parallel()
@@ -203,9 +209,7 @@ func TestHubObserverOrder(t *testing.T) {
 	hub.Register(name("second"))
 	hub.sink().Text("x")
 
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Equal(t, []string{"first", "second"}, order)
+	assert.Equal(t, []string{"first", "second"}, sinkOrder(&mu, &order))
 }
 
 // TestHubFanoutAfterRecorder pins the sink-list contract: with the recorder
@@ -235,11 +239,10 @@ func TestHubFanoutAfterRecorder(t *testing.T) {
 		defer mu.Unlock()
 		return slices.Contains(order, "hub")
 	}, 5*time.Second, 5*time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	for i := range order {
-		if order[i] == "hub" {
-			assert.Equal(t, "recorder", order[i-1])
+	got := sinkOrder(&mu, &order)
+	for i := range got {
+		if got[i] == "hub" {
+			assert.Equal(t, "recorder", got[i-1])
 		}
 	}
 }
@@ -278,7 +281,7 @@ func TestHubInterruptMatchesKeypress(t *testing.T) {
 	hub.ag = ag
 	waitReady, takeReady := stagePair(t)
 	hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
-	stager := command.NewStager(context.Background(), nil, agent.NopSink{})
+	stager := command.NewStager(t.Context(), nil, agent.NopSink{})
 	hub.stager = stager
 	t.Cleanup(stager.Cancel)
 
@@ -471,8 +474,8 @@ func TestHubHeadTracksSwitches(t *testing.T) {
 	hub.setHead(w.Head())
 
 	log.mu.Lock()
-	defer log.mu.Unlock()
 	assert.Equal(t, []string{rewound}, log.heads)
+	log.mu.Unlock()
 	assert.Equal(t, rewound, hub.Snapshot().Head)
 }
 

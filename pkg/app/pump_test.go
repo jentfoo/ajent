@@ -373,7 +373,7 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "parked-flush"})
 	require.NoError(t, err)
-	stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+	stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 	var mu sync.Mutex
 	var barEst int
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })

@@ -64,7 +64,7 @@ func newShellStager(t *testing.T) (*Stager, *recordingSinkForShell) {
 	reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "shelltest"})
 	require.NoError(t, err)
 	sink := &recordingSinkForShell{}
-	return NewStager(context.Background(), reg, sink), sink
+	return NewStager(t.Context(), reg, sink), sink
 }
 
 func TestStagerRunsDisabledBash(t *testing.T) {
@@ -74,7 +74,7 @@ func TestStagerRunsDisabledBash(t *testing.T) {
 	require.NoError(t, err)
 	reg.SetEnabled([]string{"read", "write", "edit"}) // bash off for the agent
 	sink := &recordingSinkForShell{}
-	s := NewStager(context.Background(), reg, sink)
+	s := NewStager(t.Context(), reg, sink)
 
 	s.Run("echo hi", false)
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
@@ -192,15 +192,16 @@ func TestStagerCancelStagesPartial(t *testing.T) {
 func TestStagerPanickingTool(t *testing.T) {
 	t.Parallel()
 
-	newPanicStager := func() (*Stager, *recordingSinkForShell) {
+	newPanicStager := func(t *testing.T) (*Stager, *recordingSinkForShell) {
+		t.Helper()
 		reg := tools.New()
 		reg.Register(&explodingBash{}, true)
 		sink := &recordingSinkForShell{}
-		return NewStager(context.Background(), reg, sink), sink
+		return NewStager(t.Context(), reg, sink), sink
 	}
 
 	t.Run("included_run_stages_fault", func(t *testing.T) {
-		s, sink := newPanicStager()
+		s, sink := newPanicStager(t)
 		s.Run("echo boom", false)
 		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
 
@@ -219,7 +220,7 @@ func TestStagerPanickingTool(t *testing.T) {
 	})
 
 	t.Run("excluded_run_still_closes_header", func(t *testing.T) {
-		s, sink := newPanicStager()
+		s, sink := newPanicStager(t)
 		s.Run("echo boom", true)
 		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
 
@@ -483,15 +484,16 @@ func TestStagerTakeReady(t *testing.T) {
 func TestStagerCancelsRunContextOnCompletion(t *testing.T) {
 	t.Parallel()
 
-	newStager := func() (*Stager, *capturingBash) {
+	newStager := func(t *testing.T) (*Stager, *capturingBash) {
+		t.Helper()
 		fake := &capturingBash{}
 		reg := tools.New()
 		reg.Register(fake, true)
-		return NewStager(context.Background(), reg, agent.NopSink{}), fake
+		return NewStager(t.Context(), reg, agent.NopSink{}), fake
 	}
 
 	t.Run("included_run", func(t *testing.T) {
-		s, fake := newStager()
+		s, fake := newStager(t)
 		s.Run("echo hi", false)
 		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
 
@@ -503,7 +505,7 @@ func TestStagerCancelsRunContextOnCompletion(t *testing.T) {
 	})
 
 	t.Run("excluded_run", func(t *testing.T) {
-		s, fake := newStager()
+		s, fake := newStager(t)
 		s.Run("echo hi", true)
 		require.Eventually(t, func() bool { return !s.Pending() }, time.Second, time.Millisecond)
 		require.Eventually(t, fake.ctxCancelled, time.Second, time.Millisecond)
@@ -613,7 +615,7 @@ func TestStagerTimeoutReachesBashInput(t *testing.T) {
 	fake := &capturingBash{}
 	reg := tools.New()
 	reg.Register(fake, true)
-	s := NewStager(context.Background(), reg, &recordingSinkForShell{})
+	s := NewStager(t.Context(), reg, &recordingSinkForShell{})
 
 	var p map[string]any
 	decodeLast := func() {

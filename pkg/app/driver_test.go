@@ -206,8 +206,6 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 
 // TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
 // window and only a second inside it quits, while Ctrl+D quits outright.
-// TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
-// window and only a second inside it quits, while Ctrl+D quits outright.
 // Mode cycling rides the hub's barrier, so the cycled channel carries the
 // barrier mode after each control, giving a test its ordering signal.
 func TestControlLoop(t *testing.T) {
@@ -236,7 +234,7 @@ func TestControlLoop(t *testing.T) {
 		quit = make(chan struct{})
 		cycled = make(chan permit.Mode, 4)
 		ag := agent.New(&agent.State{Tokens: tokens.New(llm.Model{})}, agent.Options{})
-		stager := command.NewStager(context.Background(), nil, nil)
+		stager := command.NewStager(t.Context(), nil, nil)
 		hub = newTestHub(ui)
 		hub.ag = ag
 		hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
@@ -244,7 +242,7 @@ func TestControlLoop(t *testing.T) {
 		// a spy over a production-shaped barrier reports each cycle's resulting
 		// mode, giving the test a signal ordered behind earlier controls
 		hub.barrier = &modeSpy{Barrier: wiredBarrier(tools.New()), out: cycled}
-		go controlLoop(context.Background(), controls, newHintBoard(rec.record), hub, func() { close(quit) })
+		go controlLoop(t.Context(), controls, newHintBoard(rec.record), hub, func() { close(quit) })
 		return controls, quit, cycled, hub
 	}
 	quitted := func(t *testing.T, quit chan struct{}) bool {
@@ -479,7 +477,7 @@ func TestSubagentSinkTurnEnd(t *testing.T) {
 			if tool.Name() != "agent_start" {
 				continue
 			}
-			res, err := tool.Execute(context.Background(), agent.ToolCall{
+			res, err := tool.Execute(t.Context(), agent.ToolCall{
 				Input: json.RawMessage(`{"task":"x","instructions":""}`),
 			}, agent.NewOutput(agent.NopSink{}, "c"))
 			require.NoError(t, err)
@@ -604,7 +602,7 @@ func TestLineRouterRoute(t *testing.T) {
 	// only the shell case runs its stager, a sinkless one keeps an accidental
 	// Run from panicking on a notice
 	idleStager := func() *command.Stager {
-		return command.NewStager(context.Background(), nil, agent.NopSink{})
+		return command.NewStager(t.Context(), nil, agent.NopSink{})
 	}
 	armed := func(gate *typingGate) bool {
 		gate.mu.Lock()
@@ -643,7 +641,7 @@ func TestLineRouterRoute(t *testing.T) {
 	t.Run("shell_stages_without_queue", func(t *testing.T) {
 		reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "router-shell"})
 		require.NoError(t, err)
-		stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+		stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 		t.Cleanup(stager.Cancel) // the sleep must not outlive the test
 		var lines []pumpLine
 		gate := &typingGate{}

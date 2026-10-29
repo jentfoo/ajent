@@ -1079,7 +1079,7 @@ func TestClose(t *testing.T) {
 
 	// a root seeded by the host cascades into jobs without waiting on Close
 	t.Run("root_cancel_reaches_jobs", func(t *testing.T) {
-		root, stop := context.WithCancel(context.Background())
+		root, stop := context.WithCancel(t.Context())
 		m := New(wired(t, Options{Provider: provider, Root: root}))
 		t.Cleanup(m.Close)
 		id := m.start("long", "", "")
@@ -1108,7 +1108,7 @@ func TestClose(t *testing.T) {
 	// the driver window between an app-root cancel and Close: same in-place abort,
 	// so no job goroutine can appear once the host root is dead
 	t.Run("start_after_root_cancel_aborts", func(t *testing.T) {
-		root, stop := context.WithCancel(context.Background())
+		root, stop := context.WithCancel(t.Context())
 		m := New(wired(t, Options{Provider: provider, Root: root}))
 		t.Cleanup(m.Close)
 		stop()

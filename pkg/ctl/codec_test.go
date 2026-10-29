@@ -36,33 +36,33 @@ func TestCodecRoundTrip(t *testing.T) {
 	assert.ErrorIs(t, dec.Decode(&req), io.EOF)
 }
 
-func TestDecoderSkipsBlankLines(t *testing.T) {
+// TestDecoder pins Decode's line handling: whitespace between lines is
+// tolerated, garbage is rejected.
+func TestDecoder(t *testing.T) {
 	t.Parallel()
 
-	src := strings.NewReader("\n{\"id\":\"x\"}\n\n{\"id\":\"y\"}\n")
-	dec := NewDecoder(src)
-	var req Request
-	require.NoError(t, dec.Decode(&req))
-	assert.Equal(t, "x", req.ID)
-	require.NoError(t, dec.Decode(&req))
-	assert.Equal(t, "y", req.ID)
-}
+	t.Run("skips_blank_lines", func(t *testing.T) {
+		src := strings.NewReader("\n{\"id\":\"x\"}\n\n{\"id\":\"y\"}\n")
+		dec := NewDecoder(src)
+		var req Request
+		require.NoError(t, dec.Decode(&req))
+		assert.Equal(t, "x", req.ID)
+		require.NoError(t, dec.Decode(&req))
+		assert.Equal(t, "y", req.ID)
+	})
 
-func TestDecoderToleratesCarriageReturns(t *testing.T) {
-	t.Parallel()
+	t.Run("tolerates_carriage_returns", func(t *testing.T) {
+		dec := NewDecoder(strings.NewReader("{\"id\":\"x\"}\r\n"))
+		var req Request
+		require.NoError(t, dec.Decode(&req))
+		assert.Equal(t, "x", req.ID)
+	})
 
-	dec := NewDecoder(strings.NewReader("{\"id\":\"x\"}\r\n"))
-	var req Request
-	require.NoError(t, dec.Decode(&req))
-	assert.Equal(t, "x", req.ID)
-}
-
-func TestDecoderRejectsGarbage(t *testing.T) {
-	t.Parallel()
-
-	dec := NewDecoder(strings.NewReader("not json\n"))
-	var req Request
-	assert.Error(t, dec.Decode(&req))
+	t.Run("rejects_garbage", func(t *testing.T) {
+		dec := NewDecoder(strings.NewReader("not json\n"))
+		var req Request
+		assert.Error(t, dec.Decode(&req))
+	})
 }
 
 func TestDecodeIncomingSplitsRepliesFromEvents(t *testing.T) {
