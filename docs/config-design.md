@@ -7,13 +7,13 @@ that survive resume, and an ordered writer that preserves unknown keys.
 
 ## The home directory
 
-`pkg/paths` resolves the ajent home (honoring `AJENT_HOME`) as a leaf both this
-package and client-side packages import directly. Everything it creates under
-the home is pinned to owner-only access (`DirPerm`, 0700). `SubDir` materializes
-a named subdirectory — the control socket dir, the sessions root — tightening a
-group or world accessible mode in place and reporting what it found as a
-warning; callers surface that beside their other startup output (the notice
-line interactively, stderr under serve and CLI paths).
+`pkg/paths` resolves the ajent home, honoring `AJENT_HOME`, as a leaf package both
+this one and client-side packages import directly. Everything it creates under the
+home is pinned to owner-only access (`DirPerm`, 0700). Its `SubDir` helper
+materializes a named subdirectory such as the control socket dir or the sessions
+root, tightening a group or world accessible mode in place and reporting what it
+found as a warning. Callers surface that warning beside their other startup output:
+the notice line interactively, stderr under serve and CLI paths.
 
 ## Layers
 
@@ -246,10 +246,10 @@ are seeded so a session saved blocked comes back blocked.
 
 `control.enabled`, off by default, is the deliberate act of turning on a local
 control surface: it exposes the running session on a same-user unix socket for
-read-only controllers and enables `--serve`. Like `subagent.maxPollWait` it is
-startup-read only (pkg/app copies it once at process start): no `/settings`
-row, no session override, no live toggle. The socket is a runtime artifact, so
-a key that could flip mid-run would leave a controller attached to nothing.
+read-only controllers and enables `--serve`. It is read once at process start, with
+no `/settings` row, no session override and no live toggle. The socket is a runtime
+artifact, so a key that could flip mid-run would leave a controller attached to
+nothing.
 
 ## The writer
 

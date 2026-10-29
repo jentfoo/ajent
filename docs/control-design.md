@@ -1,231 +1,163 @@
 # Control socket design
 
-The control socket is ajent's second front end: a unix socket per live session
-over which any program can observe everything the local terminal renders, and —
-holding the control seat — operate the session exactly like the keyboard. The
-wire contract lives in `pkg/ctl` (leaf, imported by both sides); the controller
-side lives in `pkg/client` (dial, discovery, typed calls, event stream), so an
-external controller imports ajent and reuses it instead of reimplementing the
-protocol; the server and the two terminal front ends live in `pkg/app`
-(`control*.go`, `attach*.go`) on top of the phase 33 seams (`sessionHub`,
-`hubUI`, the interaction broker). This document records the decisions that must
-hold when changing any of them. Transport, events and the read-only methods are
-specified here only where the write half depends on them; the phase documents
-(`docs/phases/34a-*`, `34b-*`) carry the delivery history.
+How a live session exposes itself on a per-session unix socket so another program can
+watch everything it emits, and how one controller at a time may drive it exactly like
+the keyboard. Why remote writes reuse the keyboard's own paths instead of adding a
+second dispatch, why bulk history rides the transcript file rather than the socket,
+and the invariants (one seat, one event order, kernel-verified same-user peer) that
+make admitting a controller safe.
 
-## The client package
+## What it is
 
-`pkg/client` is everything an out-of-process controller needs, kept free of
-terminal and agent dependencies so external programs import it directly:
-`Dial` (hello read and protocol check), `Serve` (one reader goroutine; replies
-correlated by id, events delivered in arrival order to the handler), typed
-helpers for every method (`State`, `Submit`, `Interrupt`, `ClaimSeat`,
-`Rewind`, `Resolve`), discovery over the control dir, and `CallWait` as the
-request budget callers without one of their own apply. The rules it keeps: a
-refused request surfaces as `*ctl.Error` (code inspectable, never smuggled
-through transport errors); `Close` wakes every in-flight call; no helper
-blocks past its ctx. It imports only `pkg/ctl`, `pkg/paths` and `pkg/session`
-(for the entry types bulk history returns).
+A session with the control surface enabled binds a socket named for it under the
+ajent home (see `config-design.md`). Any number of connections may observe what the
+session emits, and one at a time holds the **control seat** to mutate: submit a
+prompt, interrupt, cycle the permission mode, rewind, answer a dialog. Two front
+ends are in-tree.
 
-## Backfill from the transcript file
+- `--serve` runs the driver with no terminal, where the socket is the only source of
+  prompts and answers.
+- `--attach <target>` mirrors a live session on this terminal, so two processes
+  share one session and either keyboard works.
 
-The hello names the recorded transcript's path on disk (empty when recording
-is off, which never serves), and `state.get` carries the head entry to branch
-it by: bulk catch-up reads the same append-only file the host records, at
-local speed and with no size bound crossing the wire. The client owns this
-glue so controllers need no protocol knowledge for it: `Conn.Backfill`
-returns the snapshot, its watermark and the branched history in one call,
-and `client.ReadBranch` covers head-tracked reads against a known file.
-Only post-attach appends
-announce as events, so a controller reconciles one full read against its live
-stream — an entry landing between the snapshot and the read may arrive both
-ways, and reconciling clients dedupe by entry id (appends that only track the
-head are no-ops). `session.Read` tolerates a torn final line, so reading while
-the host appends is safe. There is deliberately no transcript method on the
-socket.
+## Boundary rules
 
-## Attach mode
+The dependency edges are load-bearing.
 
-`ajent --attach <socket>` is the client package's first in-tree consumer: a
-full terminal over the wire, so two ajent processes share one session and the
-user interacts with either. Decisions that shape it:
+- **`pkg/ctl` (leaf).** The wire types, line codec and protocol version both sides
+  speak. Nothing internal may appear here, since every shape in it is what an
+  external controller compiles against.
+- **`pkg/client ↛ pkg/app`, `pkg/tui`, `pkg/agent`.** It imports only `ctl`,
+  `paths` and `session`, so a controller gets dial, discovery, typed calls, the
+  event stream and transcript backfill with no protocol knowledge of its own. A
+  refusal surfaces as a coded wire error rather than a transport failure.
+- **The server and both front ends stay in `pkg/app`.** They sit on the seams that
+  already decouple the turn loop from its terminal (the session hub and the
+  interaction broker), so agent, tools and permit never learn a socket exists.
 
-- **One classification path, remotely.** Every submitted line rides `submit`;
-  the attached process runs no router, no agent loop and no transcript. The
-  remote run owns model, tools and permission mode; only paint settings (render
-  mode, theme) are local, so flags that configure a local run are refused at
-  parse time rather than silently ignored.
-- **The seat is claimed once, degraded honestly.** Attach claims the control
-  seat; when another controller holds it the process attaches as a read-only
-  viewer with the holder named. Detaching (ctrl+c twice, stdin EOF) frees the
-  seat by disconnection and never ends the remote session; `/exit` submitted
-  from either side does.
-- **Rendering mirrors the host's own sink calls.** Stream events replay through
-  the same `tui/sink` mapping the host terminal uses, so parity is structural;
-  committed history backfills through `session.Replay`. A call whose output
-  deltas already streamed locally commits them alone — the full-text body on
-  its `tool.result` exists for controllers without the stream and must not
-  render a second time. Editor drafts are dropped: two editors typing would
-  fight over one buffer.
-- **Recall reads the file.** Plain ↑/↓ and ctrl+r draw their prompts from the
-  attached session's own transcript — there is no local editor-history store
-  to consult, so recall never spans other sessions.
-  Secret-prefixed lines stay excluded, like every recall surface.
-- **The watermark reconciles attach-time.** Events seen before backfill
-  completes buffer and apply only above the replies' watermark; below it the
-  rendered snapshot and transcript supersede them.
-- **Interactions race across processes.** A pending dialog opens locally on
-  announcement; first answer wins remotely, and a `settled` event cancels the
-  local racer before anything is sent. A surface that cannot show a dialog (or
-  an unknown kind) answers nothing rather than denying blind.
-- **Rewind rides the same gesture.** Double-Esc reads the tree from the
-  transcript file (the snapshot's head branches it), names the head with
-  `session.rewind` — pre-filling this editor with the rewound prompt, computed
-  locally from the branch it already read, exactly as a local rewind fills —
-  and every view, including this one, redraws on the resulting `head` event.
+## One routing path for writes
+
+Each write verb runs the implementation the keyboard already uses: the editor
+submission, Esc, Shift+Tab, typing into the editor, the tail of double-Esc, and
+answering a dialog. There is deliberately no second dispatch, so remote behavior
+shares local behavior and its tests, and a controller cannot reach a state the
+operator cannot produce by hand. Two rules follow from that single path:
+
+- **Submitting is not delivering.** A submit during a running turn obeys the pump's
+  queue and steer rules, so a controller never believes a prompt reached the model
+  while a human gate stands ahead of it.
+- **Answers are validated against what was announced.** Each pending interaction
+  declares how it may be answered, so resolution needs no rule per kind of user
+  input and a new surface costs no protocol change. A malformed or out-of-range
+  answer is an error rather than a silently mis-mapped one, which matters because
+  the barrier treats an unknown index as denial.
+
+**Provenance.** A controller-submitted prompt records its origin on the transcript
+message entry and reaches the model as an ordinary user message: no in-context
+marker, and none of the injected flag's behavior changes (`prompt-design.md`).
 
 ## The seat
 
-One connection at a time may hold the session's single **control seat**:
-`attach {control: true, holder: "name"}` claims it, a second claim errors
-naming the holder (`seat-held`), and every mutating method (`submit`,
-`interrupt`, `mode.cycle`, `input.set`, `session.rewind`,
-`interaction.resolve`) refuses an observer connection (`observer`) with the
-holder named. The rules that matter:
+Ownership is single-writer and keyed to the connection rather than the process. EOF
+releases it immediately, so a dead controller never wedges a session and a
+replacement needs no timeout. Every write refuses an observer while naming the
+holder. A forced takeover announces itself to all observers, which lets the
+displaced holder downgrade without probing and everyone learn who drives now. A
+controller that vanishes mid-dialog leaves the dialog open for whoever answers next,
+exactly as a detached terminal does.
 
-- **The seat is keyed to the connection, not the process.** EOF on the socket
-  releases it immediately, so a dead controller never wedges the session and a
-  replacement attaches at once, no timeout needed. `attach` from the current
-  holder succeeds and refreshes its name, and `force: true` takes the seat from
-  a live one: every observer sees the takeover as a `seat.lost` event (the
-  displaced holder downgrades without probing), and the displaced holder's
-  writes refuse naming the new holder from then on. Death never answers
-  anything: a controller going away mid-dialog leaves the dialog open for the
-  local human or the next controller, exactly like the 34a hold-on-dialog
-  policy.
-- **The local TUI holds no seat and needs none.** Local keys keep working
-  through their existing paths. Remote and local answers to the same
-  interaction race through the broker and the first wins — this is the phase 33
-  first-resolution rule applied across process boundaries. Two controllers can
-  never race a dialog, because only one can hold the seat; a controller and the
-  local human can, and that is by design.
-- **Unknown methods are legible errors**, never silent no-ops. The same applies
-  to every refused write: an empty `submit` line, an out-of-range dialog index,
-  an `input.set` into a serve run, a rewind onto an id that is not in the tree.
+The local TUI holds no seat and needs none: local keys keep their existing paths, so
+a remote answer races the human's through the broker under the first-resolution rule
+already shared by local surfaces. Two controllers can never race one, because only
+one may act. Unknown methods and refused writes are legible errors rather than
+silent no-ops.
 
-## Write methods, one routing path
+## One order for events and replies
 
-Every mutating method delegates to the same implementation the keyboard uses —
-there is deliberately no second dispatch:
+The session hub stamps every observable change with one event number at emit time,
+before retention and fanout, so all connections share a single total order. Every
+reply carries the number it was taken at, and that is the whole reconciliation rule:
+events at or below it are superseded by the result, events above it apply. A
+watermark is therefore the same concept as event ordering rather than a second
+protocol notion.
 
-- `submit` routes through `lineRouter` (`fromEditor=false`), so `@` expansion,
-  slash dispatch, shell staging and the excluded `!!` form inherit their
-  behavior and tests unchanged. Submitting while a turn runs follows the pump's
-  queue/steer rules and surfaces in `queued` events, so a controller never
-  believes a prompt was delivered when a human gate stands first in line.
-- `interrupt` is the Esc body (`sessionHub.interrupt`): turn, survey, staged
-  shell, in priority order. Queued prompts recover to the local editor in an
-  interactive run and drop in a serve run, exactly as the keypress would.
-- `mode.cycle` is Shift+Tab (`Barrier.Cycle`/`Prev`), re-evaluating open
-  approval dialogs under the new mode. A mode-change resolution and a racing
-  remote answer settle once, first wins.
-- `input.set` prefills the editor; it refuses while a dialog owns the input
-  (naming the kind) and errors in a serve run, where no editor exists.
-- `session.rewind` is the double-Esc tail minus the picker: the client names
-  the head entry id, an active plan workflow ends first, and the `head` event
-  fires on the move (local or remote rewinds are indistinguishable to
-  observers, who re-read the branch). Unknown heads answer `not-found`; a
-  running turn answers "a turn is running" with nothing moved.
-- `interaction.resolve` answers any announced dialog by id. The pending event
-  announces how a dialog may be answered (its options, multi-select, free-text
-  and secret shapes), so resolution validates against what was announced and a
-  new kind of user input needs no new rules: `{index}` for choices,
-  `{indexes}` for multi pick (an empty list confirms none), `{text}` and
-  `{chat}` for free text, `{cancel}` everywhere. Several shapes in one
-  request, a bad shape or an out-of-range index is a legible error, never
-  a silently mis-mapped answer (the barrier clamps unknown indexes to deny,
-  which a typo must not trigger). Resolution raises `interaction.settled` so
-  every observer dismisses the dialog; a late resolver reads `settled`, a
-  stale id reads `not-found`.
+Delivery is fail-open and bounded. Each connection stages outbound lines behind its
+own queue, and a peer that stops reading loses its connection instead of stalling the
+turn loop. Reconnect is the client's job: snapshot for truth, transcript file for
+bulk history, replay from the retained window when it still covers the gap. Three
+event families share that one number space: stream events mirroring the agent sink
+one to one, session events for the rendered surfaces outside the turn loop, and a
+single exit event last before EOF.
 
-**Provenance.** A controller-submitted prompt is recorded with
-`origin: "controller"` on its message entry in the transcript — the same place
-message-level provenance already lives (`injected`, `replayed`). It is
-deliberately not the `Input.Injected` flag: the steer queue groups runs by that
-flag and replay derives echo from it, so controller prompts must keep grouping
-and echoing like the user lines they emulate. The model sees no marker — a
-controller is an authorized human proxy, and the annotation is for audit and
-resumption, not for the prompt. See `prompt-design.md`.
+## Bulk history comes from the file
 
-## Delivery: fail-open, ordered, bounded
+There is deliberately no transcript method on the socket. The greeting names the
+recorded file and every snapshot carries the head to branch by, so catch-up reads
+the same append-only transcript at local speed with no size bound crossing the wire
+(see `session-design.md`). Only appends after a connection's snapshot announce as
+events, so one entry can reach a racing client both ways, which means anything
+rendering appends dedupes by entry id.
 
-Event delivery never blocks the session. Each connection stages outbound lines
-on its own goroutine behind a bounded queue; a peer that stops reading backs
-its writer up until the bounds (item count, bytes, stall window) trip and the
-connection is dropped. Overflow never stalls the pump, and reconnect is the
-client's job: `state.get` for truth, the hello-named transcript file for
-backfill, `events.replay {since}` when the retained ring still holds the gap.
+## Attach mode
 
-Every observable change is assigned one `seq` in the hub at emit time, before
-ring insert and fanout, so all connections see one total order and reconnects
-are orderable. Every reply carries the `seq` it was taken at: events at or
-below it are superseded by the result, events above it apply — one rule
-reconciling snapshots and streams, no second protocol concept. Write replies
-read the watermark before running their handler, so an event a submit causes
-never lands at or below the submit's own reply.
+Attach is an ordinary consumer of `pkg/client`, never a privileged in-tree protocol:
+what the attached terminal can do, a script can do too. Decisions worth keeping:
+
+- **No local classification.** The attached process runs no router, no agent loop
+  and no transcript. Model, tools and permission mode belong to the served run and
+  only paint settings are local, so flags that configure a local run are refused at
+  parse time rather than silently ignored.
+- **Parity is structural.** Events replay through the same sink mapping the host
+  terminal applies to its own output, and committed history through transcript
+  replay. State that would fight the host's stays local: editor drafts, prompt
+  recall, and the pre-fill a rewind computes from the branch it already read.
+- **The seat degrades honestly.** Attach claims the seat, or attaches as a named
+  read-only viewer when another controller holds it. Detaching frees the seat by
+  disconnection and never ends the served run, while `/exit` submitted from either
+  side does.
 
 ## Serve mode
 
-`--serve` runs the driver with no terminal: the hub is the only front end, and
-the socket is where prompts, dialogs and control arrive. Decisions that shape
-it:
+With no terminal the session hub is the only front end, which fixes three defaults:
 
-- **Always recorded.** A transcript that cannot open is a failed start, not an
-  unrecorded run. There is no session to serve without one.
-- **Interactive permission default.** A controller can answer dialogs, which is
-  what the interactive modes assume; `permissions.headlessMode` never applies.
-- **No editor truths.** `input.set` errors; queued prompts drop on interrupt
-  instead of pretending a recall happened; a rewind redraws nothing (the
-  transcript is the client's view).
-- **The run ends on `/exit` through `submit`, a signal, or local EOF.** The
-  socket never keeps an interactive run alive: local Ctrl+C stays a local
-  truth, observed by clients through `session.exit` like anything else.
-  Teardown order guarantees every connection receives `session.exit`, then EOF,
-  then the socket unlinks.
+- **Always recorded.** There is no session to serve without a transcript, so one
+  that cannot open fails the start rather than producing an unrecorded run.
+- **Interactive permissions.** Controllers answer dialogs, which is what the
+  interactive modes assume, so headless permission mode never applies here.
+- **No editor truths.** Prefill errors, queued prompts drop on interrupt instead of
+  pretending a recall happened, and a rewind redraws nothing because the transcript
+  is the client's view.
+
+The run ends as it would at a keyboard: `/exit` over the wire, a signal, or local
+EOF. The socket never keeps a run alive, and teardown emits exit before EOF before
+unlinking, so every connection sees the end.
 
 ## Security model
 
-Same-user local only, and verified rather than assumed. The control directory
-is pinned to 0700 (a wider mode found at startup is tightened with a warning,
-the same treatment models.json's permissions get), the socket itself is 0600,
-and there is no token or handshake secret because none would mean anything on
-one machine: what makes a controller trusted is that it runs as this user, and
-the kernel says so, not the peer. Accept time reads the credential snapshot
-the operating system keeps for the connection (SO_PEERCRED on linux,
-LOCAL_PEERCRED on darwin): any other uid closes at once with a `refused`
-event in place of hello, naming what the check saw, and the connecting pid is
-logged where the platform attests one — the host-side twin of --attach logging
-the host pid it dials. A platform that cannot attest credentials refuses
-every connection rather than widening the model silently. Connect and refusal
-lines never enter the control event stream: they are transport lifecycle, not
-session state, so publishing them would consume seqs and replay back to every
-observer.
+Same-user and local only, verified rather than assumed. The shared home-directory
+helper pins the control directory to owner-only access and the socket itself is
+0600 (see `config-design.md`). There is no token or handshake secret because one
+would mean nothing on a single machine: what makes a controller trusted is that it
+runs as this user, and the kernel attests that rather than the peer asserting it.
+Accept checks the peer credentials the operating system keeps for the connection and
+closes any other uid with a refusal in place of the greeting. A platform that cannot
+attest credentials refuses every connection instead of widening the model silently.
 
-Two corollaries are enforced anyway, because they are cheap: secret-prefixed
-prompts and secret dialog answers never appear in events, drafts or outcomes
-(`InputSecret` text reaches its caller and nothing else), and a socket whose
-peer is dead (a SIGKILL leftover) is unlinked and rebound while a live one
-refuses a second ajent naming the session. A non-socket file at the path is
-never removed.
+Two corollaries are enforced because they are cheap. Secret values never appear in
+events, drafts or dialog outcomes, and transport lifecycle stays out of the event
+stream since it is not session state and would consume event numbers and replay to
+everyone. A stale socket left by a killed run is rebound while a live one makes a
+second ajent naming that session refuse, and a non-socket file at the path is never
+removed.
 
-## Event families
+## Invariants
 
-Three, assigned one seq space together: **stream events** mirroring the agent
-sink one to one (the json one-shot's shapes plus `tool.result`), **session
-events** for the rendered surfaces outside the turn loop (`echo`, `notice`,
-`print`, `entry.append`, `status`, `activity`, `queued`, `editor`, `head`,
-`interaction.pending`/`settled`, `seat.lost` on a force takeover), and the
-`session.exit` lifecycle event last before close. Pending interactions are
-announcements; the seat decides who may answer them, and `state.get` reports
-the seat from each connection's side. Raw transcript payloads (including
-secret-prefixed prompts) are acceptable on this transport and nowhere else.
+1. Remote writes reuse the keyboard's implementation, so nothing dispatches twice or
+   carries its own permission logic.
+2. One seat at a time, released by disconnection, observers never mutate, local keys
+   always work.
+3. One number space orders events and reply watermarks alike, so a snapshot and a
+   live stream reconcile by one rule.
+4. Delivery is fail-open: a slow peer loses its connection, never the session's turn.
+5. Bulk history comes from the transcript file, so only deltas cross the socket.
+6. Peer credentials admit same-user connections and nothing else.

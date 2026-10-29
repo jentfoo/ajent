@@ -60,7 +60,7 @@ entry point owns its own surfacing policy (detailed in the resume table below).
 |---|---|---|
 | `session` | `SessionData` | first line of the file: version, workspace, starting model, git state, optional name |
 | `session_name` | `NameData` | a name set or changed after creation (`/session <name>`); the newest one wins |
-| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only); an `injected` flag marks system-provided user text that must not surface as a recallable prompt, and an `origin` string names a non-typed submitter (`controller`, see `control-design.md`) without changing how the message behaves |
+| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only). An `injected` flag marks system-provided user text that must not surface as a recallable prompt, and an `origin` string names a non-typed submitter (`controller`, see `control-design.md`) without changing how the message behaves |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
 | `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON. A JSON null marks a reset: the override was cleared, so replay returns that domain to its unrecorded state instead of applying it |
@@ -176,10 +176,9 @@ The store maps workspaces to directories under `<config dir>/sessions`: a
 workspace is one `<root>/<slug>-<hash>` directory, so renaming a project does
 not orphan its sessions. The slug flattens the whole workspace path so a
 directory is recognisable at a glance, and it is lossy, so the hash pins identity.
-Names are never parsed back into a workspace. The root itself is created and
-pinned to owner-only permissions by `paths.SubDir` (see `config-design.md`), so
-a mode that slipped wider is tightened with a startup warning rather than
-silently kept.
+Names are never parsed back into a workspace. The root itself is created and pinned to
+owner-only permissions by the shared home-directory helper (see `config-design.md`), so
+a mode that slipped wider is tightened with a startup warning rather than silently kept.
 The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
