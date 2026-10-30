@@ -1601,7 +1601,7 @@ func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
 	}()
 	<-entered // the lane is held mid-transaction, nothing has moved
 
-	rig.send(pumpLine{kind: command.KindPrompt, rest: "racing prompt"})
+	rig.send(pumpLine{kind: command.KindPrompt, rest: "racing prompt", queueID: "stale-row"})
 	// the dispatch decision waits on the lane: no model request may leave, so
 	// no entry can append from the head the rewind is about to move
 	require.Never(t, func() bool { return len(rig.prov.Requests()) > 0 },
@@ -1617,6 +1617,10 @@ func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return len(rig.log.named(ctl.EventQueueDropped)) > 0
 	}, 5*time.Second, 5*time.Millisecond)
+	var qd ctl.QueueDroppedData
+	require.NoError(t, rig.log.named(ctl.EventQueueDropped)[0].Decode(&qd))
+	assert.Equal(t, rewindCauseRewind, qd.Cause)
+	assert.Equal(t, []ctl.QueueRow{{ID: "stale-row", Text: "racing prompt"}}, qd.Rows)
 	assert.Empty(t, rig.prov.Requests())
 	assert.Empty(t, branchTexts(t, rig.rec.w))
 
@@ -1628,6 +1632,26 @@ func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return slices.Contains(branchTexts(t, rig.rec.w), "fresh after rewind")
 	}, 5*time.Second, 5*time.Millisecond)
+}
+
+// TestStaleLineWithoutCorrelationPublishesNothing pins the stale-line gate: a
+// typed line stuck in the pump buffer never entered the queue, so no surface
+// announced it as a row and aging it out publishes no drop event to flash.
+func TestStaleLineWithoutCorrelationPublishesNothing(t *testing.T) {
+	t.Parallel()
+
+	rig := newRewindRig(t, 4)
+	entries := mustEntries(t, rig.rec.w)
+	target := session.Branch(entries, rig.rec.w.Head())[1].ID
+	_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+
+	// a line stamped before the rewind is stale at dequeue however the timing
+	// lands, so the silence it must keep is deterministic
+	rig.pump <- pumpLine{kind: command.KindPrompt, rest: "uncorrelated", gen: 0}
+	require.Eventually(t, func() bool { return len(rig.pump) == 0 },
+		5*time.Second, 5*time.Millisecond)
+	assert.Empty(t, rig.log.named(ctl.EventQueueDropped))
+	assert.Empty(t, rig.prov.Requests())
 }
 
 // TestRewindDispatchRaceKeepsBranch races a dispatched prompt against a rewind
@@ -1690,7 +1714,11 @@ func TestRewindCleanupRunsOnRestoreRefusal(t *testing.T) {
 	q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 	q.hold(agent.Input{Text: "queued for the old branch", QueueIDs: []string{"row-9"}},
 		"queued for the old branch", 0)
-	require.Equal(t, 1, q.pending())
+	// a secret row: the recorded notice names what was cleared without ever
+	// writing the value, matching every other surface's redaction rule
+	q.hold(agent.Input{Text: "secret: hunter2", QueueIDs: []string{"row-secret"}},
+		"secret: hunter2", 0)
+	require.Equal(t, 2, q.pending())
 
 	var discarded bool
 	ag, _, start, release := heldTurnAgent(t)
@@ -1716,6 +1744,7 @@ func TestRewindCleanupRunsOnRestoreRefusal(t *testing.T) {
 	var nd session.NoticeData
 	require.NoError(t, noticed[0].Decode(&nd))
 	assert.Contains(t, nd.Message, "queued for the old branch")
+	assert.NotContains(t, nd.Message, "hunter2") // the secret stays off the record
 	assert.Equal(t, noticed[0].ID, w.Head())
 }
 

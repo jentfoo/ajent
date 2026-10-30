@@ -174,13 +174,38 @@ func TestSteerQueue(t *testing.T) {
 
 		out := q.pull()
 		require.Len(t, out, 1)
-		assert.Equal(t, "first\nsecond", out[0].Text)
+		assert.Equal(t, "first\n\nsecond", out[0].Text)
 		assert.Len(t, out[0].Before, 2)
 		assert.Nil(t, out[0].After)
 
 		out[0].Delivered() // fires once the batch lands
-		assert.Contains(t, fake.echoed, "label one\nlabel two")
+		assert.Contains(t, fake.echoed, "label one\n\nlabel two")
 		require.GreaterOrEqual(t, cleared, 1)
+	})
+
+	t.Run("delivered_merge_records_recall", func(t *testing.T) {
+		// the joined run is one user message the way it was sent: its combined
+		// text reaches recall history at delivery, while a single item already
+		// recorded at submit does not record again
+		var recorded []string
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
+		q.record = func(text string) { recorded = append(recorded, text) }
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(agent.Input{Text: "alpha"}, "alpha", 1))
+		out := q.pull()
+		require.Len(t, out, 1)
+		out[0].Delivered() // single item: submit-time record already covers it
+		assert.Empty(t, recorded)
+
+		require.True(t, q.offer(agent.Input{Text: "beta"}, "beta", 1))
+		require.True(t, q.offer(agent.Input{Text: "gamma"}, "gamma", 1))
+		out = q.pull()
+		require.Len(t, out, 1)
+		assert.Equal(t, "beta\n\ngamma", out[0].Text)
+		out[0].Delivered() // the merged shape is what recall offers
+		assert.Equal(t, []string{"beta\n\ngamma"}, recorded)
 	})
 
 	t.Run("hold_queues_without_drain", func(t *testing.T) {
@@ -309,10 +334,10 @@ func TestSteerQueue(t *testing.T) {
 		runs := q.pull()
 		require.Len(t, runs, 1)
 		assert.False(t, runs[0].Injected)
-		assert.Equal(t, "typed\nremote", runs[0].Text)
+		assert.Equal(t, "typed\n\nremote", runs[0].Text)
 
 		runs[0].Delivered()
-		assert.Equal(t, []string{"typed\nremote"}, fake.echoed)
+		assert.Equal(t, []string{"typed\n\nremote"}, fake.echoed)
 	})
 
 	t.Run("join_chains_afters_per_run", func(t *testing.T) {
@@ -366,7 +391,7 @@ func TestSteerQueue(t *testing.T) {
 		runs := q.pull()
 		require.Len(t, runs, 1)
 		assert.False(t, runs[0].Prepared)
-		assert.Equal(t, "expanded\nraw @a.go", runs[0].Text)
+		assert.Equal(t, "expanded\n\nraw @a.go", runs[0].Text)
 	})
 
 	t.Run("take_joins_batch", func(t *testing.T) {
@@ -381,7 +406,7 @@ func TestSteerQueue(t *testing.T) {
 		ins, ok := q.take(t.Context())
 		require.True(t, ok)
 		require.Len(t, ins, 1)
-		assert.Equal(t, "a\nb", ins[0].Text)
+		assert.Equal(t, "a\n\nb", ins[0].Text)
 
 		_, ok = q.take(t.Context()) // empty now: clears draining so a later offer starts fresh
 		assert.False(t, ok)
@@ -493,15 +518,16 @@ func TestSteerQueue(t *testing.T) {
 				drops = append(drops, rows)
 			})
 
-		text, err := q.recallInto()
+		_, text, err := q.recallInto()
 		require.NoError(t, err)
 		assert.Empty(t, text) // nothing queued: an empty result, no error
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		assert.True(t, q.offer(agent.Input{Text: "remote work", QueueIDs: []string{"row-r"}}, "remote row", 2))
 
-		text, err = q.recallInto()
+		id, text, err := q.recallInto()
 		require.NoError(t, err)
+		assert.Equal(t, "row-r", id)        // the row's correlation travels with the text
 		assert.Equal(t, "remote row", text) // the typed line, restored for the caller's draft
 		assert.Empty(t, fake.prepended)     // no host editor fill: the text travels instead
 		assert.Empty(t, fake.lastQueued())  // rows refresh like any other recall
@@ -522,13 +548,13 @@ func TestSteerQueue(t *testing.T) {
 		assert.True(t, q.offer(agent.Input{Blocks: llm.BlockList{
 			llm.ImageBlock{MediaType: "image/png", Data: pngBuf.Bytes()}},
 		}, "", 2))
-		_, err := q.recallInto()
+		_, _, err := q.recallInto()
 		require.ErrorIs(t, err, errImageQueued)
 		require.Len(t, fake.lastQueued(), 1) // still queued
 
 		q.recall() // the image row leaves by keyboard recall
 		assert.True(t, q.offer(agent.Input{Text: "secret work"}, "secret: hunter2", 2))
-		_, err = q.recallInto()
+		_, _, err = q.recallInto()
 		require.ErrorIs(t, err, errSecretQueued)
 		require.Len(t, fake.lastQueued(), 1) // still queued
 	})

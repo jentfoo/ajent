@@ -1016,8 +1016,17 @@ func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, 
 	// the abandoned branch or staged output riding the new one
 	if r.clearQueued != nil {
 		if labels := r.clearQueued(); len(labels) > 0 {
+			// secret rows stay out of the record like every surface: a dropped
+			// prompt was never delivered, so the transcript holds no other copy
+			shown := bulk.SliceFilter(func(text string) bool {
+				return !session.HasSecretPrefix(secretPrefix, text)
+			}, labels)
+			msg := "queued prompts cleared by rewind"
+			if len(shown) > 0 {
+				msg += ": " + strings.Join(shown, "; ")
+			}
 			if _, err := r.appendEntry(session.TypeNotice, session.NoticeData{
-				Message: "queued prompts cleared by rewind: " + strings.Join(labels, "; "),
+				Message: msg,
 				Level:   agent.LevelWarn,
 			}); err != nil {
 				ui.Notify("could not record the queue-clear notice: "+err.Error(), tui.LevelWarn)

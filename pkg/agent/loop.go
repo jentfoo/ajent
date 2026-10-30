@@ -208,7 +208,13 @@ func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 		}
 		if turnCtx.Err() != nil {
 			// interrupt released the hold: this boundary never streams, so nothing
-			// appends, no delivery callback fires, and dropped input stays dropped
+			// appends and no delivery callback fires — dropped input reports its
+			// own rows, or a submitting surface's pending row never resolves
+			for _, in := range promptInputs {
+				if in.Dropped != nil {
+					in.Dropped()
+				}
+			}
 			sink.Notice(InterruptedText, LevelInfo)
 			result.Stop = llm.StopAborted
 			break
@@ -624,7 +630,7 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	if a.opts.Tools == nil {
 		out := make([]llm.ToolResultBlock, len(ordered))
 		for i, c := range ordered {
-			out[i], _ = a.runTool(ctx, sink, c)
+			out[i], _ = a.runTool(ctx, sink, c, nil)
 		}
 		return out, false
 	}
@@ -638,21 +644,29 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	ends := make([]bool, len(calls)) // written by index, like out
 
 	if parallel {
+		dones := a.paintHeaders(sink, ordered) // commit headers in message order first
 		sem := make(chan struct{}, runtime.NumCPU())
 		var wg sync.WaitGroup
 		for i := range calls {
 			if ctx.Err() != nil {
+				// abort fills the skipped results; their committed headers must close
+				// with the same marker or the rows hang open past the turn
+				for _, d := range dones[i:] {
+					if d != nil {
+						d(interruptedToolResult())
+					}
+				}
 				break // a cancelled batch leaves the rest unanswered, abort fills them
 			}
 			wg.Add(1)
-			go func(i int, c ToolCall) {
+			go func(i int, c ToolCall, done func(ToolResult)) {
 				defer wg.Done()
 				defer func() { // a panicked runTool still releases its slot
 					<-sem
 				}()
 				sem <- struct{}{}
-				out[i], ends[i] = a.runTool(ctx, sink, c)
-			}(i, ordered[i])
+				out[i], ends[i] = a.runTool(ctx, sink, c, done)
+			}(i, ordered[i], dones[i])
 		}
 		wg.Wait()
 		return out, slices.Contains(ends, true)
@@ -662,17 +676,47 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 		if ctx.Err() != nil {
 			break // a cancelled batch leaves the rest unanswered, abort fills them
 		}
-		out[i], ends[i] = a.runTool(ctx, sink, c)
+		out[i], ends[i] = a.runTool(ctx, sink, c, nil)
 	}
 	return out, slices.Contains(ends, true)
+}
+
+// paintHeaders commits every header the parallel batch will show onto the loop
+// goroutine, in message order: the launches race for the sink otherwise and
+// scrollback reads launch order instead of submission order. A call runTool
+// answers without a header (malformed args, unknown tool) leaves a nil entry so
+// nothing paints for it here either.
+func (a *Agent) paintHeaders(sink Sink, calls []ToolCall) []func(ToolResult) {
+	dones := make([]func(ToolResult), len(calls))
+	for i, c := range calls {
+		if !json.Valid(c.Input) {
+			continue // malformed args are answered without a header
+		}
+		tool, ok := a.opts.Tools.Get(c.Name)
+		if !ok {
+			continue // an unknown tool's error result stands alone
+		}
+		dones[i] = sink.ToolStart(c, tool.Label(c), false)
+	}
+	return dones
+}
+
+// interruptedToolResult is the hook closure for a header committed but never
+// run: the turn aborted between paint and launch, so its row carries the same
+// marker abort fills into the transcript result.
+func interruptedToolResult() ToolResult {
+	return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: InterruptedText}}, Display: InterruptedText}
 }
 
 // maxArgsEvidence caps the raw malformed arguments quoted in an error result.
 const maxArgsEvidence = 120
 
 // runTool executes one tool and streams its output to the sink. A malformed or
-// erroring tool is still a result, not a turn failure.
-func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.ToolResultBlock, bool) {
+// erroring tool is still a result, not a turn failure. done is an already
+// committed header hook from paintHeaders; nil paints at execution time, which
+// keeps a serial batch's headers in call order.
+func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall,
+	done func(ToolResult)) (llm.ToolResultBlock, bool) {
 	if a.opts.Tools == nil {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}, false
@@ -695,7 +739,9 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	}
 
 	out := NewOutput(sink, call.ID)
-	done := sink.ToolStart(call, tool.Label(call), false)
+	if done == nil {
+		done = sink.ToolStart(call, tool.Label(call), false)
+	}
 	var err error
 	res, err, fault := RecoverTool(ctx, done, sink, call, func() (ToolResult, error) {
 		return tool.Execute(ctx, call, out)

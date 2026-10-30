@@ -483,6 +483,63 @@ func TestRunPumpStalePromptRecovers(t *testing.T) {
 	assert.Contains(t, texts(p.Requests()[0]), "fresh question")
 }
 
+// TestInterruptDuringHoldDropsPendingRow pins the abort-at-boundary report: a
+// directly dispatched prompt parked in the AwaitInput hold lands no message
+// when the interrupt releases the hold, so its correlation resolves as an
+// interrupt drop instead of leaking as a pending row forever.
+func TestInterruptDuringHoldDropsPendingRow(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	wrapped := wrapUI(t, ui)
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("ran")}}}
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	ag := agent.New(st, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:    []agent.Sink{agent.NopSink{}},
+		// the typing gate's boundary hold, pinned like a user mid-message
+		AwaitInput: func(context.Context) {
+			close(entered)
+			<-release
+		},
+	})
+	console := &uiConsole{ui: wrapped, commands: command.NewRegistry()}
+	lane := newStateLane()
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
+	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
+	log := &emitLog{}
+	log.attach(wrapped.hub)
+
+	pump := make(chan pumpLine, 4)
+	starts := newStartState(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), expander,
+		false, wrapped, starts, func() {}, q, lane, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+
+	line := pumpLine{kind: command.KindPrompt, rest: "held question", queueID: "row-held"}
+	line.gen = lane.stamp()
+	pump <- line
+	<-entered // parked at the hold, its message not yet landed
+
+	ag.Interrupt()
+	close(release) // the hold returns into a cancelled turn
+
+	require.Eventually(t, func() bool {
+		return len(log.named(ctl.EventQueueDropped)) > 0
+	}, 5*time.Second, 5*time.Millisecond)
+	var qd ctl.QueueDroppedData
+	require.NoError(t, log.named(ctl.EventQueueDropped)[0].Decode(&qd))
+	assert.Equal(t, "interrupt", qd.Cause)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-held", Text: "held question"}}, qd.Rows)
+	assert.Empty(t, p.Requests()) // the turn never streamed
+	assert.Empty(t, st.Messages)  // nothing landed in context either
+}
+
 func TestStartDrainInterruptLandsFill(t *testing.T) {
 	t.Parallel()
 

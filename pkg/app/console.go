@@ -45,6 +45,10 @@ type uiConsole struct {
 
 	// q gates state writes against a live drain goroutine; nil applies at once
 	q *steerQueue
+	// lane serializes applied state writes against branch swaps (rewind, fork,
+	// the compactor's swap), so a bare State write can never interleave with the
+	// transaction replacing what it writes; nil applies unserialized, in tests
+	lane *stateLane
 	// snap is the settled transcript copy mid-turn readers use; nil reports none
 	snap *turnSnapshot
 	// deferred holds state writes queued while a turn owned State. Pump-goroutine
@@ -130,7 +134,7 @@ func (c *uiConsole) stateOwned() bool {
 // applies
 func (c *uiConsole) queueState(label string, fn func()) {
 	if !c.stateOwned() {
-		fn()
+		c.applyState(fn)
 		return
 	}
 	c.deferred = append(c.deferred, fn)
@@ -139,14 +143,32 @@ func (c *uiConsole) queueState(label string, fn func()) {
 	}
 }
 
+// applyState runs one state write under the state lane, so a rewind or fork
+// swapping State in place cannot interleave with the bare State field writes a
+// command handler makes. Blocking is bounded by one transaction.
+func (c *uiConsole) applyState(fn func()) {
+	if c.lane == nil {
+		fn()
+		return
+	}
+	c.lane.lock()
+	defer c.lane.unlock()
+	fn()
+}
+
 // applyDeferred lands queued state writes; a live drain keeps them queued. The
-// pump runs this at each dispatch and at drain exit
+// pump runs this at each dispatch and at drain exit, and each landed write
+// joins the state lane like an immediate one
 func (c *uiConsole) applyDeferred() {
 	if len(c.deferred) == 0 || c.stateOwned() {
 		return
 	}
 	pending := c.deferred
 	c.deferred = nil
+	if c.lane != nil {
+		c.lane.lock()
+		defer c.lane.unlock()
+	}
 	for _, fn := range pending {
 		fn()
 	}

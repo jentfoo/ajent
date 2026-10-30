@@ -75,6 +75,10 @@ func newPlanController(d planDeps) *plan.Controller {
 	}
 	return plan.New(plan.Host{
 		PickModel: func(ctx context.Context, title string) (llm.Model, bool) {
+			if !d.ui.Interactive() {
+				// serve mode has no terminal to pick with; the embedded UI is nil
+				return llm.Model{}, false
+			}
 			if d.ui.Mode() == tui.ModePlain {
 				return llm.Model{}, false
 			}

@@ -28,7 +28,9 @@ Per-instance sockets are what detached sharing needs (see `session-design.md`): 
 starter never probes or refuses, both bind, and each instance removes only paths bearing
 its own token. A discovery record beside each socket carries the session identity,
 workspace, model and seat state, so pickers and `--attach` resolve a target from files
-alone.
+alone. Stale-record collection is passive the same way: a starting instance judges a
+foreign record dead by the recorded pid alone (signal zero, never a connect), so launching
+never rings a serving instance's accept log.
 
 ## Boundary rules
 
@@ -229,6 +231,8 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
   surfaces with three touches (a view-model field, an event payload, one applier case).
   Local-only surfaces are declared by staying off that interface: editor drafts, prompt
   recall from history, and the pre-fill a rewind computes from the branch it already read.
+  A dialog answered here commits no selection summary of its own: every effect announces
+  itself through the event stream, so an echoed choice would print beside its notice.
   Recall reads the same
   local stores the host keyboard recalls from (`command-design.md`), keyed by hello's
   workspace: Ctrl+R walks the workspace-wide store, arrows scope to this session's

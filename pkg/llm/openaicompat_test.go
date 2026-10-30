@@ -276,14 +276,15 @@ func TestCompatProviderStream(t *testing.T) {
 		msg, _, err := Accumulate(s)
 		require.NoError(t, err)
 		// a reused index would make one end event replace the other's block,
-		// silently losing tool arguments or text
+		// silently losing tool arguments or text. Content reads in stream order:
+		// each block slots by its own index however the ends drained.
 		require.Len(t, msg.Content, 6)
 		assert.Equal(t, ThinkingBlock{Text: "first", Field: "reasoning_content"}, msg.Content[0])
 		assert.Equal(t, TextBlock{Text: "answer"}, msg.Content[1])
-		assert.Equal(t, ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"}, msg.Content[2])
-		assert.Equal(t, TextBlock{Text: "final"}, msg.Content[3])
-		assert.Equal(t, "call_1", msg.Content[4].(ToolCallBlock).ID)
-		assert.Equal(t, "call_2", msg.Content[5].(ToolCallBlock).ID)
+		assert.Equal(t, "call_1", msg.Content[2].(ToolCallBlock).ID)
+		assert.Equal(t, "call_2", msg.Content[3].(ToolCallBlock).ID)
+		assert.Equal(t, ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"}, msg.Content[4])
+		assert.Equal(t, TextBlock{Text: "final"}, msg.Content[5])
 	})
 
 	t.Run("think_tags_after_tool_calls", func(t *testing.T) {
@@ -296,10 +297,12 @@ func TestCompatProviderStream(t *testing.T) {
 
 		msg, _, err := Accumulate(s)
 		require.NoError(t, err)
+		// stream order: the tagged reasoning opened after the call's fragments, so
+		// it slots after the call however the drain ordered the end events
 		assert.Equal(t, BlockList{
 			TextBlock{Text: "visible"},
-			ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"},
 			ToolCallBlock{ID: "call_1", Name: "read", Input: json.RawMessage(`{"path":"main.go"}`)},
+			ThinkingBlock{Text: "reconsidering", Field: "reasoning_content"},
 		}, msg.Content)
 	})
 

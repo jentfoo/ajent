@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strconv"
 	"strings"
@@ -442,6 +443,44 @@ func TestReserve(t *testing.T) {
 		assert.Equal(t, "sub-2", m.start("b", "", "c2"))
 	})
 
+	// concurrent claims hammer the reserve-then-claim path: ids must always match
+	// the reservation each call id held, whatever order the goroutines win
+	t.Run("concurrent_claims_keep_ids", func(t *testing.T) {
+		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+		t.Cleanup(m.Close)
+
+		const n = 4
+		calls := make([]agent.ToolCall, 0, n)
+		want := map[string]string{}
+		for i := range n {
+			id := fmt.Sprintf("call-%d", i)
+			calls = append(calls, agent.ToolCall{ID: id, Name: startToolName})
+			want[id] = fmt.Sprintf("sub-%d", i+1)
+		}
+
+		for round := range 100 { // shuffled claim orders across many fresh managers
+			m2 := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
+			t.Cleanup(m2.Close)
+			m2.Reserve(calls)
+
+			var mu sync.Mutex
+			got := map[string]string{}
+			var wg sync.WaitGroup
+			for _, c := range calls {
+				wg.Add(1)
+				go func(c agent.ToolCall) {
+					defer wg.Done()
+					id := m2.start("task", "", c.ID)
+					mu.Lock()
+					got[c.ID] = id
+					mu.Unlock()
+				}(c)
+			}
+			wg.Wait()
+			assert.Equal(t, want, got, "round %d", round)
+		}
+	})
+
 	t.Run("ignores_other_tools", func(t *testing.T) {
 		m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 		t.Cleanup(m.Close)
@@ -781,6 +820,63 @@ func TestDispatchGrantsInJobOrder(t *testing.T) {
 	m.mu.Lock()
 	assert.Equal(t, 2, m.running) // grants and releases stay balanced
 	m.mu.Unlock()
+}
+
+// grantedOf reads one job's grant flag under the manager lock.
+func (m *Manager) grantedOf(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return m.jobs[id].granted
+}
+
+// TestClaimHoldKeepsActivationInIdOrder pins the reported bug: a fan-out whose
+// claims land out of order must not let a later number take a slot ahead of an
+// earlier one still unclaimed. sub-1 and sub-3 starting while sub-2 stayed
+// queued is exactly what this holds back.
+func TestClaimHoldKeepsActivationInIdOrder(t *testing.T) {
+	t.Parallel()
+
+	m := New(wired(t, Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		MaxConcurrent: 2,
+	}))
+	t.Cleanup(m.Close)
+	m.claimHold = time.Hour // only a real claim moves the line in this test
+
+	m.Reserve([]agent.ToolCall{
+		{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+	})
+	// claims race registration and land sub-1, then sub-3, with sub-2 still unclaimed
+	id1 := m.start("a", "", "c1")
+	id3 := m.start("c", "", "c3")
+	assert.True(t, m.grantedOf(id1))  // no lower number is pending, sub-1 runs free
+	assert.False(t, m.grantedOf(id3)) // the unclaimed sub-2 holds it back
+
+	id2 := m.start("b", "", "c2") // the last sibling claims; activation follows ids
+	assert.True(t, m.grantedOf(id2))
+	assert.False(t, m.grantedOf(id3)) // the cap is reached: sub-2 runs before sub-3
+}
+
+// TestClaimHoldExpiresWithoutClaim covers the abandoned reservation: a call that
+// never executes (interrupted turn, refused args) must not hold the line forever.
+func TestClaimHoldExpiresWithoutClaim(t *testing.T) {
+	t.Parallel()
+
+	m := New(wired(t, Options{
+		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+		MaxConcurrent: 2,
+	}))
+	t.Cleanup(m.Close)
+	m.claimHold = 20 * time.Millisecond
+
+	m.Reserve([]agent.ToolCall{
+		{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+	})
+	id3 := m.start("c", "", "c3")       // c1 and c2 never claim
+	require.Eventually(t, func() bool { // the hold lapses and sub-3 runs alone
+		return m.grantedOf(id3)
+	}, time.Second, 5*time.Millisecond)
 }
 
 func TestActivationFollowsJobOrder(t *testing.T) {

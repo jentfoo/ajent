@@ -176,7 +176,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// interactive run needs the deliberate config opt-in.
 	var ctlSrv *controlServer
 	if serve || set.Settings().Control.Enabled {
-		srv, warns, cerr := startControl(appRoot, hub, dialogs, rec, serve)
+		srv, warns, cerr := startControl(appRoot, hub, dialogs, rec, serve, lane)
 		for _, warn := range warns {
 			// serve mode has no terminal: the supervisor's stderr is the surface
 			if serve {
@@ -186,10 +186,6 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 			}
 		}
 		ctlSrv = srv
-		if ctlSrv != nil {
-			// Close drains it before session.exit publishes
-			ctlSrv.lane = lane
-		}
 		if cerr != nil {
 			if serve {
 				return "", fmt.Errorf("control socket: %w", cerr)
@@ -274,6 +270,10 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// the editor's in-progress text feeds accounting (SetOnEdit below) and clears on
 	// submission via settled. editSinks may be empty before a session is set up.
 	editSinks := opts.Sinks // may be empty before a session is set up
+	// pushContext repaints the bar through the run's sinks. hubUI.SetContext
+	// paints the same numbers a second time through the shared applier by
+	// design: the sink path covers wiring without a hub, the applier path is
+	// what the view model publishes.
 	pushContext := func() {
 		if len(editSinks) == 0 {
 			return
@@ -365,11 +365,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 			Root:                appRoot, // job contexts die with the app root, not only at Close
 
 			Activity: func(key, text string, rank int) {
-				if ui != nil {
-					// ranked by job number so rows hold their place, oldest first,
-					// however the parallel agent_start calls happen to publish
-					ui.SetActivityRanked(key, text, rank)
-				}
+				// ranked by job number so rows hold their place, oldest first,
+				// however the parallel agent_start calls happen to publish
+				ui.SetActivityRanked(key, text, rank)
 			},
 			Notice: func(msg string) { ui.NotifyKeyed("subagent", msg, tui.LevelInfo) },
 			Status: func(text, short string) { ui.SetStatusSegment(segment(segSubagents, text, short)) },
@@ -596,7 +594,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	console := &uiConsole{
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		starts: starts, quit: quitNow, permit: barrier,
-		q: q, snap: snap, hub: hub, dialogs: dialogs,
+		q: q, snap: snap, hub: hub, dialogs: dialogs, lane: lane,
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase
@@ -672,6 +670,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		if store := promptStore(rec); store != nil {
 			hist, _ = session.NewEditorHistory(store, config.Cwd(), secretPrefix)
 			defer hist.Compact() // bounded rewrite at exit, last writer wins under concurrency
+			// a delivered merged run records its joined text here: the combined user
+			// message is what recall should offer, not only its individual lines
+			q.record = hist.Append
 			idx := session.NewRecallIndex(store, config.Cwd(), secretPrefix, hist)
 			ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(idx.Lines()) })
 			if rec != nil && rec.w != nil {

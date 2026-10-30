@@ -2,9 +2,9 @@ package app
 
 import (
 	"encoding/json"
-	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -87,7 +87,7 @@ func newControlRigUI(t *testing.T, pre func(rec *sessRec), term *tui.UI) *contro
 		pre(rec)
 	}
 
-	srv, _, err := startControl(t.Context(), hub, broker, rec, term == nil)
+	srv, _, err := startControl(t.Context(), hub, broker, rec, term == nil, nil)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -144,7 +144,7 @@ func finishControlRig(t *testing.T, hub *sessionHub, broker *interactionBroker, 
 		hub.setHead(rec.w.Head(), rewindCauseRewind)
 	}
 
-	srv, _, err := startControl(t.Context(), hub, broker, rec, serve)
+	srv, _, err := startControl(t.Context(), hub, broker, rec, serve, nil)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -310,14 +310,49 @@ func TestTokenSuffixDiffersSameMillisecond(t *testing.T) {
 	assert.Equal(t, a[len(a)-tokenPrefixLen:], tokenSuffix(a))
 }
 
-// TestDeadDial separates proof of death from weak evidence: only refusal or a
-// gone file collects, so fd exhaustion can never unlink a live peer.
-func TestDeadDial(t *testing.T) {
+// TestPidDead separates proof of death from everything undecidable: only a
+// reaped pid collects, so PID reuse and signal refusals never unlink a live peer.
+func TestPidDead(t *testing.T) {
 	t.Parallel()
-	assert.True(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}))
-	assert.True(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: syscall.ENOENT}))
-	assert.False(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: os.ErrDeadlineExceeded}))
-	assert.False(t, deadDial(errors.New("boom")))
+	assert.False(t, pidDead(0), "no recorded pid")
+	assert.False(t, pidDead(os.Getpid()), "this process is alive")
+	// a reaped child proves death without guessing at the host's pid space
+	cmd := exec.CommandContext(t.Context(), "true")
+	require.NoError(t, cmd.Run())
+	assert.True(t, pidDead(cmd.ProcessState.Pid()), "a reaped child reads dead")
+}
+
+// TestCollectStaleNeverDials pins the passive sweep: a live peer's files
+// survive a sweep without its socket ever accepting a connection.
+func TestCollectStaleNeverDials(t *testing.T) {
+	rig := newServeRig(t, nil) // not parallel: AJENT_HOME pins the control dir
+	// a fresh registry for a live foreign pid: the sweep must leave it alone
+	foreign := filepath.Join(filepath.Dir(rig.srv.regPath), "deadbeef.json")
+	reg := controlRegistry{SessionID: "other", PID: os.Getpid(), Token: "deadbeef",
+		Socket: filepath.Join(filepath.Dir(rig.srv.regPath), "deadbeef.sock")}
+	b, err := json.Marshal(reg)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(foreign, b, 0o600))
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", reg.Socket)
+	require.NoError(t, err)
+	var accepted atomic.Bool
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted.Store(true)
+			_ = c.Close()
+		}
+	}()
+	t.Cleanup(func() { _ = ln.Close() })
+
+	rig.srv.collectStale()
+
+	_, err = os.Stat(foreign)
+	require.NoError(t, err, "a live peer's registry survives")
+	assert.False(t, accepted.Load(), "the sweep never connected")
 }
 
 // TestControlLayoutPinsPerInstanceNames pins the per-instance file layout and
@@ -356,7 +391,7 @@ func TestControlLayoutPinsPerInstanceNames(t *testing.T) {
 // TestBindControlListener covers bind's socket-file contract: a SIGKILL
 // leftover at this token's own path is unlinked and rebound, and a non-socket
 // file is never deleted. There is no probe: sockets are per instance, so no
-// live peer can sit at this path.
+// live peer can sit at this path, and bindControlListener itself never dials.
 func TestBindControlListener(t *testing.T) {
 	t.Parallel()
 
@@ -368,8 +403,8 @@ func TestBindControlListener(t *testing.T) {
 		require.True(t, ok)
 		ul.SetUnlinkOnClose(false) // die without cleaning up, like a SIGKILL
 		require.NoError(t, ln.Close())
-		_, err = (&net.Dialer{}).DialContext(t.Context(), "unix", path) // dead peer probes refuse
-		require.Error(t, err)
+		_, err = os.Stat(path)
+		require.NoError(t, err) // the leftover is what bind has to clear
 
 		ln2, err := bindControlListener(t.Context(), path)
 		require.NoError(t, err)
@@ -378,6 +413,24 @@ func TestBindControlListener(t *testing.T) {
 		c, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path) // rebound socket accepts
 		require.NoError(t, err)
 		_ = c.Close()
+	})
+
+	t.Run("rebinds_own_live_path", func(t *testing.T) {
+		// a second bind at this instance's own path wins by unlinking the first:
+		// the file belongs to this token, so a wedged predecessor never blocks a
+		// restart. The first listener's fd survives until its own Close.
+		path := filepath.Join(t.TempDir(), "s.sock")
+		ln, err := bindControlListener(t.Context(), path)
+		require.NoError(t, err)
+
+		ln2, err := bindControlListener(t.Context(), path)
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = ln2.Close() })
+
+		c, err := (&net.Dialer{}).DialContext(t.Context(), "unix", path)
+		require.NoError(t, err) // the rebound listener serves, not the abandoned one
+		_ = c.Close()
+		_ = ln.Close()
 	})
 
 	t.Run("refuses_foreign_file", func(t *testing.T) {
@@ -445,34 +498,37 @@ func TestControlRegistryTracksInstanceState(t *testing.T) {
 }
 
 // TestControlCollectStaleRemovesDeadInstances pins the registry GC: an entry
-// whose socket refuses a connect and whose file is old enough is collected with
-// its socket, a live peer is untouched, this instance's own record is never
-// judged, and empty session dirs go with the dead.
+// whose writer pid is dead and whose file is old enough is collected with its
+// socket, a live peer is untouched (never dialed), this instance's own record is
+// never judged, and empty session dirs go with the dead.
 func TestControlCollectStaleRemovesDeadInstances(t *testing.T) {
 	rig := newControlRig(t, nil)
 	base := filepath.Dir(rig.srv.regPath) // <control>/<sessionID>
 	root := filepath.Dir(base)            // <control>
 
-	// a dead sibling in its own session directory, old enough to judge
+	// a dead sibling in its own session directory, old enough to judge: its
+	// writer pid is a process this one reaped, so no dial is needed to know it
+	gone := exec.CommandContext(t.Context(), "true")
+	require.NoError(t, gone.Run())
 	deadDir := filepath.Join(root, "01DEADSESSION000000000000000")
 	require.NoError(t, os.MkdirAll(deadDir, paths.DirPerm))
 	deadSock := filepath.Join(deadDir, "deadbeef.sock")
 	deadReg := filepath.Join(deadDir, "deadbeef.json")
 	writeControlDead := controlRegistry{SessionID: "01DEADSESSION000000000000000",
-		Token: "deadbeef0000000000000000", Socket: deadSock, PID: os.Getpid()}
+		Token: "deadbeef0000000000000000", Socket: deadSock, PID: gone.ProcessState.Pid()}
 	b, err := json.Marshal(writeControlDead)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(deadReg, b, 0o600))
 	past := time.Now().Add(-2 * gcStaleRegistry)
 	require.NoError(t, os.Chtimes(deadReg, past, past))
 
-	// this instance's own token is never dial-probed: a stale self record
-	// survives, since ringing our own socket only wakes the accept log
+	// this instance's own token is never judged: a stale self record survives,
+	// whatever its pid says
 	ownDir := filepath.Join(root, "01OWNSESSION000000000000000")
 	require.NoError(t, os.MkdirAll(ownDir, paths.DirPerm))
 	ownReg := filepath.Join(ownDir, "selfrecord.json")
 	writeControlOwn := controlRegistry{SessionID: "01OWNSESSION000000000000000",
-		Token: rig.srv.token, Socket: filepath.Join(ownDir, "selfrecord.sock"), PID: os.Getpid()}
+		Token: rig.srv.token, Socket: filepath.Join(ownDir, "selfrecord.sock"), PID: gone.ProcessState.Pid()}
 	b, err = json.Marshal(writeControlOwn)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(ownReg, b, 0o600))

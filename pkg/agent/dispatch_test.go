@@ -103,6 +103,25 @@ func threeToolCalls() []llm.Event {
 	return ev
 }
 
+// threeToolCallsScrambled frames the same batch with end events arriving out of
+// index order, as a provider streaming parallel calls to completion does.
+func threeToolCallsScrambled() []llm.Event {
+	ev := make([]llm.Event, 0, 9)
+	for i, name := range []string{"a", "b", "c"} {
+		id := string(rune('1' + i))
+		ev = append(ev,
+			llm.Event{Type: llm.EventToolCallStart, Index: i, ToolCallID: id, ToolName: name},
+			llm.Event{Type: llm.EventToolCallDelta, Index: i, Text: `{}`},
+		)
+	}
+	for _, i := range []int{2, 0, 1} { // ends land third, first, second
+		id := string(rune('1' + i))
+		ev = append(ev, llm.Event{Type: llm.EventToolCallEnd, Index: i,
+			Block: llm.ToolCallBlock{ID: id, Name: string(rune('a' + i)), Input: json.RawMessage(`{}`)}})
+	}
+	return ev
+}
+
 func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +188,40 @@ func TestOnToolBatchSeesCallsInMessageOrder(t *testing.T) {
 	assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
 }
 
+// TestOnToolBatchOrdersScrambledEnds pins the stream-order guarantee against a
+// provider whose parallel calls finish streaming out of order: sub-agent id
+// reservation reads this batch as message order, so completion races upstream
+// must not reorder it.
+func TestOnToolBatchOrdersScrambledEnds(t *testing.T) {
+	t.Parallel()
+
+	stubs := map[string]*stubTool{
+		"a": {name: "a", result: "ra", parallel: true},
+		"b": {name: "b", result: "rb", parallel: true},
+		"c": {name: "c", result: "rc", parallel: true},
+	}
+	set := &mapSet{tools: map[string]Tool{"a": stubs["a"], "b": stubs["b"], "c": stubs["c"]}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: append(threeToolCallsScrambled(), doneEvent())},
+		{Events: textOnly("done")},
+	}}
+	a := newTestAgent(nil, p, nil)
+	a.opts.Tools = set
+	a.state.Model.Caps.ParallelTools = true
+
+	var batches [][]string
+	a.opts.OnToolBatch = func(_ context.Context, calls []ToolCall) {
+		names := make([]string, len(calls))
+		for i, c := range calls {
+			names[i] = c.Name + ":" + c.ID
+		}
+		batches = append(batches, names)
+	}
+
+	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+	assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
+}
+
 // TestRunToolInterruptErrorFillsMarker asserts a tool that only propagates the
 // cancellation reads as interrupted by user in the transcript, never raw
 // context canceled, while real partial output is kept as-is.
@@ -183,7 +236,7 @@ func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 		a := newTestAgent(nil, nil, NopSink{})
 		a.opts.Tools = set
 
-		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)})
+		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)}, nil)
 		require.True(t, res.IsError)
 		tb := res.Content[0].(llm.TextBlock)
 		assert.Equal(t, InterruptedText, tb.Text)
@@ -194,7 +247,7 @@ func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 		a := newTestAgent(nil, nil, NopSink{})
 		a.opts.Tools = set
 
-		res, _ := a.runTool(t.Context(), NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)})
+		res, _ := a.runTool(t.Context(), NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)}, nil)
 		require.True(t, res.IsError)
 		tb := res.Content[0].(llm.TextBlock)
 		assert.Equal(t, context.Canceled.Error(), tb.Text)
@@ -205,7 +258,7 @@ func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 		a := newTestAgent(nil, nil, NopSink{})
 		a.opts.Tools = set
 
-		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)})
+		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)}, nil)
 		require.True(t, res.IsError)
 		tb := res.Content[0].(llm.TextBlock)
 		assert.Equal(t, assert.AnError.Error(), tb.Text)
@@ -219,7 +272,7 @@ func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 		a := newTestAgent(nil, nil, NopSink{})
 		a.opts.Tools = set
 
-		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)})
+		res, _ := a.runTool(cancelled, NopSink{}, ToolCall{ID: "c1", Name: "bash", Input: json.RawMessage(`{}`)}, nil)
 		require.True(t, res.IsError)
 		tb := res.Content[0].(llm.TextBlock)
 		assert.Equal(t, "partial output", tb.Text)

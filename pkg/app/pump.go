@@ -120,6 +120,14 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				in, echo, pending := promptInput(line, expander, func(n string) {
 					console.Notify(n, tui.LevelWarn)
 				})
+				if line.queueID != "" {
+					// only a submitter that sent a correlation holds a pending row to
+					// resolve; the queue replaces this at join with the run's ids
+					id := line.queueID
+					in.Dropped = func() {
+						ui.hub.queueDroppedCause("interrupt", []ctl.QueueRow{{ID: id, Text: echo}})
+					}
+				}
 				est := submitEstimate(in, pending)
 				// the dispatch decision commits under the state lane: a rewind can
 				// neither slip between this check and the turn nor land a line the
@@ -231,19 +239,20 @@ func submitEstimate(in agent.Input, pending int) int {
 	return est
 }
 
-// stalePrompt recovers one dequeued line a rewind aged out: its pending row
-// resolves like any queue exit, the text returns to the editor when one
-// exists, and a serve run drops it with a notice. Never a silent landing on
-// the branch the prompt was not written against.
+// stalePrompt recovers one dequeued line a rewind aged out: the submitting
+// surface's pending row resolves like any queue exit, the text returns to the
+// editor when one exists, and a serve run drops it with a notice. Never a
+// silent landing on the branch the prompt was not written against.
 func stalePrompt(ui *hubUI, line pumpLine) {
+	// only a submitter that sent a correlation holds a pending row to resolve;
+	// a typed line was never announced as a row anywhere
 	id := line.queueID
 	if id == "" && line.input != nil && len(line.input.QueueIDs) > 0 {
 		id = line.input.QueueIDs[0]
 	}
-	if id == "" {
-		id = newQueueID()
+	if id != "" {
+		ui.hub.queueDroppedCause(rewindCauseRewind, []ctl.QueueRow{{ID: id, Text: line.rest}})
 	}
-	ui.hub.queueDroppedCause(rewindCauseRewind, []ctl.QueueRow{{ID: id, Text: line.rest}})
 	if !ui.Interactive() {
 		ui.Notify("queued prompt dropped; the session rewound while it waited", tui.LevelWarn)
 		return

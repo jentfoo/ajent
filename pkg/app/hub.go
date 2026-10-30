@@ -374,7 +374,7 @@ func (h *sessionHub) setModel(m llm.Model) {
 	h.mu.Lock()
 	h.vm.model = hubModel{Key: m.Key(), Short: m.ShortName(),
 		Window: m.ContextWindow, Caps: m.Caps}
-	h.publishModelLocked(h.vm.model.Key, h.vm.model.Short, h.vm.model.Window)
+	h.publishModelLocked(h.vm.model)
 	h.mu.Unlock()
 }
 
@@ -383,14 +383,18 @@ func (h *sessionHub) setModel(m llm.Model) {
 func (h *sessionHub) setModelLabel(key, short string, window int) {
 	h.mu.Lock()
 	h.vm.model.Key, h.vm.model.Short, h.vm.model.Window = key, short, window
-	h.publishModelLocked(key, short, window)
+	h.publishModelLocked(h.vm.model)
 	h.mu.Unlock()
 }
 
-// publishModelLocked stamps one model label change. Caller holds h.mu.
-func (h *sessionHub) publishModelLocked(key, short string, window int) {
+// publishModelLocked stamps one model change. The event carries the full state
+// a snapshot's Model field carries, caps included, so a capability change never
+// needs a resnapshot to reach a controller. Caller holds h.mu.
+func (h *sessionHub) publishModelLocked(m hubModel) {
 	h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Model: &ctl.ModelState{
-		Key: key, Short: short, Window: window,
+		Key: m.Key, Short: m.Short, Window: m.Window,
+		Caps: ctl.Caps{Reasoning: m.Caps.Reasoning, Images: m.Caps.Images,
+			ParallelToolCalls: m.Caps.ParallelTools},
 	}}))
 }
 

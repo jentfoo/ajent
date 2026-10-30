@@ -374,10 +374,13 @@ type RewindResult struct {
 	Head string `json:"head"`
 }
 
-// RecallResult carries the recalled queued prompt's text back to the calling
-// surface's own editor, Alt+Up over the wire. Empty when nothing was queued,
-// like interrupt naming nothing stopped.
+// RecallResult carries the recalled queued prompt back to the calling surface's
+// own editor, Alt+Up over the wire. ID names the queue row that left, so a
+// controller applying the watermark rule (which supersedes the recall's own
+// queue.dropped event) still resolves its pending row. Empty text means nothing
+// was queued, like interrupt naming nothing stopped.
 type RecallResult struct {
+	ID   string `json:"id,omitempty"`
 	Text string `json:"text,omitempty"`
 }
 

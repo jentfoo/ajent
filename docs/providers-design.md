@@ -197,7 +197,12 @@ one shared ladder across dialects, so the rule cannot drift between them.
 `Index` is the content block index, pairing a start with its deltas and its end.
 An `Accumulator` builds the final `Message`, falling back to concatenating
 deltas for a block whose end never arrived, so an aborted stream still yields
-what was received.
+what was received. Content assembles in **stream order (by event index)**,
+never end-event arrival order: parallel tool calls can finish streaming out of
+order, and everything downstream — result pairing, `OnToolBatch`, sub-agent id
+reservation — reads the list as the order the model emitted the calls in.
+Indexes are unique per block within one response, so a stable sort by index is
+the reconstruction of what was sent.
 
 `ScriptedProvider` and `SliceStream` are exported for exactly this reason: the
 agent loop's tests and compaction all need a fake provider, and several packages

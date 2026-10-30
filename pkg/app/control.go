@@ -53,13 +53,11 @@ const (
 	// joins replace rather than stack.
 	peerNoticeKey = "peers"
 
-	// gcStaleRegistry is how old a registry file must be before its socket is
-	// dial-probed for collection, so a starting instance's files are never
-	// judged by a racer.
+	// gcStaleRegistry is how old a registry file must be before its writer can
+	// be judged dead, so a starting instance's files are never judged by a racer.
+	// Collection is passive: the recorded PID is the liveness proof, never a dial,
+	// so launching an instance never rings a peer's accept log.
 	gcStaleRegistry = time.Minute
-
-	// gcDial bounds one liveness probe during collection.
-	gcDial = 250 * time.Millisecond
 
 	// acceptBackoff is the retry delay after a temporary accept failure, so a
 	// transient fd exhaustion cannot become a live-looking zombie.
@@ -169,7 +167,7 @@ type controlRegistry = ctl.Instance
 // mode), meant for the same surface as a failed start. Connections are served
 // only once start runs, after driver wiring completes; Close unlinks this
 // instance's files, callers run it on every return path.
-func startControl(ctx context.Context, hub *sessionHub, dialogs *interactionBroker, rec *sessRec, serve bool) (*controlServer, []string, error) {
+func startControl(ctx context.Context, hub *sessionHub, dialogs *interactionBroker, rec *sessRec, serve bool, lane *stateLane) (*controlServer, []string, error) {
 	snap := hub.Snapshot()
 	if snap.SessionID == "" || rec == nil || rec.w == nil {
 		return nil, nil, errors.New("control needs a recorded session; none is open")
@@ -194,7 +192,7 @@ func startControl(ctx context.Context, hub *sessionHub, dialogs *interactionBrok
 		hub: hub, dialogs: dialogs, rec: rec, path: sock, serve: serve,
 		ln: ln, conns: make(map[*controlConn]struct{}),
 		token: token, regPath: reg, started: time.Now().UnixMilli(),
-		exec: newControlExecutor(ctx),
+		exec: newControlExecutor(ctx), lane: lane,
 	}
 	if rec != nil && rec.w != nil {
 		srv.transcriptPath = rec.w.Path()
@@ -256,10 +254,12 @@ func (s *controlServer) writeRegistry() {
 }
 
 // collectStale removes registry and socket files whose instance died: the
-// socket refuses a connect and the registry is old enough that its writer had
-// time to finish starting. Empty per-session directories go with them. The
-// sweep runs once per start, skipping own records since probing this
-// instance's own socket would ring its accept log for nothing.
+// registry is old enough that its writer had time to finish starting and the
+// recorded PID no longer exists. Collection is passive, judged on the PID
+// alone, so a starting instance never connects to the peers it sweeps and no
+// serving instance sees a connect for being alive. Empty per-session
+// directories go with them. A reused PID reads as alive, which only delays
+// collection of that one record until the next sweep after the reuse ends.
 func (s *controlServer) collectStale() {
 	base, _, err := paths.SubDir(paths.ControlDirName)
 	if err != nil {
@@ -293,15 +293,10 @@ func (s *controlServer) collectStale() {
 				continue
 			}
 			if reg.Token == s.token {
-				continue // own record: known alive, and probing would ring our accept log
+				continue // own record: known alive without asking anyone
 			}
-			c, derr := (&net.Dialer{Timeout: gcDial}).Dial("unix", reg.Socket)
-			if derr == nil {
-				_ = c.Close()
-				continue // alive: another instance is serving
-			}
-			if !deadDial(derr) {
-				continue // inconclusive (fd exhaustion, a full backlog): judge it later
+			if !pidDead(reg.PID) {
+				continue // alive, or a PID reuse the sweep must not judge
 			}
 			_ = os.Remove(regPath)
 			_ = os.Remove(reg.Socket)
@@ -313,15 +308,21 @@ func (s *controlServer) collectStale() {
 	}
 }
 
-// deadDial reports whether a failed probe proves the socket dead: refused, or
-// the file already gone. Anything else (a timeout, fd exhaustion) leaves the
-// files for a later sweep rather than unlinking a live peer on weak evidence.
-func deadDial(err error) bool {
-	var oe *net.OpError
-	if !errors.As(err, &oe) {
+// pidDead reports whether no process with pid exists, judged with signal zero:
+// it delivers nothing, EPERM means a live process this user cannot signal (a
+// PID reuse by another user), and anything undecidable reads as alive so the
+// sweep only ever removes on proof of death. The os layer folds ESRCH into
+// os.ErrProcessDone, so both spellings of "no such process" count.
+func pidDead(pid int) bool {
+	if pid <= 0 {
+		return false // no recorded pid: nothing to judge, leave the record
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
 		return false
 	}
-	return errors.Is(oe.Err, syscall.ECONNREFUSED) || errors.Is(oe.Err, os.ErrNotExist)
+	err = proc.Signal(syscall.Signal(0))
+	return errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone)
 }
 
 // start begins serving connections and running the executor lane. Called after
@@ -454,9 +455,13 @@ func (s *controlServer) Close(reason string) {
 
 	_ = s.ln.Close()
 	// a rewind still holding either lane would publish branch.changed after
-	// the end event, so both drain first under one bound
-	s.exec.quiesce(laneQuiesceWait)
-	s.lane.quiesce(laneQuiesceWait)
+	// the end event, so both drain first, sharing one overall bound
+	deadline := time.Now().Add(laneQuiesceWait)
+	execHit := s.exec.quiesce(time.Until(deadline))
+	laneHit := s.lane.quiesce(time.Until(deadline))
+	if execHit || laneHit {
+		_, _ = fmt.Fprintf(os.Stderr, "ajent: control: lane quiesce bound hit; exiting with a transaction unsettled\n")
+	}
 	s.hub.publish(ctl.EventSessionExit, ctl.SessionExitData{Reason: reason})
 	for _, c := range conns {
 		c.detach(true)

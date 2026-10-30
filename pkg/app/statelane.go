@@ -15,7 +15,7 @@ import (
 // single surface.
 type stateLane struct {
 	mu    sync.Mutex    // the lane itself: one holder at a time
-	state sync.Mutex    // guards gen and the idle signal, never taken nested
+	state sync.Mutex    // guards gen and the idle signal; a leaf, safe nested under mu
 	idle  chan struct{} // closed while no holder, for shutdown's bounded wait
 	gen   uint64        // bumped per rewind; pump lines carry the value queued at
 }
@@ -87,18 +87,40 @@ func (l *stateLane) dispatch(gen uint64, offer func() bool) (stale, queued bool)
 }
 
 // quiesce waits, bounded, for the transaction holding the lane to finish,
-// reporting whether the bound was hit. A nil lane is idle at once.
+// reporting whether the bound was hit. The release is re-checked under the
+// lock: a transaction claiming between the close and the wake swaps idle, so
+// it cannot hide behind the previous holder's release. A nil lane is idle at
+// once.
 func (l *stateLane) quiesce(timeout time.Duration) bool {
 	if l == nil {
 		return false
 	}
-	l.state.Lock()
-	ch := l.idle
-	l.state.Unlock()
-	select {
-	case <-ch:
-		return false
-	case <-time.After(timeout):
-		return true
+	deadline := time.Now().Add(timeout)
+	for {
+		l.state.Lock()
+		ch := l.idle
+		l.state.Unlock()
+		select {
+		case <-ch:
+			l.state.Lock()
+			cur := l.idle
+			l.state.Unlock()
+			if cur == ch {
+				return false
+			}
+			continue // a newer holder claimed during the wake, drain it too
+		default:
+		}
+		remain := time.Until(deadline)
+		if remain <= 0 {
+			return true
+		}
+		timer := time.NewTimer(remain)
+		select {
+		case <-ch:
+			timer.Stop() // loop re-checks under the lock before reporting idle
+		case <-timer.C:
+			return true
+		}
 	}
 }

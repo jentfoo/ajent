@@ -124,18 +124,18 @@ func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult,
 
 // yield releases the control seat this connection holds, so a script can hand
 // the session back without dropping its socket. Releasing a seat it does not
-// hold is a benign no-op.
+// hold is a benign no-op. Like disconnect release, this spends no event number:
+// the holder already knows, the registry rewrite is what tells pickers, and a
+// seat.lost with no successor would read as a takeover to anyone matching From.
 func (s *controlServer) yield(c *controlConn) {
 	s.mu.Lock()
 	if s.seat != c {
 		s.mu.Unlock()
 		return
 	}
-	holder := s.seatHolder
 	s.seat = nil
 	s.seatHolder = ""
 	s.mu.Unlock()
-	s.hub.publish(ctl.EventSeatLost, ctl.SeatLostData{From: holder})
 	s.writeRegistry()
 }
 
@@ -264,17 +264,19 @@ func (s *controlServer) inputSet(params []byte) (any, *ctl.Error) {
 // queueRecall runs the body behind Alt+Up on one lane: the newest queued
 // prompt pops from the session's queue and its text returns to the calling
 // surface's editor rather than the host's, so editing there resubmits the edit.
-// An empty queue answers an empty result like interrupt naming nothing stopped;
-// an item whose payload cannot cross the wire refuses in place and stays queued.
+// The reply names the row id, since the watermark it carries supersedes the
+// drop event that resolved the same row. An empty queue answers an empty result
+// like interrupt naming nothing stopped; an item whose payload cannot cross the
+// wire refuses in place and stays queued.
 func (s *controlServer) queueRecall() (any, *ctl.Error) {
 	if s.hub.q == nil {
 		return nil, ctl.Errf(ctl.CodeUnavailable, "recall unavailable: the run is still starting")
 	}
-	text, err := s.hub.q.recallInto()
+	id, text, err := s.hub.q.recallInto()
 	if err != nil {
 		return nil, ctl.Errf(ctl.CodeUnavailable, "recall refused: %v", err)
 	}
-	return ctl.RecallResult{Text: text}, nil
+	return ctl.RecallResult{ID: id, Text: text}, nil
 }
 
 // rewind forks onto an earlier transcript entry through the same transaction

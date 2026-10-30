@@ -21,8 +21,9 @@ import (
 const (
 	defaultMaxConcurrent = 8
 	defaultPollTimeout   = 10 * time.Minute
-	defaultCloseWait     = 2 * time.Second // bound on Close waiting for jobs to stop
-	maxLabelLen          = 72              // single-line label truncation, in runes
+	defaultCloseWait     = 2 * time.Second        // bound on Close waiting for jobs to stop
+	maxLabelLen          = 72                     // single-line label truncation, in runes
+	defaultClaimHold     = 250 * time.Millisecond // max wait for a reserved sibling to claim its number
 )
 
 // Options configures a sub-agent Manager. The func-typed fields are supplied
@@ -73,6 +74,8 @@ type Manager struct {
 	jobs        map[string]*job
 	waiters     []*job         // registered but ungranted jobs, dispatched in job-number order
 	running     int            // concurrency slots currently held
+	claimHold   time.Duration  // how long an unclaimed reservation may hold back higher numbers
+	batchUntil  time.Time      // when the current batch's hold lapses (set by Reserve)
 	pending     []string       // completed ids not yet delivered into the parent context
 	inFlight    []string       // ids a queued steer names, cleared when it lands or drops
 	noticeBatch []string       // completions since the last delivered steer, for the keyed notice
@@ -92,6 +95,7 @@ func New(opts Options) *Manager {
 		jobs:      map[string]*job{},
 		reserved:  map[string]int{},
 		closeWait: defaultCloseWait,
+		claimHold: defaultClaimHold,
 	}
 	m.ctx, m.cancel = context.WithCancel(opts.Root)
 	return m
@@ -106,12 +110,22 @@ func (m *Manager) Reserve(calls []agent.ToolCall) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	clear(m.reserved) // a batch supersedes the last, since a stale entry would misnumber
+	var claims int
 	for _, c := range calls {
 		if c.Name != startToolName || c.ID == "" {
 			continue
 		}
 		m.count++
 		m.reserved[c.ID] = m.count
+		claims++
+	}
+	if claims > 0 { // a claim may be racing its siblings: arm the expiry net once
+		m.batchUntil = time.Now().Add(m.claimHold)
+		time.AfterFunc(m.claimHold, func() {
+			m.mu.Lock()
+			m.dispatchLocked()
+			m.mu.Unlock()
+		})
 	}
 }
 
@@ -225,17 +239,40 @@ func (m *Manager) acquireSlot(j *job) bool {
 }
 
 // dispatchLocked hands free slots to waiters in job-number order, so a fan-out
-// activates as sub-1, sub-2, ... however the start goroutines raced. Caller holds mu.
+// activates as sub-1, sub-2, ... however the start goroutines raced. A waiter is
+// held while a lower-numbered reservation of its batch has not claimed yet —
+// claiming races registration, so without this the task submitted last could
+// take a slot ahead of the one before it. Jobs registered before the batch (or
+// past its hold) are never held: no future claim can precede their number.
+// Caller holds mu.
 func (m *Manager) dispatchLocked() {
 	m.waiters = bulk.SliceFilterInPlace(func(j *job) bool { return j.ctx.Err() == nil }, m.waiters)
 	slices.SortFunc(m.waiters, func(a, b *job) int { return cmp.Compare(a.num, b.num) })
 	for len(m.waiters) > 0 && m.running < m.opts.MaxConcurrent {
 		j := m.waiters[0]
+		if m.holdsBack(j) {
+			break // a lower number may still claim its slot ahead of this one
+		}
 		m.waiters = slices.Delete(m.waiters, 0, 1)
 		m.running++
 		j.granted = true
 		close(j.grant)
 	}
+}
+
+// holdsBack reports whether granting j now could be jumped by a reservation of
+// the current batch: an unclaimed number lower than j's within the hold window.
+// The expiry net (armed by Reserve) releases the hold when a claim never lands.
+func (m *Manager) holdsBack(j *job) bool {
+	if len(m.reserved) == 0 || time.Now().After(m.batchUntil) {
+		return false
+	}
+	for _, num := range m.reserved { // small: one entry per agent_start in the batch
+		if num < j.num {
+			return true
+		}
+	}
+	return false
 }
 
 // releaseSlot returns one concurrency slot and wakes the next waiter.

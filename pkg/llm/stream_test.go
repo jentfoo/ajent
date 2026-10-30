@@ -107,6 +107,42 @@ func TestAccumulate(t *testing.T) {
 		require.True(t, ok)
 		assert.JSONEq(t, `{}`, string(call.Input)) // unparseable partial is not passed on
 	})
+
+	t.Run("scrambled_ends_assemble_in_stream_order", func(t *testing.T) {
+		// parallel tool calls can finish streaming out of order; the message must
+		// still read as the model emitted it, or dispatch pairs results by race
+		msg, _, err := Accumulate(&SliceStream{Events: []Event{
+			{Type: EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "a"},
+			{Type: EventToolCallStart, Index: 1, ToolCallID: "c2", ToolName: "b"},
+			{Type: EventToolCallEnd, Index: 1,
+				Block: ToolCallBlock{ID: "c2", Name: "b", Input: json.RawMessage(`{}`)}},
+			{Type: EventToolCallEnd, Index: 0,
+				Block: ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)}},
+		}})
+		require.NoError(t, err)
+
+		assert.Equal(t, BlockList{
+			ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+			ToolCallBlock{ID: "c2", Name: "b", Input: json.RawMessage(`{}`)},
+		}, msg.Content)
+	})
+
+	t.Run("pending_block_joins_stream_order", func(t *testing.T) {
+		// a never-closed block slots by its own index, not after every closed one
+		msg, _, err := Accumulate(&SliceStream{Events: []Event{
+			{Type: EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "a"},
+			{Type: EventTextStart, Index: 1},
+			{Type: EventTextDelta, Index: 1, Text: "late"},
+			{Type: EventToolCallEnd, Index: 0,
+				Block: ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)}},
+		}})
+		require.NoError(t, err)
+
+		assert.Equal(t, BlockList{
+			ToolCallBlock{ID: "c1", Name: "a", Input: json.RawMessage(`{}`)},
+			TextBlock{Text: "late"},
+		}, msg.Content)
+	})
 }
 
 func TestAccumulatorAdd(t *testing.T) {

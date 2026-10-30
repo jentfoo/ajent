@@ -80,7 +80,11 @@ func New() *Registry { return &Registry{} }
 // (registration, toggles, read-only marks, unregister), outside the registry
 // lock so it may read the registry back. One observer: the session hub is the
 // intended listener. Install before any mutation goroutine starts.
-func (r *Registry) OnChanged(fn func()) { r.onChange = fn }
+func (r *Registry) OnChanged(fn func()) {
+	r.mu.Lock()
+	r.onChange = fn
+	r.mu.Unlock()
+}
 
 // changedLocked captures the hook under the lock for the caller to fire after
 // unlocking. Caller holds r.mu.

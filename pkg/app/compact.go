@@ -142,7 +142,8 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		return false, nil
 	}
 	// plan against the live head, not the file tail (they differ after a rewind)
-	branch := session.Branch(entries, c.rec.w.Head())
+	head := c.rec.w.Head()
+	branch := session.Branch(entries, head)
 
 	provider, perr := c.providerFor(model)
 	if perr != nil {
@@ -224,6 +225,14 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	// the lane, so a slow summary never blocks a rewind.
 	c.rec.lane.lock()
 	defer c.rec.lane.unlock()
+
+	if c.rec.w.Head() != head {
+		// the summary folded a branch a rewind has since left: appending would
+		// chain a checkpoint for abandoned history onto the new head. The next
+		// boundary or manual run re-folds the branch that is live now
+		c.notify("compaction skipped: the session rewound while it ran", agent.LevelWarn)
+		return false, nil
+	}
 
 	if _, aerr := c.rec.appendEntry(session.TypeCompaction, cd); aerr != nil {
 		c.notify("compaction failed: recording the checkpoint: "+aerr.Error(), agent.LevelWarn)

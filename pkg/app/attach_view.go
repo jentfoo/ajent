@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 
@@ -262,6 +263,7 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 	}
 	v.reconcilePending(branch)
 	v.ap.Snapshot(snap) // the reconcile pass clears what the snapshot no longer lists
+	v.reconcileStalePending(snap.QueuedRows)
 	v.reconcileDialogs(v.root, snap.Interactions)
 	return nil
 }
@@ -379,13 +381,20 @@ func (v *attachView) apply(ev ctl.Event) {
 }
 
 // dropOutcome names a queue removal honestly: a recall returns the text to an
-// editor, everything else drops it. An unnamed cause is a cleared one.
-func dropOutcome(cause string) string {
+// editor, everything else drops it. An unnamed cause is a cleared one. Count
+// reads naturally, since an interrupt or rewind clears several rows at once.
+func dropOutcome(cause string, n int) string {
 	switch cause {
 	case "recalled":
+		if n > 1 {
+			return fmt.Sprintf("%d prompts recalled for editing", n)
+		}
 		return "prompt recalled for editing"
 	case "":
 		cause = "cleared"
+	}
+	if n > 1 {
+		return fmt.Sprintf("%d prompts dropped (%s)", n, cause)
 	}
 	return "prompt dropped (" + cause + ")"
 }
@@ -403,12 +412,10 @@ func (v *attachView) queueTexts(rows []ctl.QueueRow) []string {
 func (v *attachView) refreshQueue() { v.ap.queued(v.wireQueued) }
 
 // queueDropped resolves this terminal's pending rows a removal cleared and
-// flashes one outcome per row on the hint line.
+// flashes one outcome naming them on the hint line.
 func (v *attachView) queueDropped(d ctl.QueueDroppedData) {
 	v.resolvePending(d.Rows)
-	for range d.Rows {
-		v.showOutcome(dropOutcome(d.Cause))
-	}
+	v.showOutcome(dropOutcome(d.Cause, len(d.Rows)))
 }
 
 // applyAppend applies the wire rule for committed entries: ids already
@@ -464,6 +471,32 @@ func (v *attachView) reconcilePending(branch []session.Entry) {
 	}
 }
 
+// reconcileStalePending drops pending rows a disconnect orphaned: neither the
+// branch nor the snapshot's queue names them, so the session settled them while
+// this terminal was away and their drop event was lost with the connection. A
+// row still queued server-side survives; a prompt whose entry lands a moment
+// later loses its row early, its committed echo replacing it.
+func (v *attachView) reconcileStalePending(rows []ctl.QueueRow) {
+	if len(v.pending) == 0 {
+		return
+	}
+	queued := bulk.SliceToSetBy(func(r ctl.QueueRow) string { return r.ID }, rows)
+	kept := bulk.SliceFilter(func(p pendingRow) bool {
+		_, inflight := queued[p.id]
+		return inflight
+	}, v.pending)
+	if len(kept) == len(v.pending) {
+		return
+	}
+	v.pending = kept
+	v.refreshQueue()
+	if len(kept) == 1 {
+		v.showOutcome("prompt dropped while disconnected")
+	} else {
+		v.showOutcome(fmt.Sprintf("%d prompts dropped while disconnected", len(kept)))
+	}
+}
+
 // withPending merges this terminal's unresolved submissions into the wire's
 // queue rows for display: a row the host already shows stays single, a secret
 // row redacted on the wire renders from its local copy, and rows this terminal
@@ -491,15 +524,13 @@ func (v *attachView) withPending(rows []ctl.QueueRow) []string {
 	return out
 }
 
-// takePendingID removes one pending submission by its correlation, reporting
-// whether it was this terminal's.
-func (v *attachView) takePendingID(id string) bool {
+// takePendingID removes one pending submission by its correlation.
+func (v *attachView) takePendingID(id string) {
 	i := slices.IndexFunc(v.pending, func(p pendingRow) bool { return p.id == id })
 	if i < 0 {
-		return false
+		return
 	}
 	v.pending = slices.Delete(v.pending, i, i+1)
-	return true
 }
 
 // takeCommitted consumes the pending rows a committed user prompt resolves:
@@ -701,7 +732,9 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 	opts := d.Options
 	switch d.Kind {
 	case "pick":
-		i, err := dl.PickContext(ctx, d.Prompt, pickItems(opts), tui.PickOptions{})
+		// silent: the choice's effects announce themselves through wire notices,
+		// so a second local summary line would only duplicate them
+		i, err := dl.PickContext(ctx, d.Prompt, pickItems(opts), tui.PickOptions{Silent: true})
 		if err != nil {
 			return noUIOrCancel(err, cancel, skip)
 		}

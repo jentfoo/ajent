@@ -61,9 +61,13 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
   ordered against turn starts and each other without locking `State`.
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
-as newline-joined messages (one per provenance run, see below) at the agent's
+as blank-line-joined messages (one per provenance run, see below) at the agent's
 next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
-the next turn's prompt. Esc/Ctrl+C during a turn
+the next turn's prompt. The join happens only at flush: queued rows stay
+distinct until then, and a merged run is one user message whose text joins its
+items with an empty line between them — the shape recall should offer, so
+delivery records it in editor history (single items were recorded already at
+submit). Esc/Ctrl+C during a turn
 recovers every queued item back into the editor (collapsed with newlines)
 before interrupting. Alt+Up recalls the newest queued message. Staged shell
 output is the stager's until a prompt delivers (see "Delivery timing"), so
@@ -98,7 +102,7 @@ settled.
 Joining a batch joins its resolvers too: `steerQueue.join` chains every queued
 item's `After` into one, run in submit order behind the joined message. The
 batch splits into **one input per contiguous provenance run**: items sharing an
-`Injected` value merge into a single newline-joined message, while a provenance
+`Injected` value merge into a single blank-line-joined message, while a provenance
 change starts a new input. A batch mixing user text with system-injected
 context therefore keeps per-item attribution on the transcript rows, so recall
 excludes exactly the injected messages and replay renders them as such, instead

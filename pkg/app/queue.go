@@ -36,7 +36,9 @@ func newQueueID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// queueUI is the narrow TUI surface the steer queue needs, *tui.UI satisfies it.
+// queueUI is the narrow TUI surface the steer queue needs, hubUI satisfies it
+// (SetQueued takes the wire row shape the hub publishes, not the TUI's plain
+// texts).
 type queueUI interface {
 	SetQueued(rows []ctl.QueueRow)
 	PrependInput(text string)
@@ -49,7 +51,7 @@ type queueUI interface {
 }
 
 // steerQueue holds prompts submitted while a turn runs: they render as dimmed
-// rows above the prompt, hand over as newline-joined messages (one per
+// rows above the prompt, hand over as blank-line-joined messages (one per
 // provenance run) at the next step boundary or behind the next turn's prompt,
 // and are recoverable to the editor until then. Lock order: q.mu before any
 // tui.UI lock.
@@ -60,6 +62,9 @@ type steerQueue struct {
 	waitReady func(context.Context)                   // stager.WaitReady: block until staged commands finish
 	takeReady func() []agent.MessageInfo              // stager.TakeReady: consume finished staged output
 	dropped   func(cause string, rows []ctl.QueueRow) // names queued prompts a removal cleared, for pending rows
+	// record offers one delivered run's text to recall history. Set only when an
+	// editor history exists; nil skips recording.
+	record func(string)
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -158,7 +163,7 @@ func (s *steerQueue) hold(in agent.Input, label string, est int) {
 
 // join splits the queue into contiguous provenance runs (caller holds the
 // lock): items sharing an Injected value merge into one input, texts joined by
-// newline, Before blocks and After resolvers chained in submit order. A
+// a blank line, Before blocks and After resolvers chained in submit order. A
 // provenance change starts a new input, so a mixed user + system batch keeps
 // per-item attribution on the transcript rows instead of one OR-ed flag. The
 // final run clears accounting once everything behind it has landed. Each run
@@ -170,6 +175,7 @@ func (s *steerQueue) join() []agent.Input {
 		in     agent.Input
 		afters []func(context.Context) []llm.Message
 		labels []string
+		merged int // items folded into this run
 	}
 	runs := make([]runAcc, 0, len(s.items))
 
@@ -182,10 +188,11 @@ func (s *steerQueue) join() []agent.Input {
 				in: agent.Input{Injected: it.input.Injected, Prepared: it.input.Prepared}})
 		}
 		r := cur()
+		r.merged++
 		// merged text is only skip-the-seam clean when every item already ran it
 		r.in.Prepared = r.in.Prepared && it.input.Prepared
 		if r.in.Text != "" {
-			r.in.Text += "\n"
+			r.in.Text += "\n\n"
 		}
 		r.in.Text += it.input.Text
 		r.in.Blocks = append(r.in.Blocks, it.input.Blocks...)
@@ -205,10 +212,27 @@ func (s *steerQueue) join() []agent.Input {
 	out := make([]agent.Input, len(runs))
 	for i, r := range runs {
 		r.in.After = joinAfter(r.afters)
-		label := strings.Join(r.labels, "\n")
+		label := strings.Join(r.labels, "\n\n")
 		blocks := r.in.Blocks
 		if label != "" || llm.HasImageBlocks(blocks) { // image-only runs land visibly too
-			r.in.Delivered = func() { s.landed(label, blocks) }
+			r.in.Delivered = func() {
+				s.landed(label, blocks)
+				// a merged run is one user message the way it was sent; recall offers
+				// that shape at once instead of waiting on the transcript backfill.
+				// Single items recorded at submit already
+				if r.merged > 1 && label != "" && s.record != nil {
+					s.record(label)
+				}
+			}
+		}
+		if len(r.in.QueueIDs) > 0 && s.dropped != nil {
+			// an interrupt before the boundary lands the run reports its rows, so
+			// every submitting surface's pending row resolves like a queue exit
+			rows := make([]ctl.QueueRow, len(r.in.QueueIDs))
+			for j, id := range r.in.QueueIDs {
+				rows[j] = ctl.QueueRow{ID: id}
+			}
+			r.in.Dropped = func() { s.dropped("interrupt", rows) }
 		}
 		out[i] = r.in
 	}
@@ -305,6 +329,14 @@ func (s *steerQueue) take(ctx context.Context) ([]agent.Input, bool) {
 		s.draining = false
 		return nil, false
 	}
+	if ctx.Err() != nil {
+		// an interrupt released the wait after an offer landed in the window
+		// between abort and cancelDrain: leave the batch queued as rows rather
+		// than handing it to a cancelled turn that consumes it silently. The
+		// next submit delivers it, exactly like a failed provider leaves its rows
+		s.draining = false
+		return nil, false
+	}
 	s.attachFlushedLocked()
 	return s.join(), true
 }
@@ -378,28 +410,28 @@ func (s *steerQueue) recall() bool {
 }
 
 // recallInto pops the newest item for a remote surface: rows, accounting and
-// the removal notice update exactly like the keyboard path, but no editor is
-// touched — the returned text fills the caller's own draft instead. An empty
-// queue answers "" with no error; an item whose payload cannot cross the wire
-// refuses in place and stays queued.
-func (s *steerQueue) recallInto() (string, error) {
+// removal notice update exactly like the keyboard path, but no editor is
+// touched — the returned id and text fill the caller's own row and draft
+// instead. An empty queue answers empty with no error; an item whose payload
+// cannot cross the wire refuses in place and stays queued.
+func (s *steerQueue) recallInto() (id, text string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if len(s.items) == 0 {
-		return "", nil
+		return "", "", nil
 	}
 	item := s.items[len(s.items)-1]
 	label := queuedLabel(item)
 	switch {
 	case session.HasSecretPrefix(secretPrefix, label):
-		return "", errSecretQueued
+		return "", "", errSecretQueued
 	case llm.HasImageBlocks(item.input.Blocks):
-		return "", errImageQueued
+		return "", "", errImageQueued
 	}
 	s.items = s.items[:len(s.items)-1]
 	s.announceRecallLocked(item)
-	return restoredLabel(item), nil
+	return item.rowID(), restoredLabel(item), nil
 }
 
 // announceRecallLocked publishes the removal notice naming the row and
