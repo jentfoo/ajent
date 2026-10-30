@@ -38,7 +38,10 @@ func (s *streamCallSink) ToolProgress(agent.ToolProgress) {
 	s.log(ctl.EventToolProgress)
 }
 func (s *streamCallSink) Diff(p, b, a string) { s.log(ctl.EventDiff) }
-func (s *streamCallSink) Usage(llm.Usage)     { s.log(ctl.EventUsage) }
+
+// Usage logs nothing: usage rides turn.end and snapshots, no per-report event
+// exists to log.
+func (s *streamCallSink) Usage(llm.Usage) {}
 func (s *streamCallSink) Context(tokens.ContextState) {
 	s.log(ctl.EventContext)
 }
@@ -123,7 +126,7 @@ func streamEvent(name string) bool {
 		ctl.EventThinkingDelta, ctl.EventThinkingEnd,
 		ctl.EventTextDelta, ctl.EventTextEnd,
 		ctl.EventToolStart, ctl.EventToolOutput, ctl.EventToolProgress,
-		ctl.EventToolResult, ctl.EventDiff, ctl.EventUsage, ctl.EventContext,
+		ctl.EventToolResult, ctl.EventDiff, ctl.EventContext,
 		ctl.EventNotice, ctl.EventTurnEnd:
 		return true
 	}

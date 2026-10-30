@@ -473,64 +473,50 @@ func storedSessionName(target string) string {
 // ctrl+c interrupt the remote session, a double ctrl+c detaches this process,
 // Shift+Tab cycles the permission mode remotely. Everything else is local.
 func attachControls(ui *tui.UI, view *attachView, stopLocal func()) {
-	// armed is when the first idle ctrl+c landed; inside the window a second one
-	// detaches. The hint line holds for exactly the window, like a local quit's.
-	var armed time.Time
-	var quitHint <-chan time.Time
-	hints := newHintBoard(func(text, short string) {
-		ui.SetStatusSegment(segment(segHint, text, short))
-	})
-	arm := hints.Line()
+	// the board is the view's, so wire hints and this terminal's own claims
+	// (the quit arm, interrupt notices) arbitrate one hint line. The quit
+	// gesture is shared with the host loop, labels only differ.
+	hints := view.hints
+	quit := quitArm{hints: hints, again: "ctrl+c again to detach", going: "detaching…"}
 
-	for {
-		select {
-		case <-quitHint:
-			quitHint = nil
-			arm.Set("", "") // the window closed unanswered: free the line
-			continue
-		case c, ok := <-ui.Controls():
-			if !ok {
-				return // the UI went away
+	for c := range ui.Controls() { // the channel closing is the UI going away
+		switch c {
+		case tui.ControlEscape:
+			_, _ = attachInterrupt(ui, view) // a lone Esc is the interrupt key
+		case tui.ControlInterrupt:
+			stopped, err := attachInterrupt(ui, view)
+			if err == nil && stopped != "" {
+				if n := interruptNotice(stopped); n != "" {
+					hints.ShowFor(n, "", hintNoticeTTL)
+				}
+				continue // something was running: the press did its work
 			}
-			switch c {
-			case tui.ControlEscape:
-				_, _ = attachInterrupt(ui, view) // a lone Esc is the interrupt key
-			case tui.ControlInterrupt:
-				stopped, err := attachInterrupt(ui, view)
-				if err == nil && stopped != "" {
-					continue // something was running: the press did its work
-				}
-				if !armed.IsZero() && time.Since(armed) < doublePressWindow {
-					hints.Request("detaching…", "")
-					stopLocal()
-					return
-				}
-				armed = time.Now()
-				quitHint = time.After(doublePressWindow)
-				arm.Set("ctrl+c again to detach", "")
-			case tui.ControlModeCycle:
-				attachModeCycle(ui, view, false)
-			case tui.ControlModeCycleBack:
-				attachModeCycle(ui, view, true)
-			case tui.ControlClipboardImage:
-				ui.Notify("clipboard images cannot ride an attach; paste text instead", tui.LevelWarn)
-			case tui.ControlCopySelection:
-				if text, ok := ui.CopySelection(); ok {
-					go func() {
-						cctx, ccancel := context.WithTimeout(context.Background(), client.CallWait)
-						defer ccancel()
-						// local clipboard: never crosses the socket
-						if err := clipboardWrite(cctx, text,
-							clipboard.CopyOptions{TTY: ui.TerminalWriter()}); err == nil {
-							ui.Notify("copied to the clipboard", tui.LevelInfo)
-						} else {
-							ui.Notify(err.Error(), tui.LevelError)
-						}
-					}()
-				}
-			case tui.ControlRecallQueued:
-				attachRecallQueued(ui, view)
+			if quit.fire() {
+				stopLocal()
+				return
 			}
+		case tui.ControlModeCycle:
+			attachModeCycle(ui, view, false)
+		case tui.ControlModeCycleBack:
+			attachModeCycle(ui, view, true)
+		case tui.ControlClipboardImage:
+			ui.Notify("clipboard images cannot ride an attach; paste text instead", tui.LevelWarn)
+		case tui.ControlCopySelection:
+			if text, ok := ui.CopySelection(); ok {
+				go func() {
+					cctx, ccancel := context.WithTimeout(context.Background(), client.CallWait)
+					defer ccancel()
+					// local clipboard: never crosses the socket
+					if err := clipboardWrite(cctx, text,
+						clipboard.CopyOptions{TTY: ui.TerminalWriter()}); err == nil {
+						ui.Notify("copied to the clipboard", tui.LevelInfo)
+					} else {
+						ui.Notify(err.Error(), tui.LevelError)
+					}
+				}()
+			}
+		case tui.ControlRecallQueued:
+			attachRecallQueued(ui, view)
 		}
 	}
 }
@@ -607,34 +593,17 @@ func (v *attachView) rewindPicker() {
 		v.ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	entries, _, rerr := session.Read(v.path) // whole tree, forks included
+	entries, _, rerr := session.Read(v.transcript()) // whole tree, forks included
 	if rerr != nil {
 		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
 		return
 	}
-	head := snap.Head // wire-fresh: the tree matches what the session sits on now
-	tree := session.TreeRows(entries, head)
-	if len(tree) == 0 {
-		v.ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
-		return
+	// head is wire-fresh: the tree matches what the session sits on now
+	rowID, ok := rewindPick(v.ui, entries, snap.Head, v.armPick)
+	if !ok {
+		return // cancelled, or nothing rewindable
 	}
-
-	items := make([]tui.PickItem, len(tree))
-	for i, row := range tree {
-		tag, mark := roleTag(row.Kind)
-		items[i] = tui.PickItem{Label: row.Guide + rewindBody(row), Tag: tag,
-			Mark: mark, Off: !row.Active}
-	}
-	if len(tree) >= rewindDeferThreshold {
-		v.ui.SetDeferHistory(true)
-		defer v.ui.SetDeferHistory(false)
-	}
-	picked, err := v.ui.PickContext(context.Background(), "Rewind to", items,
-		tui.PickOptions{Placeholder: pickFilterPlaceholder, Initial: initialRow(tree, head)})
-	if err != nil {
-		return // cancelled
-	}
-	if rerr := v.rewindToRow(conn, entries, tree[picked].ID); rerr != nil {
+	if rerr := v.rewindToRow(conn, entries, rowID); rerr != nil {
 		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
 	}
 }

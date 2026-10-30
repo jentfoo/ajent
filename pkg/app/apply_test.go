@@ -138,6 +138,25 @@ func TestApplierChromeEvents(t *testing.T) {
 		assert.Empty(t, rec.acts)
 	})
 
+	t.Run("hint_routes_through_arbitration", func(t *testing.T) {
+		rec := newRecSurface()
+		var painted []string
+		line := newHintBoard(func(text, short string) { painted = append(painted, text) }).Line()
+		ap := testApplier(t, rec, applyHooks{hint: line.Set})
+
+		// the hint key claims the board, other keys paint the surface directly
+		ap.Apply(ctl.NewEvent(ctl.EventStatus, 1,
+			ctl.StatusData{Segment: &ctl.Segment{Key: segHint, Text: "hold on"}}))
+		ap.Apply(ctl.NewEvent(ctl.EventStatus, 2,
+			ctl.StatusData{Segment: &ctl.Segment{Key: segMCP, Text: "mcp 1/2"}}))
+		ap.Apply(ctl.NewEvent(ctl.EventStatus, 3,
+			ctl.StatusData{Segment: &ctl.Segment{Key: segHint}})) // empty releases
+
+		assert.Equal(t, []string{"hold on", ""}, painted)
+		assert.NotContains(t, rec.segs, segHint) // the hint never painted the raw surface
+		assert.Contains(t, rec.segs, segMCP)
+	})
+
 	t.Run("queued_default_texts", func(t *testing.T) {
 		rec := newRecSurface()
 		ap := testApplier(t, rec, applyHooks{})
@@ -161,8 +180,6 @@ func TestApplierChromeEvents(t *testing.T) {
 			ctl.NewEvent(ctl.EventSessionRenamed, 1, ctl.SessionRenamedData{Name: "x"}),
 			ctl.NewEvent(ctl.EventPermission, 2, ctl.PermissionData{Mode: "auto"}),
 			ctl.NewEvent(ctl.EventTools, 3, ctl.ToolsData{}),
-			ctl.NewEvent(ctl.EventEditor, 4, ctl.EditorData{Text: "draft"}),
-			ctl.NewEvent(ctl.EventUsage, 5, ctl.UsageData{}),
 		} {
 			ap.Apply(ev)
 		}

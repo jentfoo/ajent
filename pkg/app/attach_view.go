@@ -6,7 +6,6 @@ import (
 	"errors"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/client"
@@ -39,10 +38,15 @@ type attachView struct {
 	// redraw) come from it at local speed instead of over the socket
 	path string
 
-	mu      sync.Mutex // guards only what the UI goroutine's callbacks read
-	head    string     // last known transcript head entry id
-	running bool       // remote turn in flight; drives SetIdle so Esc keeps its interrupt role
-	hello   ctl.Hello  // greeting of the connection in use
+	mu       sync.Mutex         // guards only what the UI goroutine's callbacks read
+	head     string             // last known transcript head entry id
+	running  bool               // remote turn in flight; drives SetIdle so Esc keeps its interrupt role
+	hello    ctl.Hello          // greeting of the connection in use
+	pickStop context.CancelFunc // armed while the rewind picker is open
+
+	// hints arbitrates the hint segment: the host's wire hints, this terminal's
+	// quit arm and queue-drop outcomes all claim one line
+	hints *hintBoard
 
 	// msgs is the actor mailbox. Backfill-before-buffered-events holds by queue
 	// order, never a flag.
@@ -55,7 +59,6 @@ type attachView struct {
 	pending      []pendingRow        // this terminal's submitted prompts awaiting their entry
 	wireQueued   []ctl.QueueRow      // the last queue copy, for pending merges
 	dialogs      map[uint64]context.CancelFunc
-	outcome      *time.Timer
 	live         bool        // backfill completed; events apply instead of buffering
 	buf          []ctl.Event // events seen before backfill, applied against its watermark
 	redrawQueued bool        // a full repaint is already queued; another head move needs none
@@ -138,10 +141,17 @@ func newAttachView(ui *tui.UI, conn *client.Conn, root context.Context, transcri
 		msgs:    make(chan func(), 256),
 		closed:  make(chan struct{}),
 	}
+	// one board owns the hint line, so the wire's hint segments and every local
+	// claim arbitrate by recency instead of overwriting each other
+	v.hints = newHintBoard(func(text, short string) {
+		ui.SetStatusSegment(segment(segHint, text, short))
+	})
+	wireHint := v.hints.Line()
 	v.ap = newApplier(ui, v.sink, applyHooks{
 		queueRows:     v.queueTexts,
 		dropped:       v.queueDropped,
 		running:       v.setRunning,
+		hint:          wireHint.Set,
 		dialogPending: func(d ctl.InteractionPendingData) { v.beginInteraction(root, d) },
 		dialogSettled: v.settleInteraction,
 	})
@@ -352,7 +362,13 @@ func (v *attachView) apply(ev ctl.Event) {
 		}
 		v.mu.Lock()
 		v.head = d.Head
+		stop := v.pickStop
 		v.mu.Unlock()
+		if stop != nil {
+			// a rewind from the other surface closes the picker it orphaned, so
+			// it never answers with a tree the head has left
+			stop()
+		}
 		if d.Cause == rewindCauseCompact {
 			return // the compaction entry itself arrives via entry.append
 		}
@@ -527,16 +543,10 @@ func (v *attachView) submitPending(line string) string {
 	return id
 }
 
-// showOutcome flashes a one-line outcome on the hint line, removing itself
-// after a few seconds.
+// showOutcome flashes a one-line outcome on the hint line, releasing it after
+// the one TTL every control notice shares.
 func (v *attachView) showOutcome(text string) {
-	if v.outcome != nil {
-		v.outcome.Stop()
-	}
-	v.ui.SetStatusSegment(segment(segHint, text, ""))
-	v.outcome = time.AfterFunc(4*time.Second, func() {
-		v.ui.SetStatusSegment(segment(segHint, "", ""))
-	})
+	v.hints.ShowFor(text, "", hintNoticeTTL)
 }
 
 // requestRedraw queues one full repaint from the transcript file. Coalesced:
@@ -651,6 +661,15 @@ func (v *attachView) raceDialog(ctx context.Context, d ctl.InteractionPendingDat
 	default:
 		v.ui.Notify("answering failed: "+err.Error(), tui.LevelWarn)
 	}
+}
+
+// armPick installs or clears the open rewind picker's cancel hook; a
+// branch.changed trips it, so a remote rewind closes the tree this picker
+// still shows.
+func (v *attachView) armPick(stop context.CancelFunc) {
+	v.mu.Lock()
+	v.pickStop = stop
+	v.mu.Unlock()
 }
 
 // connFor reads the current connection off the actor, so a reconnect swap is

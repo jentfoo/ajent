@@ -128,18 +128,6 @@ func (l *emitLog) queuesSeen() [][]ctl.QueueRow {
 	return out
 }
 
-// draftsSeen lists coalesced editor drafts.
-func (l *emitLog) draftsSeen() []string {
-	var out []string
-	for _, ev := range l.named(ctl.EventEditor) {
-		var d ctl.EditorData
-		if ev.Decode(&d) == nil {
-			out = append(out, d.Text)
-		}
-	}
-	return out
-}
-
 // pipeUI opens a plain-mode TUI over pipes whose output drains to a buffer,
 // for wrapper tests that assert what the raw surface committed.
 func pipeUI(t *testing.T) (*tui.UI, func() string) {
@@ -280,8 +268,6 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	require.Len(t, log.modelsSeen(), 1)
 	require.Len(t, log.actsSeen(), 1)
 	require.Len(t, log.queuesSeen(), 1)
-	require.Eventually(t, func() bool { return len(log.draftsSeen()) == 1 },
-		2*time.Second, 5*time.Millisecond) // the two edits debounce into one emission
 }
 
 func TestHubUISegmentRemoval(t *testing.T) {
@@ -304,26 +290,6 @@ func TestHubUISegmentRemoval(t *testing.T) {
 	segs := log.segsSeen()
 	require.Len(t, segs, 2)
 	assert.Empty(t, segs[1].Text)
-}
-
-func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
-	t.Parallel()
-
-	term, _ := pipeUI(t)
-	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
-	log.attach(hub)
-
-	hub.draft("typ")
-	hub.draft("typing")
-	hub.draft("secret: never emit")
-	hub.draft("") // cleared before the debounce fires
-
-	require.Eventually(t, func() bool {
-		return len(log.draftsSeen()) == 1
-	}, 2*time.Second, 5*time.Millisecond)
-
-	assert.Equal(t, []string{""}, log.draftsSeen())
 }
 
 // TestHubUIShimCoversEveryMutation pins the shim rule: every TUI-visible

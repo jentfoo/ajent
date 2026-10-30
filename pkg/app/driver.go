@@ -334,12 +334,11 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	gate.status = hints.Line().Set
 	// the editor's in-progress text feeds accounting so the context bar grows as you
 	// type or paste, then clears once submitted (the buffer empties), and it is also the
-	// typing signal the boundary hold reads. Serve mode has no editor: drafts arrive
-	// only through host fills on the hubUI wrapper.
+	// typing signal the boundary hold reads. Drafts themselves stay local: no
+	// event or snapshot carries them.
 	if term != nil {
 		ui.SetOnEdit(func(text string) {
 			gate.edit(text)
-			hub.draft(text) // coalesced, secret-suppressed, droppable
 			if len(editSinks) == 0 {
 				return
 			}
@@ -987,13 +986,6 @@ func subagentPollWait(set *config.Set, warn func(string)) time.Duration {
 	return d
 }
 
-const (
-	doublePressWindow = 10 * time.Second
-	// hintNoticeTTL is how long a one-shot control notice (a cancelled survey or staged
-	// command) holds the hint line before releasing it to whatever claimed it before.
-	hintNoticeTTL = 6 * time.Second
-)
-
 // abortRunning stops a running turn Esc-style: queued prompts return to the
 // editor, the stream cancels, any staged shell beside it dies too. The drain's
 // between-turns window counts as running: its staged-command wait must stop
@@ -1017,87 +1009,63 @@ func abortRunning(ag *agent.Agent, q *steerQueue, stager *command.Stager) bool {
 // routing each through the same hub methods an out-of-process client calls.
 func controlLoop(ctx context.Context, controls <-chan tui.Control, hints *hintBoard, hub *sessionHub, quitNow func()) {
 	ui := hub.ui
-	// armed is when the first Ctrl+C landed, and quitHint fires to retire the hint
-	// that advertises the window, keeping the gesture and the hint the same
-	// length. The window is measured from armed, not from the timer, so a press
-	// arriving as the timer fires cannot lose the arm to select's coin flip.
-	var armed time.Time
-	var quitHint <-chan time.Time
-	// arm holds the hint line for as long as the double-press window is open, so an
-	// older claim (a typing hold) reclaims it the moment the window closes.
-	arm := hints.Line()
-	for {
-		select {
-		case <-quitHint:
-			quitHint = nil
-			arm.Set("", "") // the window closed unanswered: free the line
-		case c, ok := <-controls:
+	// the quit gesture is shared with attach's loop, labels only differ
+	quit := quitArm{hints: hints, again: "ctrl+c again to quit", going: "quitting…"}
+	for c := range controls { // the channel closing is the UI going away
+		switch c {
+		case tui.ControlClipboardImage:
+			// off the control loop: a slow backend must not delay interrupts
+			go func() {
+				token, notice := captureClipboardImage(ctx)
+				switch {
+				case notice != "":
+					ui.Notify(notice, tui.LevelWarn)
+				case token != "":
+					ui.Insert(token)
+				}
+			}()
+		case tui.ControlCopySelection:
+			// Resolve which row is highlighted here, on the loop and under lock,
+			// so the payload matches what was pressed even if navigation moves the
+			// cursor before the slow clipboard write finishes. Only that write runs
+			// off-loop, like the image probe.
+			text, ok := ui.CopySelection()
 			if !ok {
-				return // the UI went away
+				continue // a stale ctrl+x outlived its picker: silent no-op
 			}
-			switch c {
-			case tui.ControlClipboardImage:
-				// off the control loop: a slow backend must not delay interrupts
-				go func() {
-					token, notice := captureClipboardImage(ctx)
-					switch {
-					case notice != "":
-						ui.Notify(notice, tui.LevelWarn)
-					case token != "":
-						ui.Insert(token)
-					}
-				}()
-			case tui.ControlCopySelection:
-				// Resolve which row is highlighted here, on the loop and under lock,
-				// so the payload matches what was pressed even if navigation moves the
-				// cursor before the slow clipboard write finishes. Only that write runs
-				// off-loop, like the image probe.
-				text, ok := ui.CopySelection()
-				if !ok {
-					continue // a stale ctrl+x outlived its picker: silent no-op
+			go func() {
+				notice, level, ok := copyText(ctx, ui, text)
+				if ok {
+					ui.Notify(notice, level)
 				}
-				go func() {
-					notice, level, ok := copyText(ctx, ui, text)
-					if ok {
-						ui.Notify(notice, level)
-					}
-				}()
-			case tui.ControlEscape:
-				hub.Interrupt()
-			case tui.ControlInterrupt:
-				switch hub.Interrupt() {
-				case stopTurn:
-					continue
-				case stopSurvey:
-					hints.ShowFor("cancelled project survey", "", hintNoticeTTL)
-					continue
-				case stopShell:
-					hints.ShowFor("cancelled shell command", "", hintNoticeTTL)
-					continue
+			}()
+		case tui.ControlEscape:
+			hub.Interrupt()
+		case tui.ControlInterrupt:
+			if stopped := hub.Interrupt().String(); stopped != "" {
+				if n := interruptNotice(stopped); n != "" {
+					hints.ShowFor(n, "", hintNoticeTTL)
 				}
-				if !armed.IsZero() && time.Since(armed) < doublePressWindow { // inside the promised window
-					// teardown still has to run, say so rather than leaving the
-					// "again to quit" hint up, which reads as a press that missed
-					hints.Request("quitting…", "")
-					quitNow()
-					return
-				}
-				armed = time.Now()
-				quitHint = time.After(doublePressWindow)
-				arm.Set("ctrl+c again to quit", "")
-			case tui.ControlEOF:
-				if hub.ag != nil && hub.ag.Running() {
-					continue // ignored while a turn streams, per the key table
-				}
+				continue // something was running: the press did its work
+			}
+			if quit.fire() {
+				// teardown still has to run, and fire said so on the hint line
+				// rather than leaving "again to quit" up, which reads as a press that missed
 				quitNow()
 				return
-			case tui.ControlRecallQueued:
-				hub.q.recall() // Alt+Up: pop the newest queued message back into the editor
-			case tui.ControlModeCycle:
-				hub.ModeCycle(false)
-			case tui.ControlModeCycleBack:
-				hub.ModeCycle(true)
 			}
+		case tui.ControlEOF:
+			if hub.ag != nil && hub.ag.Running() {
+				continue // ignored while a turn streams, per the key table
+			}
+			quitNow()
+			return
+		case tui.ControlRecallQueued:
+			hub.q.recall() // Alt+Up: pop the newest queued message back into the editor
+		case tui.ControlModeCycle:
+			hub.ModeCycle(false)
+		case tui.ControlModeCycleBack:
+			hub.ModeCycle(true)
 		}
 	}
 }

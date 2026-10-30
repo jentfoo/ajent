@@ -57,7 +57,6 @@ const (
 	EventToolProgress  = "tool.progress"
 	EventToolResult    = "tool.result"
 	EventDiff          = "diff"
-	EventUsage         = "usage"
 	EventContext       = "context"
 	EventNotice        = "notice" // transient notices only; recorded ones ride entry.append
 	EventTurnEnd       = "turn.end"
@@ -76,7 +75,6 @@ const (
 	EventTools              = "tools"
 	EventIdle               = "idle"
 	EventSessionRenamed     = "session.renamed"
-	EventEditor             = "editor"
 	EventInteractionPending = "interaction.pending"
 	EventInteractionSettled = "interaction.settled"
 

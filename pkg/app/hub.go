@@ -7,7 +7,6 @@ import (
 	"math"
 	"slices"
 	"sync"
-	"time"
 
 	"github.com/go-analyze/bulk"
 
@@ -22,9 +21,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
-
-// draftDebounce coalesces editor drafts: one emission per pause in typing.
-const draftDebounce = 100 * time.Millisecond
 
 // submit refusals the wire maps to distinct codes.
 var (
@@ -47,8 +43,8 @@ type hubModel struct {
 
 // viewModel is the hub's authoritative copy of every ephemeral presentation
 // field: the status segments, activity rows, queue rows, idle/turn state, model
-// labels, context numbers, permission mode, tool rows and the editor draft.
-// Every mutation updates it and fans out its event in one critical section, so
+// labels, context numbers, permission mode and tool rows. Every mutation
+// updates it and fans out its event in one critical section, so
 // a snapshot reads one internally consistent state under the same lock that
 // guards the event seq. Committed history, streaming buffers, editor internals
 // and dialog arbitration stay with their own owners, so only this surface lives
@@ -65,8 +61,6 @@ type viewModel struct {
 	context    tokens.ContextState
 	permission string // mode name, "" when no barrier exists
 	tools      []hubTool
-	draftText  string
-	draftDue   *time.Timer
 }
 
 // hubTool is one toggleable /tools row as a client polls it.
@@ -495,50 +489,6 @@ func (h *sessionHub) refreshTools() {
 	h.mu.Lock()
 	h.vm.tools = rows
 	h.publishLocked(ctl.EventTools, ctl.EncodeData(ctl.ToolsData{Rows: ctlTools(rows)}))
-	h.mu.Unlock()
-}
-
-// draft records the editor's live text, coalesced: rapid edits collapse to
-// the latest. Read and arm share one section with the eventual emit, so a
-// paused draft can never publish over a newer one.
-func (h *sessionHub) draft(text string) {
-	h.mu.Lock()
-	h.vm.draftText = text
-	if h.vm.draftDue == nil {
-		h.vm.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
-	} else {
-		h.vm.draftDue.Reset(draftDebounce)
-	}
-	h.mu.Unlock()
-}
-
-// emitDraft publishes the coalesced draft once typing pauses. A secret-
-// prefixed draft never emits, matching history exclusion.
-func (h *sessionHub) emitDraft() {
-	h.mu.Lock()
-	h.vm.draftDue = nil
-	text := h.vm.draftText
-	if !session.HasSecretPrefix(secretPrefix, text) {
-		h.publishLocked(ctl.EventEditor, ctl.EncodeData(ctl.EditorData{Text: text}))
-	}
-	h.mu.Unlock()
-}
-
-// prependDraft mirrors the editor's prepend onto the remembered draft, which
-// host fills reach without a keystroke. Read and write share one section, so a
-// racing keystroke can never lose its text.
-func (h *sessionHub) prependDraft(text string) {
-	h.mu.Lock()
-	if cur := h.vm.draftText; cur == "" {
-		h.vm.draftText = text
-	} else {
-		h.vm.draftText = text + "\n" + cur
-	}
-	if h.vm.draftDue == nil {
-		h.vm.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
-	} else {
-		h.vm.draftDue.Reset(draftDebounce)
-	}
 	h.mu.Unlock()
 }
 

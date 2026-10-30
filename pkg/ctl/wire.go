@@ -124,7 +124,8 @@ type DiffData struct {
 	After  string `json:"after"`
 }
 
-// UsageData carries one usage report from the stream.
+// UsageData carries one usage report, the shape turn.end and the usage
+// totals share.
 type UsageData struct {
 	Input      int `json:"input"`
 	Output     int `json:"output"`
@@ -245,12 +246,6 @@ type QueueRow struct {
 // rows keep their id but lose their text.
 type QueuedData struct {
 	Rows []QueueRow `json:"rows"`
-}
-
-// EditorData is the coalesced editor draft. Droppable: controllers work from
-// submitted lines alone.
-type EditorData struct {
-	Text string `json:"text"`
 }
 
 // BranchChangedData reports the session head moving (a rewind or fork), the

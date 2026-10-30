@@ -135,7 +135,7 @@ number its result was taken at, a snapshot's own number for reads and the post-m
 watermark for writes. That is the whole reconciliation rule: events at or below it are
 superseded by the result, events above it apply. The hub owns the ephemeral view model
 (status segments, activity and queue rows, idle, running, spinning, model labels, context
-numbers, permission mode, tool rows, draft), and every mutation updates that struct and
+numbers, permission mode, tool rows), and every mutation updates that struct and
 fans out its event in one critical section, so a snapshot's number and its hub-held
 fields — plus the writer head, read through the writer's own head func — share that one
 section. The two sources that cannot join the hub lock (the dialog broker's open set,
@@ -168,8 +168,8 @@ facts for pickers).
 model is fully event-covered (the permission mode, tool rows, queue count and idle
 gained their events as the hub took ownership), so the named list holds only the static
 facts — session id, workspace, cwd — plus the usage totals: their ledger accumulates
-between per-report usage events, so totals are read by resnapshotting, through the one
-documented read-after-unlock. The contract for a new snapshot field is to either publish
+silently (per-turn usage rides turn.end), so totals are read by resnapshotting, through
+the one documented read-after-unlock. The contract for a new snapshot field is to either publish
 a change event or join this named list, and the hub test holds the inventory to that, so
 a rendering surface can always tell which facts events carry and which only a snapshot
 reads. Seat release by disconnect follows the same rule: it rewrites the discovery

@@ -644,8 +644,8 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 		"SessionID": "static: identity never changes",
 		"Workspace": "static: fixed for the run",
 		"Cwd":       "static: fixed for the run",
-		"Usage": "ledger totals accumulate between per-report events; the read is " +
-			"the documented WithState read-after-unlock",
+		"Usage": "ledger totals accumulate between snapshots; the read is the " +
+			"documented WithState read-after-unlock",
 	}
 
 	fields := make(map[string]bool)

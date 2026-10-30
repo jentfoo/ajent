@@ -108,13 +108,12 @@ func (s *ctlStreamSink) Diff(p, b, a string) {
 	s.hub.publish(ctl.EventDiff, ctl.DiffData{Path: p, Before: b, After: a})
 }
 
-func (s *ctlStreamSink) Usage(u llm.Usage) {
-	s.hub.publish(ctl.EventUsage, ctlUsage(u))
-}
-
 // Context publishes nothing here: the hub owns the context event (its view
 // model records the numbers where the sink call lands), so this observer stays
 // silent to keep one event per change.
+
+// Usage publishes nothing: per-turn usage rides turn.end and the ledger totals
+// ride snapshots, so no rendering surface needs a per-report event.
 
 // Notice publishes nothing: recorded notices reach clients as their transcript
 // entry via entry.append, so the ephemeral notice family carries only

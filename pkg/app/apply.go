@@ -44,6 +44,11 @@ type applyHooks struct {
 	// running tracks whether a turn is in flight beyond SetIdle: Esc keeps its
 	// interrupt role while one runs, and a reconnect knows what to restore.
 	running func(live bool)
+	// hint routes the hint segment through the surface's own arbitration when
+	// set: attach shares one board between the host's wire hints and this
+	// terminal's local claims, so the two never overwrite each other. Empty
+	// text releases the claim.
+	hint func(text, short string)
 	// dialogPending/dialogSettled route open dialogs to the surface's own
 	// arbitration; nothing shared races a human for an answer.
 	dialogPending func(d ctl.InteractionPendingData)
@@ -222,10 +227,7 @@ func (a *applier) Apply(ev ctl.Event) {
 		}
 
 	// session facts the next snapshot carries; nothing paints from these alone.
-	// Editor drafts and usage totals have publishers but no rendering rule:
-	// drafts stay local to each editor, usage rides snapshots.
-	case ctl.EventSessionRenamed, ctl.EventPermission, ctl.EventTools,
-		ctl.EventEditor, ctl.EventUsage:
+	case ctl.EventSessionRenamed, ctl.EventPermission, ctl.EventTools:
 	}
 }
 
@@ -302,7 +304,9 @@ func (a *applier) notice(key, text string, level tui.Level) {
 func (a *applier) print(markdown string) { a.surf.Print(markdown) }
 
 // segment adds, replaces or removes a keyed status segment and tracks it for
-// snapshot reconciliation. An empty Text removes.
+// snapshot reconciliation. An empty Text removes. The hint key may route
+// through the surface's own arbitration, so wire hints and local claims share
+// one board instead of racing for the line.
 func (a *applier) segment(seg tui.Segment) {
 	a.mu.Lock()
 	if seg.Text == "" {
@@ -311,6 +315,10 @@ func (a *applier) segment(seg tui.Segment) {
 		a.segs[seg.Key] = struct{}{}
 	}
 	a.mu.Unlock()
+	if seg.Key == segHint && a.hooks.hint != nil {
+		a.hooks.hint(seg.Text, seg.Short)
+		return
+	}
 	a.surf.SetStatusSegment(seg)
 }
 

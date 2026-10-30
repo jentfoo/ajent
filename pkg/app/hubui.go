@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -158,11 +160,18 @@ func (u *hubUI) SetContext(ci tui.ContextInfo) {
 }
 
 // Insert types text at the caret for hosts that deliver content outside the
-// key stream. The edit callback it fires feeds the draft mirror, like typing.
+// key stream. Local-only, like the editor wiring around it.
 func (u *hubUI) Insert(text string) {
 	if u.UI != nil {
 		u.UI.Insert(text)
 	}
+}
+
+// PickContext runs a filterable picker through the broker's arbitration, so a
+// picker and a dialog never fight for the surface. The host face of the shared
+// rewind picker.
+func (u *hubUI) PickContext(ctx context.Context, title string, items []tui.PickItem, opts tui.PickOptions) (int, error) {
+	return u.dialogs.Pick(ctx, title, items, opts)
 }
 
 // Busy lights the working glyph and reports how to release it. No terminal
@@ -174,22 +183,19 @@ func (u *hubUI) Busy() func() {
 	return u.UI.Busy()
 }
 
-// SetInput replaces the editor buffer and feeds the remembered draft, since a
-// host fill fires no edit callback. Local-only: drafts never leave the process.
+// SetInput replaces the editor buffer. Local-only: drafts never leave the
+// process, controllers work from submitted lines alone.
 func (u *hubUI) SetInput(text string) {
 	if u.UI != nil {
 		u.UI.SetInput(text)
 	}
-	u.hub.draft(text)
 }
 
-// PrependInput inserts text above the editor's draft and feeds the remembered
-// draft the same way. Local-only, like SetInput.
+// PrependInput inserts text above the editor's draft. Local-only, like SetInput.
 func (u *hubUI) PrependInput(text string) {
 	if u.UI != nil {
 		u.UI.PrependInput(text)
 	}
-	u.hub.prependDraft(text)
 }
 
 // Interactive reports whether a local editor exists to recover queued

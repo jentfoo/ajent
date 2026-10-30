@@ -846,6 +846,16 @@ func initialRow(tree []session.TreeRow, head string) int {
 
 const rewindDeferThreshold = 300
 
+// rewindSurface is the terminal face the shared rewind picker needs: a notice,
+// the deferred-history toggle and the picker itself. *tui.UI satisfies it
+// directly; hubUI routes the picker through the broker so a dialog never
+// fights it for the surface.
+type rewindSurface interface {
+	Notify(msg string, level tui.Level)
+	SetDeferHistory(bool)
+	PickContext(ctx context.Context, title string, items []tui.PickItem, opts tui.PickOptions) (int, error)
+}
+
 // pickRewind opens the context-tree picker and reports the chosen entry id,
 // false when cancelled or nothing is rewindable.
 func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
@@ -859,7 +869,16 @@ func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
 		return "", false
 	}
-	head := resumeHead(r.w.Head(), entries)
+	return rewindPick(ui, entries, resumeHead(r.w.Head(), entries), r.armPick)
+}
+
+// rewindPick builds and runs the one context-tree picker both front ends open:
+// rows from the whole recorded tree, copy payloads verbatim from the
+// transcript, deferred history on large trees, the head preselected. arm
+// installs the cancel hook a rewind from another surface trips (nil clears
+// it), so the picker never shows a tree the head has left. Reports the chosen
+// entry id, false when cancelled or nothing is rewindable.
+func rewindPick(ui rewindSurface, entries []session.Entry, head string, arm func(context.CancelFunc)) (string, bool) {
 	tree := session.TreeRows(entries, head)
 	if len(tree) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
@@ -893,22 +912,25 @@ func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
 		ui.SetDeferHistory(true)
 		defer ui.SetDeferHistory(false)
 	}
-	// the picker arms its cancel for the rewind transaction: a rewind from the
-	// other surface closes it, so it never shows a tree the head has left
 	pickCtx, stop := context.WithCancel(context.Background())
-	r.pickMu.Lock()
-	r.pickStop = stop
-	r.pickMu.Unlock()
-	picked, err := ui.dialogs.Pick(pickCtx, "Rewind to", items,
+	arm(stop)
+	defer func() {
+		arm(nil)
+		stop() // release either way; a raced close already ran this cancel
+	}()
+	picked, err := ui.PickContext(pickCtx, "Rewind to", items,
 		tui.PickOptions{Placeholder: pickFilterPlaceholder, Initial: initialRow(tree, head)})
-	r.pickMu.Lock()
-	r.pickStop = nil
-	r.pickMu.Unlock()
-	stop() // release either way; a raced close already ran this cancel
 	if err != nil {
 		return "", false // cancelled
 	}
 	return tree[picked].ID, true
+}
+
+// armPick installs or clears the open rewind picker's cancel hook.
+func (r *sessRec) armPick(stop context.CancelFunc) {
+	r.pickMu.Lock()
+	r.pickStop = stop
+	r.pickMu.Unlock()
 }
 
 // closePick cancels the rewind picker another surface still holds open,

@@ -90,6 +90,51 @@ func rigBranch(t *testing.T, rec *sessRec) []session.Entry {
 	return session.Branch(entries, rec.w.Head())
 }
 
+// TestAttachRewindPickerClosedByRemoteRewind pins the cancel hook the shared
+// picker arms: a branch.changed from the other surface closes this terminal's
+// open picker, so it never answers with a tree the head has left and no rewind
+// rides the stale choice.
+func TestAttachRewindPickerClosedByRemoteRewind(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+		writeMessage(t, rec, "second prompt")
+	})
+	wireAttachRewind(t, rig)
+
+	term, _, _ := pipeInputUI(t)
+	a := newAttachRigTerm(t, rig, term, func() string { return "" })
+
+	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
+	require.NoError(t, err)
+
+	before := rig.rec.w.Head()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		a.view.rewindPicker()
+	}()
+	require.Eventually(t, func() bool {
+		a.view.mu.Lock()
+		defer a.view.mu.Unlock()
+		return a.view.pickStop != nil
+	}, ctlWait, 5*time.Millisecond, "picker never armed its cancel hook")
+
+	// a rewind lands from the other surface: the head moves under the open picker
+	a.view.handle(ctl.NewEvent(ctl.EventBranchChanged, 20,
+		ctl.BranchChangedData{From: before, Head: before, Cause: rewindCauseRewind}))
+	select {
+	case <-done:
+	case <-time.After(ctlWait):
+		t.Fatal("remote rewind did not close the open picker")
+	}
+
+	a.view.mu.Lock()
+	stopped := a.view.pickStop
+	a.view.mu.Unlock()
+	assert.Nil(t, stopped)                    // disarmed once the picker answered
+	assert.Equal(t, before, rig.rec.w.Head()) // nothing rode the stale choice
+}
+
 // TestAttachRewindPickerForksRemote pins the double-Esc flow over the file:
 // the picker reads this tree from the recorded transcript and a picked prompt
 // rewinds the remote session onto its parent, forked away like a local rewind.
