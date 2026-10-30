@@ -280,7 +280,7 @@ func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {
 
 	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
 	require.NoError(t, err)
-	err = a.conn.Submit(t.Context(), "hello")
+	err = a.conn.Submit(t.Context(), ctl.SubmitParams{Line: "hello"})
 	require.Error(t, err)
 	var wire *ctl.Error
 	require.ErrorAs(t, err, &wire)

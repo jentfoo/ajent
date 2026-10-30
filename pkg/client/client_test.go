@@ -253,7 +253,7 @@ func TestSubmitCarriesLine(t *testing.T) {
 	f := newFakeSession(t)
 	conn, _, events := f.dial(t)
 
-	require.NoError(t, conn.Submit(t.Context(), "hello session"))
+	require.NoError(t, conn.Submit(t.Context(), ctl.SubmitParams{Line: "hello session"}))
 
 	ev := waitEvent(t, events)
 	assert.Equal(t, ctl.EventEntryAppend, ev.Name)

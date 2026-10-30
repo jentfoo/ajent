@@ -214,9 +214,18 @@ type ActivityData struct {
 	Rank int    `json:"rank"`
 }
 
-// QueuedData replaces the pending-prompt rows, oldest first.
+// QueueRow is one pending prompt as the wire sees it: the stable id its row
+// keeps while queued plus the typed line, redacted for secret rows where only
+// the id survives.
+type QueueRow struct {
+	ID   string `json:"id"`
+	Text string `json:"text"`
+}
+
+// QueuedData replaces the pending-prompt rows, oldest first. Secret-prefixed
+// rows keep their id but lose their text.
 type QueuedData struct {
-	Texts []string `json:"texts"`
+	Rows []QueueRow `json:"rows"`
 }
 
 // EditorData is the coalesced editor draft. Droppable: controllers work from
@@ -238,11 +247,12 @@ type BranchChangedData struct {
 // QueueDroppedData names the queued prompts a removal cleared — an interrupt,
 // a rewind, or a recall back into an editor — so their pending rows resolve
 // instead of vanishing. Cause says which ("interrupt", "rewind" or "recalled")
-// so the drop line reads honestly. Secret-prefixed texts are redacted like
-// queue rows.
+// so the drop line reads honestly. Rows carry the dropped ids beside their
+// texts; secret-prefixed texts are redacted like queue rows, but the id always
+// travels so the submitting surface resolves its pending row.
 type QueueDroppedData struct {
-	Texts []string `json:"texts"`
-	Cause string   `json:"cause,omitempty"`
+	Rows  []QueueRow `json:"rows"`
+	Cause string     `json:"cause,omitempty"`
 }
 
 // SessionRenamedData announces a rename, so controllers and pickers learn it
@@ -310,9 +320,13 @@ type AttachResult struct {
 	Control bool `json:"control"` // this connection holds the seat
 }
 
-// SubmitParams routes one line exactly as typed in the editor.
+// SubmitParams routes one line exactly as typed in the editor. PendingID, when
+// set, is the submitting surface's correlation: it names the prompt's queue row
+// and rides the committed message entry, so drops and commits resolve the
+// pending row by id instead of text.
 type SubmitParams struct {
-	Line string `json:"line"`
+	Line      string `json:"line"`
+	PendingID string `json:"pendingId,omitempty"`
 }
 
 // InterruptResult names what an interrupt stopped: turn, survey, shell or
@@ -394,7 +408,7 @@ type State struct {
 	Idle         bool                     `json:"idle"`
 	Spinning     bool                     `json:"spinning"`
 	Queued       int                      `json:"queued"`
-	QueuedTexts  []string                 `json:"queuedTexts"`
+	QueuedRows   []QueueRow               `json:"queuedRows"`
 	Activity     []ActivityRow            `json:"activity"`
 	Status       StatusRow                `json:"status"`
 	Seat         SeatState                `json:"seat"`

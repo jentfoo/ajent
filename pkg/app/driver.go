@@ -694,15 +694,11 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// exists; a control request that races the wiring sees the unavailable
 	// error, never a partial rewind.
 	if rec != nil {
-		// queued prompts clear inside the rewind transaction, the drop event
-		// riding beside the queue update so pending rows resolve
-		rec.clearQueued = func() []string {
-			labels := q.clearForRewind()
-			if len(labels) > 0 {
-				hub.queueDroppedCause("rewind", labels)
-			}
-			return labels
-		}
+		// queued prompts clear inside the rewind transaction: the drop event and
+		// the emptied rows publish in one queue critical section, so a prompt
+		// re-offered after the rewind keeps its fresh pending row. Only the
+		// notice entry records here.
+		rec.clearQueued = q.clearForRewind
 		var rewindMu sync.Mutex
 		rewindTo := func(head, cause string) (string, error) {
 			rewindMu.Lock()
@@ -876,17 +872,18 @@ type lineRouter struct {
 // false and carry no origin.
 func (r *lineRouter) route(msg string, fromEditor bool) {
 	// the editor path never errors: deliver only reports a full remote queue
-	_ = r.dispatch(msg, fromEditor, "")
+	_ = r.dispatch(msg, fromEditor, "", "")
 }
 
 // submit routes one line from a non-editor source, reporting a full prompt
 // queue rather than blocking: the control lane must never park behind a wedged
-// pump, or its priority interrupts would queue behind it.
-func (r *lineRouter) submit(line, origin string) error {
-	return r.dispatch(line, false, origin)
+// pump, or its priority interrupts would queue behind it. queueID carries the
+// submitter's pending correlation; empty mints one in the pump.
+func (r *lineRouter) submit(line, queueID, origin string) error {
+	return r.dispatch(line, false, queueID, origin)
 }
 
-func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) error {
+func (r *lineRouter) dispatch(msg string, fromEditor bool, queueID, origin string) error {
 	line := command.ParseLine(msg)
 	if line.Multiline {
 		r.ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
@@ -915,7 +912,8 @@ func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) error 
 		// arm the handoff at submit time. A remote prompt arms too so a held
 		// boundary treats it like a just-typed line
 		r.gate.submitted()
-		return r.deliver(pumpLine{kind: command.KindPrompt, rest: line.Rest, origin: origin, blocks: blocks}, origin)
+		return r.deliver(pumpLine{kind: command.KindPrompt, rest: line.Rest,
+			queueID: queueID, origin: origin, blocks: blocks}, origin)
 	}
 }
 

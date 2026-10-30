@@ -225,7 +225,7 @@ func TestControlSurfaceParity(t *testing.T) {
 	ui.NotifyKeyed("subagent", "keyed notice", tui.LevelInfo)
 	ui.SetStatusSegment(segment(segMCP, "mcp 2/2", "2/2"))
 	ui.SetModelOf(llm.Model{Provider: "p", ID: "big", ContextWindow: 200000})
-	ui.SetQueued([]string{"queued a", "queued b"})
+	ui.SetQueued([]ctl.QueueRow{{ID: "row-a", Text: "queued a"}, {ID: "row-b", Text: "queued b"}})
 
 	want := []string{
 		ctl.EventPrint, ctl.EventNotice, ctl.EventNotice,
@@ -261,7 +261,7 @@ func TestControlSurfaceParity(t *testing.T) {
 
 	var qd ctl.QueuedData
 	require.NoError(t, lastEvent(t, all, ctl.EventQueued).Decode(&qd))
-	assert.Equal(t, []string{"queued a", "queued b"}, qd.Texts)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-a", Text: "queued a"}, {ID: "row-b", Text: "queued b"}}, qd.Rows)
 }
 
 // TestControlInjectContextStaysOffWire pins the injected-echo ownership: a

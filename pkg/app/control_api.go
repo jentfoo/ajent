@@ -212,7 +212,7 @@ func (s *controlServer) submit(params []byte) (any, *ctl.Error) {
 		return nil, ctl.Errf(ctl.CodeUnavailable,
 			"input held by an open %s dialog; resolve it first", held.Kind)
 	}
-	if err := s.hub.Submit(p.Line, submitOriginController); err != nil {
+	if err := s.hub.Submit(p.Line, p.PendingID, submitOriginController); err != nil {
 		if errors.Is(err, errPromptQueueFull) {
 			return nil, ctl.Errf(ctl.CodeBusy,
 				"prompt queue full; retry once the running command or turn finishes")

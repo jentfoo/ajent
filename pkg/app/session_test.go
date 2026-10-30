@@ -1841,17 +1841,11 @@ func TestRewindClearsQueuedWithNotice(t *testing.T) {
 	// and the transaction's clear seam, exactly what the driver installs
 	rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
 		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
-	rig.rec.clearQueued = func() []string {
-		labels := rig.hub.q.clearForRewind()
-		if len(labels) > 0 {
-			rig.hub.queueDroppedCause("rewind", labels)
-		}
-		return labels
-	}
+	rig.rec.clearQueued = rig.hub.q.clearForRewind
 
-	// park two prompts as rows, the way a gate hold leaves them
-	rig.hub.q.hold(agent.Input{Text: "queued one"}, "queued one", 0)
-	rig.hub.q.hold(agent.Input{Text: "queued two"}, "queued two", 0)
+	// park two prompts as rows with their correlations, the way a gate hold leaves them
+	rig.hub.q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 0)
+	rig.hub.q.hold(agent.Input{Text: "queued two", QueueIDs: []string{"row-2"}}, "queued two", 0)
 	require.Equal(t, 2, rig.hub.q.pending())
 
 	// rewind onto the first user message: the session entry itself is not a
@@ -1875,11 +1869,31 @@ func TestRewindClearsQueuedWithNotice(t *testing.T) {
 	assert.Contains(t, nd.Message, "queued one")
 	assert.Contains(t, nd.Message, "queued two")
 
-	// the ephemeral drop event rode the same transaction
-	dropped := c.collect(ctl.EventQueueDropped, 1)
+	// the ephemeral drop event rode the same transaction, published before the
+	// emptied rows in one seq window so a re-offer keeps its fresh pending row.
+	// Both surface between the branch change and this read; gather without
+	// discarding, since collect drops non-matching events it holds.
+	var droppedEv, cleared ctl.Event
+	require.Eventually(t, func() bool {
+		for _, ev := range c.takePending() {
+			switch {
+			case ev.Name == ctl.EventQueueDropped && droppedEv.Name == "":
+				droppedEv = ev
+			case ev.Name == ctl.EventQueued && droppedEv.Name != "" && cleared.Name == "":
+				cleared = ev // the rows update beside the drop
+			}
+		}
+		return droppedEv.Name != "" && cleared.Name != ""
+	}, ctlWait, 5*time.Millisecond)
+
 	var qd ctl.QueueDroppedData
-	require.NoError(t, dropped[0].Decode(&qd))
-	assert.ElementsMatch(t, []string{"queued one", "queued two"}, qd.Texts)
+	require.NoError(t, droppedEv.Decode(&qd))
+	assert.ElementsMatch(t,
+		[]ctl.QueueRow{{ID: "row-1", Text: "queued one"}, {ID: "row-2", Text: "queued two"}}, qd.Rows)
+	var cq ctl.QueuedData
+	require.NoError(t, cleared.Decode(&cq))
+	assert.Empty(t, cq.Rows)
+	assert.Greater(t, cleared.Seq, droppedEv.Seq) // drop first, rows update beside it
 }
 
 // TestRenameSettleYieldsToOlderRival pins the rename race settlement: a rename

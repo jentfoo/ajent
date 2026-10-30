@@ -116,7 +116,7 @@ func TestHubSubmitRoutesLikeTheEditor(t *testing.T) {
 		if fromEditor {
 			rig.router.route(line, true)
 		} else {
-			require.NoError(t, rig.hub.Submit(line, "controller"))
+			require.NoError(t, rig.hub.Submit(line, "", "controller"))
 		}
 		return rig.recorded()
 	}
@@ -167,7 +167,7 @@ func TestHubSubmitForeignGoroutine(t *testing.T) {
 	var serr error
 	go func() {
 		defer close(done)
-		serr = rig.hub.Submit("from elsewhere", "controller")
+		serr = rig.hub.Submit("from elsewhere", "", "controller")
 	}()
 	<-done
 	require.NoError(t, serr)
@@ -186,7 +186,7 @@ func TestHubSubmitFullQueueRefuses(t *testing.T) {
 	rig := newHubRig(t)
 	rig.router.trySend = func(pumpLine) bool { return false }
 
-	err := rig.hub.Submit("while wedged", "controller")
+	err := rig.hub.Submit("while wedged", "", "controller")
 	require.ErrorIs(t, err, errPromptQueueFull)
 	assert.Empty(t, rig.recorded())
 
@@ -385,7 +385,7 @@ func TestHubSnapshotTruth(t *testing.T) {
 	waitReady, takeReady := stagePair(t)
 	q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady, nil)
 	hub.q = q
-	q.hold(agent.Input{Text: "queued one"}, "queued one", 1)
+	q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 1)
 
 	hub.barrier = wiredBarrier(reg) // default mode allow-read, the snapshot's expectation is auto
 
@@ -400,7 +400,7 @@ func TestHubSnapshotTruth(t *testing.T) {
 	assert.True(t, snap.Idle)
 	assert.False(t, snap.Running)
 	assert.Equal(t, 1, snap.Queued)
-	assert.Equal(t, []string{"queued one"}, snap.QueuedTexts)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "queued one"}}, snap.QueuedRows)
 	assert.Equal(t, "allow-read", snap.Permission)
 	assert.Equal(t, hubModel{Key: "p/m", Short: "m", Window: 64000}, snap.Model)
 	assert.Equal(t, 120, snap.Usage.Total.Input)
@@ -572,7 +572,8 @@ func TestHubBindSession(t *testing.T) {
 }
 
 // TestHubQueueRowsRedactSecrets pins the parity rule: secret-prefixed queue
-// rows render locally but never ride the wire, matching the draft rule.
+// rows lose their text on the wire but keep their id, so the submitting surface
+// still resolves its pending row; the local surface keeps the real texts.
 func TestHubQueueRowsRedactSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -583,24 +584,25 @@ func TestHubQueueRowsRedactSecrets(t *testing.T) {
 	log.attach(hub)
 	ui := hub.ui
 
-	ui.SetQueued([]string{"visible prompt", "secret: hunter2"})
-	hub.queueDroppedCause("interrupt", []string{"visible prompt", "secret: hunter2"})
+	rows := []ctl.QueueRow{{ID: "row-1", Text: "visible prompt"}, {ID: "row-2", Text: "secret: hunter2"}}
+	ui.SetQueued(rows)
+	hub.queueDroppedCause("interrupt", rows)
 
 	require.Eventually(t, func() bool { return len(log.queuesSeen()) == 1 },
 		2*time.Second, 5*time.Millisecond)
-	assert.Equal(t, []string{"visible prompt"}, log.queuesSeen()[0])
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "visible prompt"}, {ID: "row-2"}}, log.queuesSeen()[0])
 
 	require.Eventually(t, func() bool { return len(log.named(ctl.EventQueueDropped)) == 1 },
 		2*time.Second, 5*time.Millisecond)
 	var d ctl.QueueDroppedData
 	require.NoError(t, log.named(ctl.EventQueueDropped)[0].Decode(&d))
-	assert.Equal(t, []string{"visible prompt"}, d.Texts)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "visible prompt"}, {ID: "row-2"}}, d.Rows)
 
 	// the remembered copy stays whole for snapshots of the local truth
 	hub.mu.Lock()
 	queued := hub.queued
 	hub.mu.Unlock()
-	assert.Equal(t, []string{"visible prompt", "secret: hunter2"}, queued)
+	assert.Equal(t, rows, queued)
 }
 
 // TestHubSnapshotEventCoverage pins the event/snapshot contract
@@ -618,7 +620,7 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 		"Context":      ctl.EventContext,
 		"Running":      ctl.EventTurnStart + ", " + ctl.EventTurnEnd,
 		"Spinning":     ctl.EventStatus,
-		"QueuedTexts":  ctl.EventQueued,
+		"QueuedRows":   ctl.EventQueued,
 		"Activity":     ctl.EventActivity,
 		"Status":       ctl.EventStatus,
 		"Interactions": ctl.EventInteractionPending + ", " + ctl.EventInteractionSettled,

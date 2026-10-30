@@ -53,8 +53,8 @@ type attachView struct {
 	// actor-owned state below; only run() touches it
 	conn         *client.Conn
 	rendered     map[string]struct{} // committed entry ids this surface already shows
-	pending      []string            // this terminal's submitted prompts awaiting their entry
-	wireQueued   []string            // the last queued event's texts, for pending merges
+	pending      []pendingRow        // this terminal's submitted prompts awaiting their entry
+	wireQueued   []ctl.QueueRow      // the last queued event's rows, for pending merges
 	dialogs      map[uint64]context.CancelFunc
 	calls        map[string]*attachCall
 	outcome      *time.Timer
@@ -118,11 +118,19 @@ func (v *attachView) notConnected(line string) {
 	v.ui.PrependInput(line)
 }
 
-// submitFailed resolves the pending row inline with the reply's error and
-// restores the text, matching the serve-mode prefill rule.
-func (v *attachView) submitFailed(line string, err error) {
+// pendingRow is one prompt this terminal submitted whose entry has not landed:
+// the correlation it sent with the submit and the typed line shown while it
+// waits, restored on a failed submit.
+type pendingRow struct {
+	id   string
+	text string
+}
+
+// submitFailed resolves one submission's pending row inline with the reply's
+// error and restores the text, matching the serve-mode prefill rule.
+func (v *attachView) submitFailed(id, line string, err error) {
 	v.send(func() {
-		v.takePending(line)
+		v.takePendingID(id)
 		v.ui.SetQueued(v.withPending(v.wireQueued))
 	})
 	v.ui.Notify("submit failed: "+err.Error()+"; the text is kept in the editor", tui.LevelWarn)
@@ -331,8 +339,8 @@ func (v *attachView) applySnapshot(snap ctl.State) {
 	}
 	v.sink.Context(tokens.ContextState{Used: snap.Context.Used, Window: snap.Context.Window,
 		Reserve: snap.Context.Reserve, Compact: snap.Context.Compact, Estimated: snap.Context.Estimated})
-	if len(snap.QueuedTexts) > 0 || len(v.pending) > 0 {
-		v.ui.SetQueued(v.withPending(snap.QueuedTexts))
+	if len(snap.QueuedRows) > 0 || len(v.pending) > 0 {
+		v.ui.SetQueued(v.withPending(snap.QueuedRows))
 	}
 	for _, a := range snap.Activity {
 		v.ui.SetActivityRanked(a.Key, a.Text, a.Rank)
@@ -473,16 +481,16 @@ func (v *attachView) apply(ev ctl.Event) {
 	case ctl.EventQueued:
 		var d ctl.QueuedData
 		if ev.Decode(&d) == nil {
-			v.wireQueued = d.Texts
-			v.ui.SetQueued(v.withPending(d.Texts))
+			v.wireQueued = d.Rows
+			v.ui.SetQueued(v.withPending(d.Rows))
 		}
 	case ctl.EventQueueDropped:
 		var d ctl.QueueDroppedData
 		if ev.Decode(&d) != nil {
 			return
 		}
-		v.resolvePending(d.Texts)
-		for range d.Texts {
+		v.resolvePending(d.Rows)
+		for range d.Rows {
 			v.showOutcome(dropOutcome(d.Cause))
 		}
 
@@ -555,9 +563,8 @@ func (v *attachView) applyAppend(e ctl.Entry) {
 		Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
 	if entry.Type == session.TypeMessage {
 		var md session.MessageData
-		if entry.Decode(&md) == nil &&
-			md.Message.Role == llm.RoleUser &&
-			v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
+		if entry.Decode(&md) == nil && md.Message.Role == llm.RoleUser &&
+			v.takeCommitted(md.QueueIDs) {
 			// the row resolved with its entry: repaint without it
 			v.ui.SetQueued(v.withPending(v.wireQueued))
 		}
@@ -572,34 +579,53 @@ func (v *attachView) reconcilePending(branch []session.Entry) {
 	if len(v.pending) == 0 {
 		return
 	}
+	var resolved bool
 	for _, e := range branch {
 		if e.Type != session.TypeMessage {
 			continue
 		}
 		var md session.MessageData
 		if json.Unmarshal(e.Data, &md) == nil && md.Message.Role == llm.RoleUser &&
-			v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
-			v.ui.SetQueued(v.withPending(v.wireQueued))
+			v.takeCommitted(md.QueueIDs) {
+			resolved = true
 		}
+	}
+	if resolved {
+		v.ui.SetQueued(v.withPending(v.wireQueued))
 	}
 }
 
 // withPending merges this terminal's unresolved submissions into the wire's
-// queue rows, so its own pending rows stay visible until their entries commit.
-func (v *attachView) withPending(texts []string) []string {
-	out := slices.Clone(texts)
-	for _, p := range v.pending {
-		if !slices.Contains(out, p) {
-			out = append(out, p)
+// queue rows for display: a row the host already shows stays single, a secret
+// row redacted on the wire renders from its local copy, and rows this terminal
+// did not submit keep their own texts.
+func (v *attachView) withPending(rows []ctl.QueueRow) []string {
+	out := make([]string, 0, len(rows)+len(v.pending))
+	wired := bulk.SliceToSetBy(func(r ctl.QueueRow) string { return r.ID }, rows)
+	for _, r := range rows {
+		if r.Text != "" {
+			out = append(out, r.Text)
+			continue
+		}
+		// redacted on the wire: only this terminal's own submission can name it
+		for _, p := range v.pending {
+			if p.id == r.ID {
+				out = append(out, p.text)
+			}
+		}
+	}
+	for _, p := range v.pending { // not yet echoed by a queued event
+		if _, ok := wired[p.id]; !ok {
+			out = append(out, p.text)
 		}
 	}
 	return out
 }
 
-// takePending removes one pending submission matched by text, reporting
+// takePendingID removes one pending submission by its correlation, reporting
 // whether it was this terminal's.
-func (v *attachView) takePending(text string) bool {
-	i := slices.Index(v.pending, text)
+func (v *attachView) takePendingID(id string) bool {
+	i := slices.IndexFunc(v.pending, func(p pendingRow) bool { return p.id == id })
 	if i < 0 {
 		return false
 	}
@@ -608,37 +634,44 @@ func (v *attachView) takePending(text string) bool {
 }
 
 // takeCommitted consumes the pending rows a committed user prompt resolves:
-// its full text first, then line-wise, since queued prompts can land joined
-// into one newline-joined message. Reports whether any row resolved.
-func (v *attachView) takeCommitted(text string) bool {
-	if text == "" || len(v.pending) == 0 {
+// every row whose correlation rode the entry, joined runs included. Reports
+// whether any row resolved.
+func (v *attachView) takeCommitted(ids []string) bool {
+	if len(ids) == 0 || len(v.pending) == 0 {
 		return false
 	}
-	if v.takePending(text) {
-		return true
+	landed := bulk.SliceToSet(ids)
+	kept := bulk.SliceFilter(func(p pendingRow) bool {
+		_, done := landed[p.id]
+		return !done
+	}, v.pending)
+	if len(kept) == len(v.pending) {
+		return false
 	}
-	var took bool
-	for _, line := range strings.Split(text, "\n") {
-		took = v.takePending(line) || took
-	}
-	return took
+	v.pending = kept
+	return true
 }
 
 // resolvePending clears the pending rows a drop event named.
-func (v *attachView) resolvePending(texts []string) {
-	v.pending = bulk.SliceFilter(func(p string) bool {
-		return !slices.Contains(texts, p)
+func (v *attachView) resolvePending(rows []ctl.QueueRow) {
+	dropped := bulk.SliceToSetBy(func(r ctl.QueueRow) string { return r.ID }, rows)
+	v.pending = bulk.SliceFilter(func(p pendingRow) bool {
+		_, gone := dropped[p.id]
+		return !gone
 	}, v.pending)
 }
 
 // submitPending records a submission and paints its pending row at once, like
 // the local editor echo: the committed rendering replaces it when the entry
-// lands, and a drop event converts it to an outcome.
-func (v *attachView) submitPending(line string) {
+// lands, and a drop event converts it to an outcome. Returns the correlation
+// the wire submit carries so rows, drops and commits resolve by id.
+func (v *attachView) submitPending(line string) string {
+	id := newQueueID()
 	v.send(func() {
-		v.pending = append(v.pending, line)
+		v.pending = append(v.pending, pendingRow{id: id, text: line})
 		v.ui.SetQueued(v.withPending(v.wireQueued))
 	})
+	return id
 }
 
 // showOutcome flashes a one-line outcome on the hint line, removing itself

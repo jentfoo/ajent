@@ -68,9 +68,10 @@ keep that single path honest under concurrent controllers.
   publishing the branch change form one ordered operation shared by double-Esc and the
   wire, so live state and the writer head cannot diverge and the last rewind wins no
   matter which surface sent it. Queued prompts clear with a recorded notice naming them,
-  so pending rows resolve instead of vanishing. A rewind never waits on a dialog or
-  picker holding another surface, which closes with a transient notice once the head
-  really moves.
+  and their drop publishes inside the queue's own critical section beside the emptied
+  rows, so pending rows resolve instead of vanishing and a prompt re-offered after the
+  rewind keeps its fresh row. A rewind never waits on a dialog or picker holding another
+  surface, which closes with a transient notice once the head really moves.
 - **Dialog answers stay off the lane.** The broker's first-resolution rule already
   linearizes them, and answer latency matters more than ordering against other verbs. A
   controller that dies mid-dialog leaves the dialog open for whoever answers next, exactly
@@ -178,9 +179,13 @@ event and through backfill renders once.
 A submit paints an ephemeral pending row before any reply, which the committed entry
 replaces on success and a drop, recall or failed submit resolves inline. Only prompts
 paint one, since slash and shell lines commit no message entry and surface through their
-effects. A recall is therefore announced like every other queue exit: queue.dropped with
-cause "recalled" names the text that left for an editor, so every surface's pending row
-follows its prompt wherever it goes — delivered, dropped, or back in a draft.
+effects. Rows therefore carry stable ids: queued and queue.dropped speak `{id, text}` rows
+(a secret's text redacts away, never its id), submit takes a client correlation echoed back
+as the row id, and the committed message entry records every correlation it landed for —
+so each surface's pending row follows its prompt by id wherever it goes — delivered,
+dropped, or back in a draft — with no matching of strings against strings. A recall is
+announced like every other queue exit: queue.dropped with cause "recalled" names the row
+that left for an editor.
 
 ## Attach mode
 

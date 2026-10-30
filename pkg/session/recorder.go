@@ -45,6 +45,7 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 		Injected: info.Injected,
 		Replayed: info.Replayed,
 		Origin:   info.Origin,
+		QueueIDs: info.QueueIDs,
 	})
 	if err != nil && r.dropped == "" {
 		r.dropped = "failed to record message: " + err.Error()

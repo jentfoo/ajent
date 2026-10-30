@@ -22,6 +22,9 @@ type pumpLine struct {
 	// origin names a non-editor submitter ("controller"), recorded onto the
 	// message entry; empty means the line was typed locally.
 	origin string
+	// queueID carries a remote submit's pending correlation, stamped onto the
+	// prompt so its queue row and committed entry resolve one pending row.
+	queueID string
 	// blocks are image payloads captured from clipboard tokens in rest, appended
 	// to the turn's input after the text.
 	blocks []llm.Block
@@ -169,6 +172,7 @@ func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (age
 	if line.input != nil {
 		in := *line.input
 		in.Prepared = true // assembled by its sender, the append seam must not re-expand
+		stampQueueID(&in, line.queueID)
 		if line.onTurn != nil {
 			line.onTurn() // this turn writes, not the one running when the sender finished
 		}
@@ -182,13 +186,28 @@ func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (age
 	if strings.TrimSpace(echo) == "" {
 		echo = ""
 	}
-	return agent.Input{
+	in := agent.Input{
 		Text:     res.Text,
 		Blocks:   line.blocks, // clipboard images ride after the text
 		After:    res.Run,
 		Prepared: true, // expanded here, the append seam must not re-expand
 		Origin:   line.origin,
-	}, echo, res.Est
+	}
+	stampQueueID(&in, line.queueID)
+	return in, echo, res.Est
+}
+
+// stampQueueID gives one prompt submission its queue correlation: a remote
+// surface's pending id when it sent one, else a fresh row id, so the queued
+// row (or directly dispatched turn) and its committed entry resolve by id.
+func stampQueueID(in *agent.Input, queueID string) {
+	if len(in.QueueIDs) > 0 {
+		return // the sender already correlated this input
+	}
+	if queueID == "" {
+		queueID = newQueueID()
+	}
+	in.QueueIDs = []string{queueID}
 }
 
 func submitEstimate(in agent.Input, pending int) int {

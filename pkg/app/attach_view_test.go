@@ -633,7 +633,7 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 // shell lines never paint one, they surface through their effects.
 func TestAttachPendingRowsPromptOnly(t *testing.T) {
 	rig := newControlRig(t, nil)
-	rig.hub.setSubmitLine(func(string, string) error { return nil }) // accepted silently, no entry follows
+	rig.hub.setSubmitLine(func(string, string, string) error { return nil }) // accepted silently, no entry follows
 	a := newAttachRig(t, rig)
 	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
 	require.NoError(t, err)
@@ -651,7 +651,9 @@ func TestAttachPendingRowsPromptOnly(t *testing.T) {
 	require.Eventually(t, pumped.Load, ctlWait, 5*time.Millisecond)
 
 	a.view.send(func() {
-		assert.Equal(t, []string{"a real prompt"}, a.view.pending)
+		require.Len(t, a.view.pending, 1) // the prompt alone paints one
+		assert.Equal(t, "a real prompt", a.view.pending[0].text)
+		assert.NotEmpty(t, a.view.pending[0].id) // correlated for drops and commits
 	})
 	a.view.waitIdle()
 }
@@ -666,23 +668,26 @@ func mustEncode(t *testing.T, v any) json.RawMessage {
 
 // TestAttachCommitResolvesQueuedRow pins the row lifecycle: a submitted
 // prompt's dimmed row clears from the terminal when its entry commits, whether
-// it landed alone or joined with other prompts into one newline-joined message.
+// it landed alone or joined with other prompts into one newline-joined message,
+// and an annotated @ref resolves through its correlation though the committed
+// text no longer matches the typed line.
 func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
-	committed := func(id, text string) ctl.Event {
+	committed := func(id string, queueIDs []string, text string) ctl.Event {
 		return ctl.NewEvent(ctl.EventEntryAppend, 1, ctl.EntryData{Entry: ctl.Entry{
 			ID: id, Type: string(session.TypeMessage),
-			Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, text)}),
+			Data: mustEncode(t, session.MessageData{
+				Message: llm.Text(llm.RoleUser, text), QueueIDs: queueIDs}),
 		}})
 	}
 
 	t.Run("single_prompt", func(t *testing.T) {
-		a.view.submitPending("sent prompt")
+		id := a.view.submitPending("sent prompt")
 		a.view.waitIdle()
 		assert.Equal(t, []string{"sent prompt"}, a.view.ui.Queued())
 
-		a.view.handle(committed("01RESOLVE1", "sent prompt"))
+		a.view.handle(committed("01RESOLVE1", []string{id}, "sent prompt"))
 		a.view.waitIdle()
 		assert.Empty(t, a.view.pending)
 		assert.Empty(t, a.view.ui.Queued()) // the committed entry took the row's place
@@ -690,15 +695,42 @@ func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 
 	t.Run("joined_run", func(t *testing.T) {
 		// queued prompts land as one newline-joined message: both rows resolve
-		a.view.submitPending("first line")
-		a.view.submitPending("second line")
+		first := a.view.submitPending("first line")
+		second := a.view.submitPending("second line")
 		a.view.waitIdle()
 		assert.Equal(t, []string{"first line", "second line"}, a.view.ui.Queued())
 
-		a.view.handle(committed("01RESOLVE2", "first line\nsecond line"))
+		a.view.handle(committed("01RESOLVE2", []string{first, second}, "first line\nsecond line"))
 		a.view.waitIdle()
 		assert.Empty(t, a.view.pending)
 		assert.Empty(t, a.view.ui.Queued())
+	})
+
+	t.Run("annotated_ref_resolves_by_id", func(t *testing.T) {
+		// @-expansion rewrites the committed text away from the typed line: only
+		// the correlation resolves the row, the old text match never did
+		id := a.view.submitPending("see @notes/big.md")
+		a.view.waitIdle()
+		assert.Equal(t, []string{"see @notes/big.md"}, a.view.ui.Queued())
+
+		a.view.handle(committed("01RESOLVE3", []string{id}, "see @notes/big.md (800 lines, 64kb)"))
+		a.view.waitIdle()
+		assert.Empty(t, a.view.pending)
+		assert.Empty(t, a.view.ui.Queued())
+	})
+
+	t.Run("unrelated_entry_keeps_row", func(t *testing.T) {
+		id := a.view.submitPending("still waiting")
+		a.view.waitIdle()
+
+		a.view.handle(committed("01RESOLVE4", []string{"another-row"}, "someone else"))
+		a.view.waitIdle()
+		assert.Len(t, a.view.pending, 1) // no correlation match, the row stays
+		assert.Equal(t, []string{"still waiting"}, a.view.ui.Queued())
+
+		a.view.handle(committed("01RESOLVE5", []string{id}, "eventually"))
+		a.view.waitIdle()
+		assert.Empty(t, a.view.pending)
 	})
 }
 
@@ -708,23 +740,90 @@ func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 func TestAttachRecallResolvesPending(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
-	a.view.submitPending("original")
+	id := a.view.submitPending("original")
 	a.view.waitIdle()
 	assert.Equal(t, []string{"original"}, a.view.ui.Queued())
 
-	// the host queued it, then recalled it: rows replace and the drop event names it
-	a.view.handle(ctl.NewEvent(ctl.EventQueued, 1, ctl.QueuedData{Texts: []string{"original"}}))
+	// the host queued it (echoing the submit correlation), then recalled it:
+	// rows replace and the drop event names the row id
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 1,
+		ctl.QueuedData{Rows: []ctl.QueueRow{{ID: id, Text: "original"}}}))
 	a.view.waitIdle()
 	a.view.handle(ctl.NewEvent(ctl.EventQueueDropped, 2,
-		ctl.QueueDroppedData{Texts: []string{"original"}, Cause: "recalled"}))
+		ctl.QueueDroppedData{Rows: []ctl.QueueRow{{ID: id, Text: "original"}}, Cause: "recalled"}))
 	a.view.handle(ctl.NewEvent(ctl.EventQueued, 3, ctl.QueuedData{}))
 	a.view.waitIdle()
 	assert.Empty(t, a.view.pending)
 
-	// the edited resubmission queues as its own row, the original gone for good
-	a.view.handle(ctl.NewEvent(ctl.EventQueued, 4, ctl.QueuedData{Texts: []string{"edited"}}))
+	// the edited resubmission queues as its own row with a fresh correlation,
+	// the original gone for good: even the same text never re-resolves it
+	edited := a.view.submitPending("original")
 	a.view.waitIdle()
-	assert.Equal(t, []string{"edited"}, a.view.ui.Queued())
+	assert.NotEqual(t, id, edited)
+	a.view.handle(ctl.NewEvent(ctl.EventQueueDropped, 4,
+		ctl.QueueDroppedData{Rows: []ctl.QueueRow{{ID: id}}, Cause: "interrupt"}))
+	a.view.waitIdle()
+	assert.Equal(t, []string{"original"}, a.view.ui.Queued()) // the fresh row survives
+}
+
+// TestAttachSecretRowResolvesByID pins the secret rule end to end: the row's
+// text redacts on every wire copy but its id always travels, so an interrupt or
+// recall of a queued secret still clears this terminal's pending row — and the
+// display keeps the real text from the local submission.
+func TestAttachSecretRowResolvesByID(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	id := a.view.submitPending("secret: hunter2")
+	a.view.waitIdle()
+
+	// the host queued it; the wire copy drops the text, keeps the id, and this
+	// terminal still shows its own typed line
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 1,
+		ctl.QueuedData{Rows: []ctl.QueueRow{{ID: id}}}))
+	a.view.waitIdle()
+	assert.Equal(t, []string{"secret: hunter2"}, a.view.ui.Queued())
+
+	// a foreign secret row shows nothing here and never merges with ours
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 2,
+		ctl.QueuedData{Rows: []ctl.QueueRow{{ID: id}, {ID: "row-x"}}}))
+	a.view.waitIdle()
+	assert.Equal(t, []string{"secret: hunter2"}, a.view.ui.Queued())
+
+	// the interrupt drop names the row by id alone: the pending row resolves
+	a.view.handle(ctl.NewEvent(ctl.EventQueueDropped, 3,
+		ctl.QueueDroppedData{Rows: []ctl.QueueRow{{ID: id}}, Cause: "interrupt"}))
+	a.view.waitIdle()
+	assert.Empty(t, a.view.pending)
+}
+
+// TestAttachDuplicateTextsResolveIndependently pins the identity rule: two
+// identical prompts carry different correlations, so each resolves on its own —
+// one commit or one drop never clears its twin.
+func TestAttachDuplicateTextsResolveIndependently(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	first := a.view.submitPending("run the same thing")
+	second := a.view.submitPending("run the same thing")
+	a.view.waitIdle()
+	assert.Equal(t, []string{"run the same thing", "run the same thing"}, a.view.ui.Queued())
+
+	// one lands: only its row goes
+	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 1, ctl.EntryData{Entry: ctl.Entry{
+		ID: "01DUP0001", Type: string(session.TypeMessage), Data: mustEncode(t,
+			session.MessageData{Message: llm.Text(llm.RoleUser, "run the same thing"), QueueIDs: []string{first}}),
+	}}))
+	a.view.waitIdle()
+	assert.Len(t, a.view.pending, 1)
+	assert.Equal(t, []string{"run the same thing"}, a.view.ui.Queued())
+
+	// the other drops by recall: its row goes too, by its own id. The rows
+	// update rides beside every drop, like announceRecallLocked publishes it.
+	a.view.handle(ctl.NewEvent(ctl.EventQueueDropped, 2,
+		ctl.QueueDroppedData{Rows: []ctl.QueueRow{{ID: second}}, Cause: "recalled"}))
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 3, ctl.QueuedData{}))
+	a.view.waitIdle()
+	assert.Empty(t, a.view.pending)
+	assert.Empty(t, a.view.ui.Queued())
 }
 
 // TestAttachReconnectResolvesPending pins the resnapshot rule: prompts that
@@ -733,11 +832,11 @@ func TestAttachRecallResolvesPending(t *testing.T) {
 func TestAttachReconnectResolvesPending(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
-	a.view.submitPending("offline prompt")
+	id := a.view.submitPending("offline prompt")
 	a.view.waitIdle()
 
-	entry := ctl.Entry{ID: "01OFFLINE1", Type: string(session.TypeMessage),
-		Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, "offline prompt")})}
+	entry := ctl.Entry{ID: "01OFFLINE1", Type: string(session.TypeMessage), Data: mustEncode(t,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "offline prompt"), QueueIDs: []string{id}})}
 	snap := ctl.State{Head: entry.ID} // the resnapshot's branch carries the commit
 	a.view.send(func() {
 		assert.NoError(t, a.view.applyBackfill(snap, []session.Entry{
@@ -746,7 +845,8 @@ func TestAttachReconnectResolvesPending(t *testing.T) {
 	a.view.waitIdle()
 	assert.Empty(t, a.view.pending)
 
-	a.view.handle(ctl.NewEvent(ctl.EventQueued, 5, ctl.QueuedData{Texts: []string{"other"}}))
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 5,
+		ctl.QueuedData{Rows: []ctl.QueueRow{{ID: "other", Text: "other"}}}))
 	a.view.waitIdle()
 	assert.Equal(t, []string{"other"}, a.view.ui.Queued()) // no resurrected row
 }
@@ -757,10 +857,10 @@ func TestAttachReconnectResolvesPending(t *testing.T) {
 func TestAttachAppendDedupeById(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
-	a.view.submitPending("queued prompt")
+	id := a.view.submitPending("queued prompt")
 
-	entry := ctl.Entry{ID: "01ENTRY01", Type: string(session.TypeMessage),
-		Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, "queued prompt")})}
+	entry := ctl.Entry{ID: "01ENTRY01", Type: string(session.TypeMessage), Data: mustEncode(t,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "queued prompt"), QueueIDs: []string{id}})}
 	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 1, ctl.EntryData{Entry: entry}))
 	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 2, ctl.EntryData{Entry: entry})) // same id again
 	a.view.waitIdle()

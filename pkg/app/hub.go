@@ -87,7 +87,7 @@ type hubSnapshot struct {
 	Idle        bool
 	Spinning    bool
 	Queued      int
-	QueuedTexts []string
+	QueuedRows  []ctl.QueueRow
 	Activity    []hubActivity
 	Status      tui.Status // the status row the local terminal renders
 	// Interactions lists every still-open dialog oldest first: state that holds
@@ -116,7 +116,7 @@ type hubDeps struct {
 type sessionHub struct {
 	ui *hubUI
 
-	submitLine func(line, origin string) error // router entry: routes one line naming its submitter
+	submitLine func(line, queueID, origin string) error // router entry: routes one line naming its submitter
 	ag         *agent.Agent
 	q          *steerQueue
 	stager     *command.Stager
@@ -142,7 +142,7 @@ type sessionHub struct {
 	acct      *tokens.Accounting // last ledger captured under the agent state lock
 	model     hubModel
 	segments  map[string]tui.Segment
-	queued    []string
+	queued    []ctl.QueueRow
 	idle      bool
 	spinning  bool
 	activity  map[string]hubActivity
@@ -377,13 +377,13 @@ func (h *sessionHub) publishModelLocked(key, short string, window int) {
 }
 
 // setQueued remembers the pending-prompt rows, oldest first. Secret-prefixed
-// rows are redacted on the wire to match drafts; the local surface already
-// rendered the real texts before this ran.
-func (h *sessionHub) setQueued(texts []string) {
+// rows lose their text on the wire but keep their id, matching the draft rule;
+// the local surface already rendered the real texts before this ran.
+func (h *sessionHub) setQueued(rows []ctl.QueueRow) {
 	h.mu.Lock()
-	h.queued = slices.Clone(texts)
+	h.queued = slices.Clone(rows)
 	h.publishLocked(ctl.EventQueued, ctl.EncodeData(ctl.QueuedData{
-		Texts: redactQueueTexts(texts),
+		Rows: redactQueueRows(rows),
 	}))
 	h.mu.Unlock()
 }
@@ -391,8 +391,9 @@ func (h *sessionHub) setQueued(texts []string) {
 // queueDroppedCause announces queued prompts a removal cleared, so their
 // pending rows resolve instead of vanishing. The cause names what removed them:
 // an interrupt recovery, a rewind clear, or a recall back into an editor.
-func (h *sessionHub) queueDroppedCause(cause string, texts []string) {
-	h.publish(ctl.EventQueueDropped, ctl.QueueDroppedData{Texts: redactQueueTexts(texts), Cause: cause})
+func (h *sessionHub) queueDroppedCause(cause string, rows []ctl.QueueRow) {
+	h.publish(ctl.EventQueueDropped,
+		ctl.QueueDroppedData{Rows: redactQueueRows(rows), Cause: cause})
 }
 
 // setIdle remembers the prompt's rest state. Snapshot-only: idle shapes what
@@ -463,25 +464,27 @@ func (h *sessionHub) prependDraft(text string) {
 
 // Submit routes one line into the session through the same router the editor
 // uses: prompts, /commands, !shell and !! all behave exactly as typed, minus
-// editor-coupled side effects. origin names the submitter ("controller") for
-// transcript provenance; empty means the local editor. It reports errSubmitStarting
-// before the router is wired and the router's own error otherwise, which is
-// errPromptQueueFull when the pump queue is full: a remote submit never blocks
-// the caller. Safe from any goroutine.
-func (h *sessionHub) Submit(line, origin string) error {
+// editor-coupled side effects. queueID carries a submitting surface's pending
+// correlation onto the prompt's queue row and committed entry; empty mints one.
+// origin names the submitter ("controller") for transcript provenance; empty
+// means the local editor. It reports errSubmitStarting before the router is
+// wired and the router's own error otherwise, which is errPromptQueueFull when
+// the pump queue is full: a remote submit never blocks the caller. Safe from
+// any goroutine.
+func (h *sessionHub) Submit(line, queueID, origin string) error {
 	h.mu.Lock()
 	f := h.submitLine
 	h.mu.Unlock()
 	if f == nil {
 		return errSubmitStarting
 	}
-	return f(line, origin)
+	return f(line, queueID, origin)
 }
 
 // setSubmitLine installs the router entry Submit routes through. Runs once on
 // the driver goroutine; control requests racing the wiring read the field
 // under mu, never a torn write.
-func (h *sessionHub) setSubmitLine(f func(line, origin string) error) {
+func (h *sessionHub) setSubmitLine(f func(line, queueID, origin string) error) {
 	h.mu.Lock()
 	h.submitLine = f
 	h.mu.Unlock()
@@ -594,7 +597,7 @@ func (h *sessionHub) SnapshotAt() (hubSnapshot, uint64) {
 		Model:       h.model,
 		Idle:        h.idle,
 		Spinning:    h.spinning,
-		QueuedTexts: redactQueueTexts(h.queued),
+		QueuedRows:  redactQueueRows(h.queued),
 		Activity:    activityRows(h.activity),
 	}
 	if h.headFn != nil {
@@ -693,13 +696,28 @@ func allReadOnly(reg *tools.Registry, names []string) bool {
 	return !slices.ContainsFunc(names, func(n string) bool { return !reg.ReadOnly(n) })
 }
 
-// redactQueueTexts drops secret-prefixed rows from a wire copy of the queue,
-// matching the draft rule: the value never leaves the process. The local
-// surface and the transcript keep the real text.
-func redactQueueTexts(texts []string) []string {
-	return bulk.SliceFilter(func(text string) bool {
-		return !session.HasSecretPrefix(secretPrefix, text)
-	}, texts)
+// redactQueueRows strips the text of secret-prefixed rows on a wire copy,
+// matching the draft rule: the value never leaves the process. The id stays,
+// so the submitting surface still resolves its pending row on a drop or commit.
+func redactQueueRows(rows []ctl.QueueRow) []ctl.QueueRow {
+	out := make([]ctl.QueueRow, len(rows))
+	for i, r := range rows {
+		if session.HasSecretPrefix(secretPrefix, r.Text) {
+			r.Text = "" // the id keeps resolving the row
+		}
+		out[i] = r
+	}
+	return out
+}
+
+// queueRowTexts renders wire rows for a local surface, which shows the real
+// texts including secrets.
+func queueRowTexts(rows []ctl.QueueRow) []string {
+	texts := make([]string, len(rows))
+	for i, r := range rows {
+		texts[i] = r.Text
+	}
+	return texts
 }
 
 // activityRows renders the remembered activity rows in display order.

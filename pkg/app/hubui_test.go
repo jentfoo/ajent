@@ -113,13 +113,13 @@ func (l *emitLog) actsSeen() []string {
 	return out
 }
 
-// queuesSeen lists queued-row replacements.
-func (l *emitLog) queuesSeen() [][]string {
-	var out [][]string
+// queuesSeen lists queued-row replacements as id|text rows.
+func (l *emitLog) queuesSeen() [][]ctl.QueueRow {
+	var out [][]ctl.QueueRow
 	for _, ev := range l.named(ctl.EventQueued) {
 		var d ctl.QueuedData
 		if ev.Decode(&d) == nil {
-			out = append(out, d.Texts)
+			out = append(out, d.Rows)
 		}
 	}
 	return out
@@ -194,7 +194,7 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 		Caps: llm.Capabilities{Images: true}})
 	ui.SetActivityRanked("job:1", "reading", 1)
 	ui.SetActivity("misc", "note")
-	ui.SetQueued([]string{"waiting"})
+	ui.SetQueued([]ctl.QueueRow{{ID: "row-1", Text: "waiting"}})
 	ui.UserEcho("typed line") // local only: no echo event exists to observe
 
 	require.Eventually(t, func() bool { return strings.Contains(out(), "typed line") },
@@ -211,7 +211,7 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	assert.True(t, idle)
 	assert.Equal(t, hubModel{Key: "p/big", Short: "big", Window: 200000,
 		Caps: llm.Capabilities{Images: true}}, model)
-	assert.Equal(t, []string{"waiting"}, queued)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "waiting"}}, queued)
 	assert.Equal(t, 1, segs)
 	assert.Equal(t, 2, acts)
 
@@ -222,7 +222,7 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	assert.Equal(t, []string{"p/big"}, log.modelsSeen())
 	assert.Equal(t, []string{"job:1:reading", "misc:note"}, log.actsSeen())
 	require.Len(t, log.queuesSeen(), 1)
-	assert.Equal(t, []string{"waiting"}, log.queuesSeen()[0])
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "waiting"}}, log.queuesSeen()[0])
 }
 
 // TestHubUILabelSetKeepsCaps pins the two model setters: a label-only SetModel
@@ -262,7 +262,7 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	ui.SetStatusSegment(segment(segPlan, "planning", "plan"))
 	ui.SetModelOf(llm.Model{Provider: "p", ID: "m"})
 	ui.SetActivity("job:1", "reading")
-	ui.SetQueued([]string{"waiting"})
+	ui.SetQueued([]ctl.QueueRow{{ID: "row-2", Text: "waiting"}})
 	ui.SetIdle(false)
 	ui.UserEcho("typed line") // local only: no echo event exists to observe
 	ui.SetInput("filled")

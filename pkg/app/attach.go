@@ -293,7 +293,8 @@ func attachOnce(view *attachView, conn *client.Conn, hello ctl.Hello, holderName
 // pumpSubmissions serializes one terminal's submits onto the wire in channel
 // order, which is the queue order the remote pump applies. Only prompts paint
 // a pending row: slash and shell lines commit no message entry, they surface
-// through their effects.
+// through their effects. Each prompt carries its own correlation, so drops and
+// commits resolve the row by id without any text matching.
 func pumpSubmissions(view *attachView, submissions <-chan string) {
 	for line := range submissions {
 		conn := view.connFor()
@@ -301,14 +302,15 @@ func pumpSubmissions(view *attachView, submissions <-chan string) {
 			view.notConnected(line)
 			continue
 		}
+		params := ctl.SubmitParams{Line: line}
 		if command.ParseLine(line).Kind == command.KindPrompt {
-			view.submitPending(line)
+			params.PendingID = view.submitPending(line)
 		}
 		sctx, scancel := context.WithTimeout(context.Background(), client.CallWait)
-		serr := conn.Submit(sctx, line)
+		serr := conn.Submit(sctx, params)
 		scancel()
 		if serr != nil {
-			view.submitFailed(line, serr)
+			view.submitFailed(params.PendingID, line, serr)
 		}
 	}
 }

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -93,12 +94,13 @@ func (u *hubUI) SetActivityRanked(key, text string, rank int) {
 	u.hub.setActivity(key, text, rank)
 }
 
-// SetQueued replaces the pending-prompt rows and reports them.
-func (u *hubUI) SetQueued(texts []string) {
+// SetQueued replaces the pending-prompt rows and reports them: the local
+// surface renders the real texts, the hub publishes rows with secrets redacted.
+func (u *hubUI) SetQueued(rows []ctl.QueueRow) {
 	if u.UI != nil {
-		u.UI.SetQueued(texts)
+		u.UI.SetQueued(queueRowTexts(rows))
 	}
-	u.hub.setQueued(texts)
+	u.hub.setQueued(rows)
 }
 
 // SetIdle flips the prompt's rest state and reports it.

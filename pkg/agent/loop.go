@@ -391,6 +391,7 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			a.append(MessageInfo{
 				Message:  llm.Message{Role: llm.RoleUser, Content: blocks},
 				Injected: in.Injected, Replayed: visible, Origin: in.Origin,
+				QueueIDs: in.QueueIDs,
 			})
 			if visible && in.Echo != "" {
 				// the echo rides InjectContext so a note's live shape matches its

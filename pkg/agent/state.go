@@ -27,6 +27,9 @@ type Input struct {
 	Echo      string                              // injected-only live echo, drawn as the message lands; empty stays silent
 	Prepared  bool                                // already expanded or host-authored, Options.NormalizeInput skips it
 	Origin    string                              // submitter of a non-typed prompt ("controller"), recorded on the transcript
+	// QueueIDs are the queue-row correlations this input landed for, recorded on
+	// the committed entry so pending rows resolve by id; empty carries none.
+	QueueIDs []string
 }
 
 // State is the in-memory projection of a session. It is owned by the loop
@@ -62,9 +65,10 @@ type MessageInfo struct {
 	Message  llm.Message
 	Stop     llm.StopReason // assistant messages only
 	Usage    llm.Usage
-	Injected bool   // system-injected context, excluded from prompt recall
-	Replayed bool   // injected context that still belongs in restored scrollback
-	Origin   string // submitter of a non-typed prompt, empty when typed locally
+	Injected bool     // system-injected context, excluded from prompt recall
+	Replayed bool     // injected context that still belongs in restored scrollback
+	Origin   string   // submitter of a non-typed prompt, empty when typed locally
+	QueueIDs []string // queue-row correlations the message landed for
 }
 
 // BeforeMessages returns the bare messages of infos, in order.

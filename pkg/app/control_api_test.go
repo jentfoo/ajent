@@ -282,7 +282,7 @@ func TestControlSubmit(t *testing.T) {
 		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
 
 		// a full prompt queue refuses busy instead of parking the control lane
-		rig.hub.setSubmitLine(func(string, string) error { return errPromptQueueFull })
+		rig.hub.setSubmitLine(func(string, string, string) error { return errPromptQueueFull })
 		rp = c.call("b", ctl.MethodSubmit, map[string]any{"line": "hi"})
 		require.NotNil(t, rp.Error)
 		assert.Equal(t, ctl.CodeBusy, rp.Error.Code)
@@ -309,25 +309,44 @@ func TestControlSubmit(t *testing.T) {
 			t.Fatal("the submitted prompt never started its turn")
 		}
 
-		// a second submit queues: the queued event reflects it, never a silent drop
-		rp = c.call("s2", ctl.MethodSubmit, map[string]any{"line": "second"})
+		// a second submit queues: the queued event echoes its correlation, never
+		// a silent drop
+		rp = c.call("s2", ctl.MethodSubmit, map[string]any{"line": "second", "pendingId": "ctl-row-1"})
 		require.Nil(t, rp.Error)
 		qd := c.collect(ctl.EventQueued, 1)[0]
 		var q ctl.QueuedData
 		require.NoError(t, qd.Decode(&q))
-		assert.Equal(t, []string{"second"}, q.Texts)
+		assert.Equal(t, []ctl.QueueRow{{ID: "ctl-row-1", Text: "second"}}, q.Rows)
 
-		// interrupt names the turn and drops the queued row: no editor exists to
-		// recover it into
+		// interrupt names the turn and drops the queued row by id: no editor
+		// exists to recover it into. The drop publishes first, the emptied rows
+		// beside it in the same seq window.
 		rp = c.call("i1", ctl.MethodInterrupt, map[string]any{})
 		require.Nil(t, rp.Error)
 		var res ctl.InterruptResult
 		require.NoError(t, rp.DecodeResult(&res))
 		assert.Equal(t, "turn", res.Stopped)
 
-		qd = c.collect(ctl.EventQueued, 1)[0]
-		require.NoError(t, qd.Decode(&q))
-		assert.Empty(t, q.Texts)
+		var droppedEv, cleared ctl.Event
+		require.Eventually(t, func() bool {
+			for _, ev := range c.takePending() {
+				switch {
+				case ev.Name == ctl.EventQueueDropped && droppedEv.Name == "":
+					droppedEv = ev
+				case ev.Name == ctl.EventQueued && droppedEv.Name != "" && cleared.Name == "":
+					cleared = ev // the rows update beside the drop
+				}
+			}
+			return droppedEv.Name != "" && cleared.Name != ""
+		}, ctlWait, 5*time.Millisecond)
+
+		var dd ctl.QueueDroppedData
+		require.NoError(t, droppedEv.Decode(&dd))
+		assert.Equal(t, []ctl.QueueRow{{ID: "ctl-row-1", Text: "second"}}, dd.Rows)
+		assert.Equal(t, "interrupt", dd.Cause)
+
+		require.NoError(t, cleared.Decode(&q))
+		assert.Empty(t, q.Rows)
 		c.collect(ctl.EventTurnEnd, 1) // the aborted turn closed
 
 		// the submitted prompt reached the transcript carrying its controller
@@ -347,6 +366,9 @@ func TestControlSubmit(t *testing.T) {
 			assert.Equal(t, "first", text.Text)
 			origins = append(origins, md.Origin)
 			assert.False(t, md.Injected) // groups and echoes like the user line it emulates
+			// a direct dispatch never queued, so the pump minted the correlation
+			// the committed entry carries for pending-row resolution
+			require.Len(t, md.QueueIDs, 1)
 		}
 		assert.Equal(t, []string{submitOriginController}, origins)
 	})
@@ -373,7 +395,8 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 
 	stager := command.NewStager(t.Context(), toolReg, agent.NopSink{})
 	t.Cleanup(stager.Cancel)
-	q := newSteerQueue(rig.hub.ui, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
+	q := newSteerQueue(rig.hub.ui, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady,
+		rig.hub.queueDroppedCause)
 	rig.hub.q = q
 	rig.hub.stager = stager
 	gate := &typingGate{idle: time.Hour, handoff: 10 * time.Millisecond,
@@ -497,11 +520,12 @@ func TestControlQueueRecall(t *testing.T) {
 		c.hello()
 		attachControl(t, c, "r")
 
-		// park two prompts as rows, the way a gate hold leaves them
+		// park two prompts as rows with their correlations, the way a gate hold
+		// leaves them
 		rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
 			func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
-		rig.hub.q.hold(agent.Input{Text: "queued one"}, "queued one", 0)
-		rig.hub.q.hold(agent.Input{Text: "queued two"}, "queued two", 0)
+		rig.hub.q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 0)
+		rig.hub.q.hold(agent.Input{Text: "queued two", QueueIDs: []string{"row-2"}}, "queued two", 0)
 
 		rp := c.call("q2", ctl.MethodQueueRecall, map[string]any{}) // LIFO: the newest first
 		require.Nil(t, rp.Error)
@@ -510,15 +534,15 @@ func TestControlQueueRecall(t *testing.T) {
 		assert.Equal(t, "queued two", res.Text)
 
 		// the removal announces beside its rows, so attached surfaces resolve the
-		// row; both ride the lane's publish before this reply
+		// row by id; both ride the lane's publish before this reply
 		all := c.collectEventsAny(t, 3)
 		var dropped ctl.QueueDroppedData
 		require.NoError(t, matchEvent(t, all, ctl.EventQueueDropped, "recalled").Decode(&dropped))
-		assert.Equal(t, []string{"queued two"}, dropped.Texts)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-2", Text: "queued two"}}, dropped.Rows)
 
 		var queued ctl.QueuedData
 		require.NoError(t, lastEvent(t, all, ctl.EventQueued).Decode(&queued))
-		assert.Equal(t, []string{"queued one"}, queued.Texts)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "queued one"}}, queued.Rows)
 	})
 
 	t.Run("refusals_stay_queued", func(t *testing.T) {
@@ -1063,7 +1087,7 @@ func TestControlState(t *testing.T) {
 		ui := rig.hub.ui
 		ui.SetStatusSegment(segment(segMCP, "mcp 2/2", "2/2"))
 		ui.SetActivity("scan", "reading pkg")
-		ui.SetQueued([]string{"next prompt"})
+		ui.SetQueued([]ctl.QueueRow{{ID: "row-9", Text: "next prompt"}})
 
 		reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctl-test"})
 		require.NoError(t, err)
@@ -1079,7 +1103,7 @@ func TestControlState(t *testing.T) {
 		assert.Equal(t, config.Cwd(), st.Workspace)
 		assert.True(t, st.Idle)
 		assert.False(t, st.Running)
-		assert.Equal(t, []string{"next prompt"}, st.QueuedTexts)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-9", Text: "next prompt"}}, st.QueuedRows)
 		require.Len(t, st.Activity, 1)
 		assert.Equal(t, ctl.ActivityRow{Key: "scan", Text: "reading pkg", Rank: activityUnranked}, st.Activity[0])
 		require.Len(t, st.Status.Segments, len(snap.Status.Segments))

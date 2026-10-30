@@ -265,9 +265,11 @@ func (c *Conn) Backfill(ctx context.Context) (ctl.State, []session.Entry, uint64
 	return snap, branch, seq, nil
 }
 
-// Submit routes one line exactly as typed in the session's editor.
-func (c *Conn) Submit(ctx context.Context, line string) error {
-	_, err := c.Call(ctx, ctl.MethodSubmit, ctl.SubmitParams{Line: line}, nil)
+// Submit routes one line exactly as typed in the session's editor; params'
+// PendingID, when set, names the submitting surface's pending row on queue
+// events and the committed entry.
+func (c *Conn) Submit(ctx context.Context, params ctl.SubmitParams) error {
+	_, err := c.Call(ctx, ctl.MethodSubmit, params, nil)
 	return err
 }
 

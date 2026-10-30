@@ -5,8 +5,6 @@ import (
 	"context"
 	"image"
 	"image/png"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -30,7 +29,7 @@ func stagePair(t *testing.T) (func(context.Context), func() []agent.MessageInfo)
 
 // fakeQueueUI records every call the steer queue makes, so tests assert on what reached the TUI.
 type fakeQueueUI struct {
-	queued    [][]string
+	queued    [][]ctl.QueueRow
 	echoed    []string
 	prepended []string
 	set       []string
@@ -38,17 +37,27 @@ type fakeQueueUI struct {
 	headless  bool // Interactive reports false, the serve-mode shape
 }
 
-func (f *fakeQueueUI) SetQueued(texts []string) { f.queued = append(f.queued, slices.Clone(texts)) }
-func (f *fakeQueueUI) PrependInput(t string)    { f.prepended = append(f.prepended, t) }
-func (f *fakeQueueUI) SetInput(t string)        { f.set = append(f.set, t) }
-func (f *fakeQueueUI) Interactive() bool        { return !f.headless }
-func (f *fakeQueueUI) UserEcho(t string)        { f.echoed = append(f.echoed, t) }
+func (f *fakeQueueUI) SetQueued(rows []ctl.QueueRow) { f.queued = append(f.queued, rows) }
+func (f *fakeQueueUI) PrependInput(t string)         { f.prepended = append(f.prepended, t) }
+func (f *fakeQueueUI) SetInput(t string)             { f.set = append(f.set, t) }
+func (f *fakeQueueUI) Interactive() bool             { return !f.headless }
+func (f *fakeQueueUI) UserEcho(t string)             { f.echoed = append(f.echoed, t) }
 func (f *fakeQueueUI) UserImages(imgs []tui.Image) {
 	f.images = append(f.images, imgs)
 }
 
-// lastQueued returns the most recent queued-rows snapshot.
+// lastQueued returns the texts of the most recent queued-rows snapshot.
 func (f *fakeQueueUI) lastQueued() []string {
+	rows := f.lastRows()
+	texts := make([]string, len(rows))
+	for i, r := range rows {
+		texts[i] = r.Text
+	}
+	return texts
+}
+
+// lastRows returns the most recent queued-rows snapshot whole.
+func (f *fakeQueueUI) lastRows() []ctl.QueueRow {
 	if len(f.queued) == 0 {
 		return nil
 	}
@@ -418,21 +427,22 @@ func TestSteerQueue(t *testing.T) {
 	})
 
 	t.Run("recall_announces_removal", func(t *testing.T) {
-		// every recall names its row on the drop seam, so attached surfaces
-		// resolve the pending row a prompt left behind when it left the queue
+		// every recall names its row on the drop seam with the correlation it
+		// queued under, so attached surfaces resolve the pending row by id
 		fake := &fakeQueueUI{}
-		var drop string
+		var drops [][]ctl.QueueRow
 		waitReady, takeReady := stagePair(t)
 		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady,
-			func(cause string, texts []string) {
-				drop = cause + ":" + strings.Join(texts, "|")
+			func(cause string, rows []ctl.QueueRow) {
+				drops = append(drops, rows)
 			})
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
-		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 2))
 
 		require.True(t, q.recall())
-		assert.Equal(t, "recalled:beta", drop)
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-b", Text: "beta"}}, drops[0])
 		assert.Empty(t, fake.lastQueued())
 	})
 
@@ -440,11 +450,11 @@ func TestSteerQueue(t *testing.T) {
 		// the remote surface gets the text and no editor is touched; rows,
 		// accounting and the removal notice update exactly like the keyboard path
 		fake := &fakeQueueUI{}
-		var drop string
+		var drops [][]ctl.QueueRow
 		waitReady, takeReady := stagePair(t)
 		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady,
-			func(cause string, texts []string) {
-				drop = cause + ":" + strings.Join(texts, "|")
+			func(cause string, rows []ctl.QueueRow) {
+				drops = append(drops, rows)
 			})
 
 		text, err := q.recallInto()
@@ -452,14 +462,15 @@ func TestSteerQueue(t *testing.T) {
 		assert.Empty(t, text) // nothing queued: an empty result, no error
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
-		assert.True(t, q.offer(agent.Input{Text: "remote work"}, "remote row", 2))
+		assert.True(t, q.offer(agent.Input{Text: "remote work", QueueIDs: []string{"row-r"}}, "remote row", 2))
 
 		text, err = q.recallInto()
 		require.NoError(t, err)
 		assert.Equal(t, "remote row", text) // the typed line, restored for the caller's draft
 		assert.Empty(t, fake.prepended)     // no host editor fill: the text travels instead
 		assert.Empty(t, fake.lastQueued())  // rows refresh like any other recall
-		assert.Equal(t, "recalled:remote row", drop)
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-r", Text: "remote row"}}, drops[0])
 	})
 
 	t.Run("recall_into_refuses_payloads", func(t *testing.T) {
@@ -632,6 +643,73 @@ func TestSteerQueue(t *testing.T) {
 		q.abort()
 		assert.False(t, consumed) // staged shell output is the stager's until delivery
 		assert.Equal(t, []string{"/init"}, fake.prepended)
+	})
+
+	t.Run("offer_stamps_row_id", func(t *testing.T) {
+		// every queued row carries a stable correlation: pump-submitted prompts
+		// bring one from submit time, anything else gets minted at offer and
+		// never changes while queued
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 1))     // no id: minted
+		first := fake.lastRows()
+		require.Len(t, first, 1)
+		assert.NotEmpty(t, first[0].ID)
+
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 1))
+		rows := fake.lastRows()
+		require.Len(t, rows, 2)
+		assert.Equal(t, first[0].ID, rows[0].ID) // stable while queued
+		assert.Equal(t, "row-b", rows[1].ID)     // a submitted correlation is kept
+	})
+
+	t.Run("abort_names_rows_with_ids", func(t *testing.T) {
+		// an interrupt drop carries every row's correlation, so a serve-mode
+		// controller resolves its secret row too: the id never redacts
+		fake := &fakeQueueUI{}
+		var drops [][]ctl.QueueRow
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady,
+			func(cause string, rows []ctl.QueueRow) { drops = append(drops, rows) })
+		fake.headless = true // serve mode: the interrupt drops instead of recovering
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "work", QueueIDs: []string{"row-w"}}, "secret: hunter2", 1))
+
+		q.abort()
+
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-w", Text: "secret: hunter2"}}, drops[0])
+	})
+
+	t.Run("clear_for_rewind_one_window", func(t *testing.T) {
+		// the rewind's drop and the emptied rows publish inside one queue
+		// critical section: while the drop fires, no offer can interleave, so a
+		// prompt re-offered after the clear keeps its fresh pending row
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		var q *steerQueue
+		dropped := func(string, []ctl.QueueRow) {
+			if q.mu.TryLock() { // must still be held by clearForRewind here
+				q.mu.Unlock()
+				t.Error("the rewind drop published outside the queue critical section")
+			}
+		}
+		q = newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, dropped)
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "a", QueueIDs: []string{"row-a"}}, "alpha", 1))
+
+		labels := q.clearForRewind()
+		assert.Equal(t, []string{"alpha"}, labels) // the notice entry's names
+		assert.Empty(t, fake.lastQueued())
+
+		// a re-offer after the clear publishes fresh rows no late drop removes
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 1))
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-b", Text: "beta"}}, fake.lastRows())
 	})
 }
 

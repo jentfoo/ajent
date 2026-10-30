@@ -16,7 +16,12 @@ import (
 // v2 splits events into a committed family reconciled by entry id (entry.append,
 // branch.changed) and an ephemeral family governed by the watermark alone, and
 // deletes the echo concepts that made dedupe the client's job.
-const Protocol = 2
+//
+// v3 gives queue rows stable ids: queued and queue.dropped carry {id, text}
+// rows (secret texts redact to empty, never dropped), state.get reports rows,
+// and submit takes an optional pendingId echoed back as the row id. Pending
+// prompts reconcile by id instead of matching strings against strings.
+const Protocol = 3
 
 // Method names a controller may call. The read-only set answers any
 // connection; every write method requires the control seat.
