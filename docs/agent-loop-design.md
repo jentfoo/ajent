@@ -333,6 +333,12 @@ Dispatch rules:
 - **Bounded parallelism.** A semaphore channel and a `sync.WaitGroup` cap
   in-flight calls at the host's CPU count. An `errgroup` was considered but
   `golang.org/x/sync` is not in the module, and no new dependencies were wanted.
+- **Headers commit before launch.** Every tool-call header the parallel batch
+  will show paints on the loop goroutine in message order before any call
+  launches, so scrollback reads submission order however the launches race for
+  the sink. A call answered without a header (malformed args, unknown tool)
+  paints none, and an abort that skips a launch closes its committed row with
+  the interrupt marker instead of leaving it open.
 - **Results appended in call order** regardless of completion order. Reordering
   changes the prompt and breaks caching.
 - **Tool errors are results, not failures.** An erroring tool produces a

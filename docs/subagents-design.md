@@ -60,9 +60,15 @@ Concurrency model:
   directly), and an ordered dispatcher over a slot count capped to
   `MaxConcurrent`. Jobs register as queued at `start` under the registry lock,
   and slots are granted to waiters in job-number order, so a fan-out activates
-  sub-1, sub-2, ... however the parallel start goroutines raced. A job's cancel
-  always fires when it reaches a terminal state, so the root holds no
-  finished-job registrations.
+  sub-1, sub-2, ... however the parallel start goroutines raced. Granting holds
+  back behind any **unclaimed reservation of the current batch** with a lower
+  number: claiming races registration (sub-2's start can land after sub-3's),
+  so without this sub-1 and sub-3 could start while sub-2 stayed queued. Jobs
+  registered before the batch are never held, since no future claim can precede
+  their number, and a short expiry window lapses the hold when a claim never
+  lands (an interrupted turn or refused args), so a dead reservation cannot
+  stall activation. A job's cancel always fires when it reaches a terminal
+  state, so the root holds no finished-job registrations.
 - The waitgroup add happens **under the registry lock before** the spawn
   goroutine launches, so shutdown's wait never races a pending add. Each
   goroutine finishes with its done signal and cleanup in one place.

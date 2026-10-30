@@ -199,8 +199,8 @@ An `Accumulator` builds the final `Message`, falling back to concatenating
 deltas for a block whose end never arrived, so an aborted stream still yields
 what was received. Content assembles in **stream order (by event index)**,
 never end-event arrival order: parallel tool calls can finish streaming out of
-order, and everything downstream — result pairing, `OnToolBatch`, sub-agent id
-reservation — reads the list as the order the model emitted the calls in.
+order, and everything downstream (result pairing, `OnToolBatch`, sub-agent id
+reservation) reads the list as the order the model emitted the calls in.
 Indexes are unique per block within one response, so a stable sort by index is
 the reconstruction of what was sent.
 

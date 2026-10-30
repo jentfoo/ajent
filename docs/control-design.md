@@ -73,13 +73,13 @@ keep that single path honest under concurrent controllers.
   itself. That is what closes the swap-then-SetHead window: a prompt dispatched
   before a rewind lands before it or ages out, never onto the branch the rewind
   forked away from, and a compaction checkpoint can never record against a head
-  a rewind moved mid-rebuild. A rewind refuses while a drain owns the loop — a
-  running turn or the between-turns window over queued prompts — and interrupt
+  a rewind moved mid-rebuild. A rewind refuses while a drain owns the loop (a
+  running turn, or the between-turns window over queued prompts), and interrupt
   covers that same window: Esc stops the drain, releasing the staged-command
   wait it sits in and recovering its queued prompts, exactly as it stops a
-  running turn. Pump lines carry the lane's dispatch generation; a rewind bumps
-  it and the pump returns aged lines to the editor with a notice naming what
-  happened, so a buffered prompt is decided once, never landed by accident.
+  running turn. Pump lines carry the lane's dispatch generation, which a rewind
+  bumps. The pump returns aged lines to the editor with a notice naming what
+  happened, so a buffered prompt is decided once and never lands by accident.
 - **Rewind is one transaction.** Swapping agent state, moving the writer head and
   publishing the branch change form one ordered operation shared by double-Esc and the
   wire, so live state and the writer head cannot diverge and the last rewind wins no
@@ -138,9 +138,9 @@ watermark for writes. That is the whole reconciliation rule: events at or below 
 superseded by the result, events above it apply. The hub owns the ephemeral view model
 (status segments, activity and queue rows, idle, running, spinning, model labels, context
 numbers, permission mode, tool rows), and every mutation updates that struct and
-fans out its event in one critical section, so a snapshot's number and its hub-held
-fields — plus the writer head, read through the writer's own head func — share that one
-section. The two sources that cannot join the hub lock (the dialog broker's open set,
+fans out its event in one critical section, so a snapshot's number, its hub-held
+fields and the writer head share that one section. The two sources that cannot join
+the hub lock (the dialog broker's open set,
 whose begin holds its own lock across its publish, and the usage totals behind the
 agent's state lock) are read immediately after, so a snapshot may describe a moment
 slightly newer than its own number. That direction is safe: the newer state already
@@ -154,14 +154,14 @@ concept at all: a prompt renders when its entry commits, never when it is submit
 a live append paints exactly what replay paints for the same entry, so one echo rule (kept
 beside replay in `pkg/session`) feeds both. No event outside that family may move a head.
 The ephemeral family is everything else (stream deltas, dialogs, queue rows, transient
-notices) and is governed by the watermark alone, never reconciled against the file — with
+notices) and is governed by the watermark alone, never reconciled against the file, with
 one exception below.
 
 **Open dialogs are state, not paint.** A dialog holding the run cannot be an event a late
 arrival misses, so every snapshot lists the interactions still open, exactly as their
 pending events announced them. A controller that attaches mid-dialog learns what holds
-input and can answer it by id; a reconnecting one re-races locally what it still lists and
-cancels racers whose dialogs settled while it was away. Reconciliation stays the one
+input and can answer it by id. A reconnecting one re-races locally what it still lists
+and cancels racers whose dialogs settled while it was away. Reconciliation stays the one
 watermark rule, by dialog id. Open dialogs ride the socket only: never the transcript
 (they are runtime state, not history) and never the discovery record (which stays static
 facts for pickers).
@@ -169,7 +169,7 @@ facts for pickers).
 **Poll-only facts.** Not every snapshot field has a change event. The ephemeral view
 model is fully event-covered (the permission mode, tool rows, queue count and idle
 gained their events as the hub took ownership), so the named list holds only the static
-facts — session id, workspace, cwd — plus the usage totals: their ledger accumulates
+facts (session id, workspace, cwd) plus the usage totals: their ledger accumulates
 silently (per-turn usage rides turn.end), so totals are read by resnapshotting, through
 the one documented read-after-unlock. The contract for a new snapshot field is to either publish
 a change event or join this named list, and the hub test holds the inventory to that, so
@@ -183,17 +183,19 @@ already rendered, which removes the whole class of gaps a bounded replay buffer 
 The difference cuts both ways: the snapshot's applier also clears what the new state no
 longer lists (segments, activity rows and queue rows removed while the terminal was away,
 and a spinner whose turn ended without its end event surviving the drop), so stale chrome
-cannot outlive the resnapshot. The snapshot's open dialogs are part of that difference, so a dialog spanning a drop
-re-races instead of stranding the run on a dialog nobody attached can see.
+cannot outlive the resnapshot. The snapshot's open dialogs are part of that difference,
+so a dialog spanning a drop re-races instead of stranding the run on a dialog nobody
+attached can see.
 
 Delivery is fail-open and bounded. Each connection stages outbound lines behind its own
 queue, and a peer that stops reading loses its connection instead of stalling the turn
 loop. Each stage reserves room for the exit event, so no bound can drop it and an attached
 terminal can distinguish "session ended" from "connection lost". Shutdown quiesces an
 interrupted turn before emitting exit, under a bounded wait, so a wedged tool cannot hang
-exit; the executor lane and the state lane drain under the same bound first, so a rewind
-still mid-transaction publishes its branch.changed before the end event, never after it,
-and decision dialogs root on the app-owned context so teardown settles them too.
+exit. The mutating-verb lane and the state lane drain under the same bound first, so a
+rewind still mid-transaction publishes its branch.changed before the end event, never
+after it, and decision dialogs root on the app-owned context so teardown settles them
+too.
 
 ## Bulk history comes from the file
 
@@ -209,9 +211,9 @@ replaces on success and a drop, recall or failed submit resolves inline. Only pr
 paint one, since slash and shell lines commit no message entry and surface through their
 effects. Rows therefore carry stable ids: queued and queue.dropped speak `{id, text}` rows
 (a secret's text redacts away, never its id), submit takes a client correlation echoed back
-as the row id, and the committed message entry records every correlation it landed for —
-so each surface's pending row follows its prompt by id wherever it goes — delivered,
-dropped, or back in a draft — with no matching of strings against strings. A recall is
+as the row id, and the committed message entry records every correlation it landed for,
+so each surface's pending row follows its prompt by id wherever it goes (delivered,
+dropped, or back in a draft), with no matching of strings against strings. A recall is
 announced like every other queue exit: queue.dropped with cause "recalled" names the row
 that left for an editor.
 
@@ -239,7 +241,7 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
   transcript. The one editor gesture that reaches across is Alt+Up: queue recall runs
   over the wire and the popped text fills this terminal's editor instead of the host's,
   so editing a queued prompt on either surface replaces it exactly once. The served run
-  owns every other write; an attached terminal only reads.
+  owns every other write, and an attached terminal only reads.
 - **The seat degrades honestly.** Attach claims the seat, or attaches as a named read-only
   viewer when another controller holds it. Detaching frees the seat by disconnection and
   never ends the served run, while `/exit` submitted from either side does.
@@ -283,8 +285,8 @@ place of the greeting. A platform that cannot attest credentials refuses every c
 instead of widening the model silently.
 
 Two corollaries are enforced because they are cheap. Secret values never appear on the live
-surfaces (events, drafts, queue rows, recalled texts, dialog outcomes — a recall of a
-secret-prefixed prompt refuses rather than leak), and transport lifecycle stays out of the
+surfaces (events, drafts, queue rows, recalled texts, dialog outcomes), and a recall of
+a secret-prefixed prompt refuses rather than leak. Transport lifecycle stays out of the
 event stream since it is not session state and would consume event numbers. One exposure
 is stated honestly: controllers receive the transcript path, whose entries contain such
 prompts verbatim, so redaction covers the live surfaces only.
