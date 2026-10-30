@@ -281,17 +281,11 @@ func (s *jsonSink) ToolStart(call agent.ToolCall, _ string, _ bool) func(agent.T
 		s.mu.Lock()
 		defer s.mu.Unlock()
 
-		out := res.Display
-		if strings.TrimSpace(out) == "" {
-			out = s.output[call.ID]
-		}
-		if strings.TrimSpace(out) == "" {
-			out = llm.FirstBlockText(res.Content)
-		}
+		streamed := s.output[call.ID]
 		delete(s.output, call.ID)
 		s.emit(jsonEvent{
 			Type: "tool_result", ID: call.ID, Name: call.Name,
-			Output: out, Error: res.IsError,
+			Output: toolResultBody(res.Display, streamed, res.Content), Error: res.IsError,
 		})
 	}
 }

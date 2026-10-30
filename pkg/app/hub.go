@@ -20,6 +20,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
 	"github.com/jentfoo/ajent/pkg/tui"
+	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
 
 // draftDebounce coalesces editor drafts: one emission per pause in typing.
@@ -195,6 +196,12 @@ func newSessionHub(deps hubDeps) *sessionHub {
 			Window: deps.active.ContextWindow, Caps: deps.active.Caps}
 	}
 	h.ui = &hubUI{UI: deps.ui, hub: h, dialogs: deps.dialogs}
+	if deps.ui != nil {
+		// chrome paints through the shared applier, so the local terminal renders
+		// its own mutations with the same mapping an attached terminal applies to
+		// the wire events this hub publishes
+		h.ui.ap = newApplier(deps.ui, tuisink.New(deps.ui), applyHooks{})
+	}
 	return h
 }
 

@@ -401,3 +401,40 @@ func TestHubUIIdleAndSpinTrack(t *testing.T) {
 	assert.False(t, hub.vm.running) // the turn boundary tracked it back off
 	hub.mu.Unlock()
 }
+
+// TestHubUIPaintsThroughSharedApplier pins the host half of the shared
+// applier: reported mutations paint the local terminal through the same
+// mapping an attached terminal applies to wire events, not past it.
+func TestHubUIPaintsThroughSharedApplier(t *testing.T) {
+	t.Parallel()
+
+	term, out := pipeUI(t)
+	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
+	ui := hub.ui
+	require.NotNil(t, ui.ap)
+
+	ui.Notify("shared notice", tui.LevelWarn)
+	ui.NotifyKeyed("subagent", "one job", tui.LevelInfo)
+	ui.Print("## printed block")
+	ui.SetStatusSegment(segment(segMCP, "mcp 1/2", ""))
+	ui.SetActivityRanked("job:1", "reading", 1)
+
+	require.Eventually(t, func() bool {
+		o := out()
+		return strings.Contains(o, "shared notice") &&
+			strings.Contains(o, "one job") &&
+			strings.Contains(o, "printed block")
+	}, 2*time.Second, 5*time.Millisecond)
+
+	assert.Equal(t, map[string]bool{segMCP: true}, apKeys(ui.ap.segs))
+	assert.Equal(t, map[string]bool{"job:1": true}, apKeys(ui.ap.acts))
+}
+
+// apKeys reduces an applier's tracked keys for comparison.
+func apKeys(tracked map[string]struct{}) map[string]bool {
+	out := make(map[string]bool, len(tracked))
+	for key := range tracked {
+		out[key] = true
+	}
+	return out
+}

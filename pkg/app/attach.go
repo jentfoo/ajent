@@ -246,8 +246,7 @@ func attachOnce(view *attachView, conn *client.Conn, hello ctl.Hello, holderName
 		ui.Notify("watching read-only: writes need the control seat", tui.LevelWarn)
 	}
 
-	view.waitIdle()
-	ui.SetIdle(!view.isRunning())
+	view.waitIdle() // the backfill snapshot owns idle, running chrome included
 	view.installRecall()
 	ui.SetOnRewind(func() { view.rewindPicker() })
 

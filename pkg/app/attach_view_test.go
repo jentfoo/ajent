@@ -901,3 +901,42 @@ func TestAttachAppendDedupeById(t *testing.T) {
 	a.view.send(func() { assert.Contains(t, a.view.rendered, assistant.ID) })
 	a.view.waitIdle()
 }
+
+// TestAttachReconnectClearsStaleChrome pins the resnapshot reconcile against a
+// mid-turn disconnect: segments, activity rows and queue rows the new snapshot
+// no longer lists clear instead of lingering, and a spinner whose turn ended
+// while this terminal was away does not survive the reconnect.
+func TestAttachReconnectClearsStaleChrome(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+
+	// chrome paints live over the wire, then this surface goes mid-turn with no
+	// end event following it
+	rig.hub.ui.SetStatusSegment(segment(segMCP, "mcp 1/2", ""))
+	rig.hub.ui.SetActivityRanked("job:1", "reading", 1)
+	rig.hub.ui.SetQueued([]ctl.QueueRow{{ID: "q1", Text: "queued prompt"}})
+	a.view.handle(ctl.NewEvent(ctl.EventTurnStart, 10, ctl.TurnStartData{}))
+	require.Eventually(t, func() bool {
+		var ok bool
+		ran := a.view.call(func() {
+			ok = len(a.view.ap.segs) == 1 && len(a.view.ap.acts) == 1 &&
+				len(a.view.wireQueued) == 1 && a.view.running
+		})
+		return ran && ok
+	}, ctlWait, 5*time.Millisecond)
+	require.False(t, a.view.ui.Idle())
+
+	// the reconnect's snapshot lists none of it: all of it clears
+	snap := ctl.State{Head: rig.rec.w.Head(), Idle: true}
+	a.view.send(func() { require.NoError(t, a.view.applyBackfill(snap, nil, 0)) })
+	a.view.waitIdle()
+
+	assert.Empty(t, a.view.ui.Queued())
+	assert.True(t, a.view.ui.Idle())
+	a.view.send(func() {
+		assert.False(t, a.view.running) // the forced turn end recovered the idle fact
+		assert.Empty(t, a.view.ap.segs)
+		assert.Empty(t, a.view.ap.acts)
+	})
+	a.view.waitIdle()
+}

@@ -5,17 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/go-analyze/bulk"
-	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
 )
@@ -26,7 +23,8 @@ const preLiveBufMax = 1024
 
 // attachView renders one remote session onto a local terminal: backfill from
 // the transcript file and snapshot, then the live event stream applied through
-// the same sink mapping the host's own renderer uses.
+// the shared applier, the same projection the host terminal paints its own
+// mutations with.
 //
 // One goroutine owns the view: every mutation (events, backfill, head moves,
 // reconnect transitions) is a message on the actor queue, which makes the
@@ -34,7 +32,8 @@ const preLiveBufMax = 1024
 // impossible rather than fixed. Requests off the actor run on the view root.
 type attachView struct {
 	ui   *tui.UI
-	sink *tuisink.Sink
+	sink *tuisink.Sink   // committed rendering: replay and the one echo rule
+	ap   *applier        // live events: stream mapping plus chrome, over the same sink
 	root context.Context // base for background requests issued off the actor
 	// path is the transcript file hello named; bulk reads (backfill, recall,
 	// redraw) come from it at local speed instead of over the socket
@@ -54,9 +53,8 @@ type attachView struct {
 	conn         *client.Conn
 	rendered     map[string]struct{} // committed entry ids this surface already shows
 	pending      []pendingRow        // this terminal's submitted prompts awaiting their entry
-	wireQueued   []ctl.QueueRow      // the last queued event's rows, for pending merges
+	wireQueued   []ctl.QueueRow      // the last queue copy, for pending merges
 	dialogs      map[uint64]context.CancelFunc
-	calls        map[string]*attachCall
 	outcome      *time.Timer
 	live         bool        // backfill completed; events apply instead of buffering
 	buf          []ctl.Event // events seen before backfill, applied against its watermark
@@ -79,13 +77,6 @@ func (v *attachView) transcript() string {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.path
-}
-
-// isRunning reads the remote turn state for the idle write at attach.
-func (v *attachView) isRunning() bool {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	return v.running
 }
 
 // helloNow reads the greeting of the connection in use.
@@ -131,16 +122,10 @@ type pendingRow struct {
 func (v *attachView) submitFailed(id, line string, err error) {
 	v.send(func() {
 		v.takePendingID(id)
-		v.ui.SetQueued(v.withPending(v.wireQueued))
+		v.refreshQueue()
 	})
 	v.ui.Notify("submit failed: "+err.Error()+"; the text is kept in the editor", tui.LevelWarn)
 	v.ui.PrependInput(line)
-}
-
-// attachCall is one in-flight tool call's client-side state.
-type attachCall struct {
-	done     func(agent.ToolResult) // the header hook ui.ToolStart returned
-	streamed bool                   // output deltas already rendered locally
 }
 
 // newAttachView builds the view over a connected client; root is cancelled at
@@ -150,16 +135,22 @@ func newAttachView(ui *tui.UI, conn *client.Conn, root context.Context, transcri
 		ui: ui, sink: tuisink.New(ui), conn: conn, root: root,
 		path:    transcriptPath,
 		dialogs: make(map[uint64]context.CancelFunc),
-		calls:   make(map[string]*attachCall),
 		msgs:    make(chan func(), 256),
 		closed:  make(chan struct{}),
 	}
+	v.ap = newApplier(ui, v.sink, applyHooks{
+		queueRows:     v.queueTexts,
+		dropped:       v.queueDropped,
+		running:       v.setRunning,
+		dialogPending: func(d ctl.InteractionPendingData) { v.beginInteraction(root, d) },
+		dialogSettled: v.settleInteraction,
+	})
 	go v.run()
 	return v
 }
 
 // run is the actor loop: the only goroutine that touches the sink, the
-// rendered set, pending rows, dialogs and call tracking.
+// rendered set, pending rows and dialogs.
 func (v *attachView) run() {
 	defer close(v.closed)
 	for {
@@ -244,7 +235,6 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 	v.mu.Lock()
 	headMoved := snap.Head != v.head && !first
 	v.head = snap.Head
-	v.running = snap.Spinning
 	v.mu.Unlock()
 	prev := v.rendered
 	v.rendered = bulk.SliceToSetBy(func(e session.Entry) string { return e.ID }, branch)
@@ -261,7 +251,7 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 		}
 	}
 	v.reconcilePending(branch)
-	v.applySnapshot(snap)
+	v.ap.Snapshot(snap) // the reconcile pass clears what the snapshot no longer lists
 	v.reconcileDialogs(v.root, snap.Interactions)
 	return nil
 }
@@ -329,28 +319,6 @@ func (v *attachView) recallSources() (search func() []tui.SearchItem, arrows fun
 	return search, arrows
 }
 
-// applySnapshot paints the chrome a snapshot holds truth for.
-func (v *attachView) applySnapshot(snap ctl.State) {
-	if snap.Model.Key != "" {
-		v.ui.SetModel(snap.Model.Key, snap.Model.Short, snap.Model.Window)
-	}
-	for _, seg := range snap.Status.Segments {
-		v.ui.SetStatusSegment(segment(seg.Key, seg.Text, seg.Short))
-	}
-	v.sink.Context(tokens.ContextState{Used: snap.Context.Used, Window: snap.Context.Window,
-		Reserve: snap.Context.Reserve, Compact: snap.Context.Compact, Estimated: snap.Context.Estimated})
-	if len(snap.QueuedRows) > 0 || len(v.pending) > 0 {
-		v.ui.SetQueued(v.withPending(snap.QueuedRows))
-	}
-	for _, a := range snap.Activity {
-		v.ui.SetActivityRanked(a.Key, a.Text, a.Rank)
-	}
-	if snap.Spinning {
-		v.sink.TurnStart(agent.TurnInfo{})
-		v.setRunning(true)
-	}
-}
-
 // handle applies one live event, buffering on the actor until backfill lands:
 // queue order renders history first, then the watermark drops what it superseded.
 func (v *attachView) handle(ev ctl.Event) {
@@ -368,134 +336,10 @@ func (v *attachView) handle(ev ctl.Event) {
 	})
 }
 
-// apply maps one control event onto the terminal surface. Stream events mirror
-// the host renderer's own sink calls one to one; session surfaces forward to
-// the tui methods that produced them.
+// apply applies one live event. Committed rendering and head moves reconcile
+// through this view's own books; everything else rides the shared applier.
 func (v *attachView) apply(ev ctl.Event) {
 	switch ev.Name {
-	// --- stream events, through the shared sink mapping ---
-
-	case ctl.EventTurnStart:
-		v.sink.TurnStart(agent.TurnInfo{})
-		v.setRunning(true)
-	case ctl.EventThinkingDelta:
-		var d ctl.TextData
-		if ev.Decode(&d) == nil {
-			v.sink.Thinking(d.Delta)
-		}
-	case ctl.EventThinkingEnd:
-		v.sink.EndThinking()
-	case ctl.EventTextDelta:
-		var d ctl.TextData
-		if ev.Decode(&d) == nil {
-			v.sink.Text(d.Delta)
-		}
-	case ctl.EventTextEnd:
-		v.sink.EndText()
-	case ctl.EventToolStart:
-		var d ctl.ToolStartData
-		if ev.Decode(&d) != nil {
-			return
-		}
-		done := v.sink.ToolStart(agent.ToolCall{ID: d.ID, Name: d.Name}, d.Label, d.Full)
-		v.callFor(d.ID).done = done
-	case ctl.EventToolOutput:
-		var d ctl.ToolOutputData
-		if ev.Decode(&d) == nil {
-			v.callFor(d.ID).streamed = true // deltas render below; the result path must not repeat them
-			v.sink.ToolOutput(d.ID, d.Delta)
-		}
-	case ctl.EventToolProgress:
-		var d ctl.ToolProgressData
-		if ev.Decode(&d) != nil {
-			return
-		}
-		v.sink.ToolProgress(agent.ToolProgress{CallID: d.ID, Name: d.Name,
-			Path: d.Path, Bytes: d.Bytes, Lines: d.Lines, Done: d.Done})
-	case ctl.EventToolResult:
-		var d ctl.ToolResultData
-		if ev.Decode(&d) != nil {
-			return
-		}
-		call := v.takeCall(d.ID)
-		done := call.done
-		if done == nil {
-			// a start lost to the attach window renders its header here, late but
-			// attached to its body
-			done = v.sink.ToolStart(agent.ToolCall{ID: d.ID, Name: d.Name}, d.Name, false)
-		}
-		res := agent.ToolResult{IsError: d.Error}
-		if !call.streamed {
-			// a non-streaming tool's body reaches history only through the result;
-			// streamed deltas already commit at their end, so their full-text copy
-			// on the wire (for controllers without the stream) must not render again
-			res.Display = d.Output
-			if d.Error && strings.TrimSpace(d.Output) != "" {
-				// an error's body commits from Content on the shared sink path,
-				// never Display, so a denial reason survives the wire round trip
-				res.Content = llm.BlockList{llm.TextBlock{Text: d.Output}}
-			}
-		}
-		done(res)
-	case ctl.EventDiff:
-		var d ctl.DiffData
-		if ev.Decode(&d) == nil {
-			v.sink.Diff(d.Path, d.Before, d.After)
-		}
-	case ctl.EventContext:
-		var d ctl.ContextData
-		if ev.Decode(&d) == nil {
-			v.sink.Context(tokens.ContextState{Used: d.Used, Window: d.Window,
-				Reserve: d.Reserve, Compact: d.Compact, Estimated: d.Estimated})
-		}
-	case ctl.EventTurnEnd:
-		v.sink.TurnEnd(agent.TurnResult{})
-		v.setRunning(false)
-		v.dropCalls() // calls whose result never landed keep nothing behind
-
-	// --- session events, forwarded to the methods that produced them ---
-
-	case ctl.EventNotice:
-		var d ctl.NoticeData
-		if ev.Decode(&d) != nil {
-			return
-		}
-		level := wireLevel(d.Level)
-		if d.Key == "" {
-			v.ui.Notify(d.Text, level)
-		} else {
-			v.ui.NotifyKeyed(d.Key, d.Text, level)
-		}
-	case ctl.EventPrint:
-		var d ctl.PrintData
-		if ev.Decode(&d) == nil {
-			v.ui.Print(d.Markdown)
-		}
-	case ctl.EventStatus:
-		v.applyStatus(ev)
-	case ctl.EventActivity:
-		var d ctl.ActivityData
-		if ev.Decode(&d) == nil {
-			v.ui.SetActivityRanked(d.Key, d.Text, d.Rank)
-		}
-	case ctl.EventQueued:
-		var d ctl.QueuedData
-		if ev.Decode(&d) == nil {
-			v.wireQueued = d.Rows
-			v.ui.SetQueued(v.withPending(d.Rows))
-		}
-	case ctl.EventQueueDropped:
-		var d ctl.QueueDroppedData
-		if ev.Decode(&d) != nil {
-			return
-		}
-		v.resolvePending(d.Rows)
-		for range d.Rows {
-			v.showOutcome(dropOutcome(d.Cause))
-		}
-
-	// editor drafts are droppable: two editors typing would fight over the buffer
-
 	case ctl.EventEntryAppend:
 		var d ctl.EntryData
 		if ev.Decode(&d) == nil {
@@ -513,26 +357,8 @@ func (v *attachView) apply(ev ctl.Event) {
 			return // the compaction entry itself arrives via entry.append
 		}
 		v.requestRedraw()
-	case ctl.EventSessionRenamed, ctl.EventPermission, ctl.EventTools:
-		// chrome and session facts the next snapshot carries, so nothing paints
-		// from these alone (a mode change's segment arrives via its status event)
-	case ctl.EventIdle:
-		var d ctl.IdleData
-		if ev.Decode(&d) == nil {
-			v.ui.SetIdle(d.Idle) // the host's at-rest fact, drain window included
-		}
-	case ctl.EventInteractionPending:
-		var d ctl.InteractionPendingData
-		if ev.Decode(&d) == nil {
-			// the racer must outlive the event that announced it, so it roots on
-			// the view, not any request context
-			v.beginInteraction(v.root, d)
-		}
-	case ctl.EventInteractionSettled:
-		var d ctl.InteractionSettledData
-		if ev.Decode(&d) == nil {
-			v.settleInteraction(d.ID)
-		}
+	default:
+		v.ap.Apply(ev)
 	}
 }
 
@@ -546,6 +372,27 @@ func dropOutcome(cause string) string {
 		cause = "cleared"
 	}
 	return "prompt dropped (" + cause + ")"
+}
+
+// queueTexts maps one wire copy of the queue onto display rows for the shared
+// applier, remembering the copy so later repaints merge this terminal's own
+// submissions into it.
+func (v *attachView) queueTexts(rows []ctl.QueueRow) []string {
+	v.wireQueued = rows
+	return v.withPending(rows)
+}
+
+// refreshQueue repaints the queue display from the last wire copy and this
+// terminal's unresolved submissions, after a pending row resolved inline.
+func (v *attachView) refreshQueue() { v.ap.queued(v.wireQueued) }
+
+// queueDropped resolves this terminal's pending rows a removal cleared and
+// flashes one outcome per row on the hint line.
+func (v *attachView) queueDropped(d ctl.QueueDroppedData) {
+	v.resolvePending(d.Rows)
+	for range d.Rows {
+		v.showOutcome(dropOutcome(d.Cause))
+	}
 }
 
 // applyAppend applies the wire rule for committed entries: ids already
@@ -572,7 +419,7 @@ func (v *attachView) applyAppend(e ctl.Entry) {
 		if entry.Decode(&md) == nil && md.Message.Role == llm.RoleUser &&
 			v.takeCommitted(md.QueueIDs) {
 			// the row resolved with its entry: repaint without it
-			v.ui.SetQueued(v.withPending(v.wireQueued))
+			v.refreshQueue()
 		}
 	}
 	v.renderEntry(entry)
@@ -597,7 +444,7 @@ func (v *attachView) reconcilePending(branch []session.Entry) {
 		}
 	}
 	if resolved {
-		v.ui.SetQueued(v.withPending(v.wireQueued))
+		v.refreshQueue()
 	}
 }
 
@@ -675,7 +522,7 @@ func (v *attachView) submitPending(line string) string {
 	id := newQueueID()
 	v.send(func() {
 		v.pending = append(v.pending, pendingRow{id: id, text: line})
-		v.ui.SetQueued(v.withPending(v.wireQueued))
+		v.refreshQueue()
 	})
 	return id
 }
@@ -690,54 +537,6 @@ func (v *attachView) showOutcome(text string) {
 	v.outcome = time.AfterFunc(4*time.Second, func() {
 		v.ui.SetStatusSegment(segment(segHint, "", ""))
 	})
-}
-
-// applyStatus forwards one status-row change. Spinning is ignored: the turn
-// events driving the host's own spinner drive this view's through the sink.
-func (v *attachView) applyStatus(ev ctl.Event) {
-	var d ctl.StatusData
-	if ev.Decode(&d) != nil {
-		return
-	}
-	switch {
-	case d.Segment != nil:
-		// placement comes from this build's spec table, so equal keys collapse alike
-		v.ui.SetStatusSegment(segment(d.Segment.Key, d.Segment.Text, d.Segment.Short))
-	case d.Model != nil:
-		v.ui.SetModel(d.Model.Key, d.Model.Short, d.Model.Window)
-	}
-}
-
-// callFor returns one call's tracking entry, creating it when output or a
-// result arrives beside (or ahead of) its start event.
-func (v *attachView) callFor(id string) *attachCall {
-	if id == "" {
-		return &attachCall{}
-	}
-	c, ok := v.calls[id]
-	if !ok {
-		c = &attachCall{}
-		v.calls[id] = c
-	}
-	return c
-}
-
-// takeCall consumes one call's tracking entry for its result.
-func (v *attachView) takeCall(id string) *attachCall {
-	if id == "" {
-		return &attachCall{}
-	}
-	c := v.calls[id]
-	delete(v.calls, id)
-	if c == nil {
-		c = &attachCall{}
-	}
-	return c
-}
-
-// dropCalls forgets every tracked call; turn end is the natural boundary.
-func (v *attachView) dropCalls() {
-	v.calls = make(map[string]*attachCall)
 }
 
 // requestRedraw queues one full repaint from the transcript file. Coalesced:
@@ -965,16 +764,4 @@ func pickItems(opts []string) []tui.PickItem {
 		items[i] = tui.PickItem{Label: o}
 	}
 	return items
-}
-
-// wireLevel maps a notice event's level onto the terminal's.
-func wireLevel(s string) tui.Level {
-	switch s {
-	case "warn":
-		return tui.LevelWarn
-	case "error":
-		return tui.LevelError
-	default:
-		return tui.LevelInfo
-	}
 }

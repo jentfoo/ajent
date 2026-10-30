@@ -178,7 +178,10 @@ record and never spends an event number.
 **Reconnect is always a resnapshot.** There is no retained-window replay on the wire. A
 reconnecting controller snapshots again and renders only the difference against what it has
 already rendered, which removes the whole class of gaps a bounded replay buffer creates.
-The snapshot's open dialogs are part of that difference, so a dialog spanning a drop
+The difference cuts both ways: the snapshot's applier also clears what the new state no
+longer lists (segments, activity rows and queue rows removed while the terminal was away,
+and a spinner whose turn ended without its end event surviving the drop), so stale chrome
+cannot outlive the resnapshot. The snapshot's open dialogs are part of that difference, so a dialog spanning a drop
 re-races instead of stranding the run on a dialog nobody attached can see.
 
 Delivery is fail-open and bounded. Each connection stages outbound lines behind its own
@@ -219,10 +222,14 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
   transcript. Model, tools and permission mode belong to the served run and only paint
   settings are local, so flags that configure a local run are refused at parse time rather
   than silently ignored.
-- **Parity is structural.** Events replay through the same sink mapping the host terminal
-  applies to its own output, and committed history through transcript replay. State that
-  would fight the host's stays local: editor drafts, prompt recall from history, and the
-  pre-fill a rewind computes from the branch it already read. Recall reads the same
+- **Parity is structural.** One applier projects every control payload onto a terminal:
+  stream events ride tui/sink's mapping (one tool-result fallback) and chrome families
+  forward through one narrow surface interface, so the host renders its own mutations with
+  exactly what an attached terminal applies to the wire: a new keyed row renders on both
+  surfaces with three touches (a view-model field, an event payload, one applier case).
+  Local-only surfaces are declared by staying off that interface: editor drafts, prompt
+  recall from history, and the pre-fill a rewind computes from the branch it already read.
+  Recall reads the same
   local stores the host keyboard recalls from (`command-design.md`), keyed by hello's
   workspace: Ctrl+R walks the workspace-wide store, arrows scope to this session's
   transcript. The one editor gesture that reaches across is Alt+Up: queue recall runs

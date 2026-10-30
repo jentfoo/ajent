@@ -48,17 +48,25 @@ func (s *ctlStreamSink) ToolStart(call agent.ToolCall, label string, full bool) 
 	})
 	return func(res agent.ToolResult) {
 		staged := s.takeOutput(call.ID) // always consumed, so streamed output never accumulates
-		out := res.Display
-		if strings.TrimSpace(out) == "" {
-			out = staged
-		}
-		if strings.TrimSpace(out) == "" {
-			out = llm.FirstBlockText(res.Content)
-		}
 		s.hub.publish(ctl.EventToolResult, ctl.ToolResultData{
-			ID: call.ID, Name: call.Name, Output: out, Error: res.IsError,
+			ID: call.ID, Name: call.Name,
+			Output: toolResultBody(res.Display, staged, res.Content), Error: res.IsError,
 		})
 	}
+}
+
+// toolResultBody picks a finished call's body for the wire and json lines:
+// what history shows when it differs from the streamed output, then streamed
+// output no one else saw, then the model-facing content. The apply side of the
+// same convention lives on the applier's toolResult.
+func toolResultBody(display, streamed string, blocks llm.BlockList) string {
+	if strings.TrimSpace(display) != "" {
+		return display
+	}
+	if strings.TrimSpace(streamed) != "" {
+		return streamed
+	}
+	return llm.FirstBlockText(blocks)
 }
 
 func (s *ctlStreamSink) ToolOutput(id, d string) {

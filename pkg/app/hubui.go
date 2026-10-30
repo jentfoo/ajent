@@ -9,21 +9,28 @@ import (
 
 // hubUI is the shim between the session's consumers and the two surfaces a
 // mutation reaches: the hub's view model (which publishes the wire event) and
-// the local terminal (which repaints). Every mutating call routes through the
-// hub first, then tui.UI. A nil terminal (serve mode) skips the paint and the
-// hub stays the sole front end, so no call site needs a nil check. Anything a
-// shim method does not forward is either a stream event (observed through the
-// hub's sink) or local-only chrome: editor wiring, dialogs, recall, theme.
+// the local terminal, which repaints through the shared applier, the same
+// mapping an attached terminal renders wire events with. A nil terminal (serve
+// mode) skips the paint and the hub stays the sole front end, so no call site
+// needs a nil check.
+//
+// The split is explicit in what each method forwards: every reported mutation
+// applies locally through ap, then reports to the hub. Anything else on tui.UI
+// that a shim method reaches past ap is local-only chrome by decision, not by
+// omission: editor wiring (SetInput, PrependInput, Insert), dialog surfaces,
+// theme, recall stores, and the NotifyLocal pair whose committed entries
+// already carry their text to controllers.
 type hubUI struct {
 	*tui.UI
 	hub     *sessionHub
 	dialogs *interactionBroker
+	ap      *applier // nil with no terminal: serve mode reports without painting
 }
 
 // Notify commits a marked line and reports it.
 func (u *hubUI) Notify(msg string, level tui.Level) {
 	if u.UI != nil {
-		u.UI.Notify(msg, level)
+		u.ap.notice("", msg, level)
 	}
 	u.hub.notice("", msg, level)
 }
@@ -47,7 +54,7 @@ func (u *hubUI) NotifyKeyedLocal(key, msg string, level tui.Level) {
 // NotifyKeyed commits a keyed notice and reports it with its key.
 func (u *hubUI) NotifyKeyed(key, msg string, level tui.Level) {
 	if u.UI != nil {
-		u.UI.NotifyKeyed(key, msg, level)
+		u.ap.notice(key, msg, level)
 	}
 	u.hub.notice(key, msg, level)
 }
@@ -55,7 +62,7 @@ func (u *hubUI) NotifyKeyed(key, msg string, level tui.Level) {
 // Print renders markdown into history and reports it.
 func (u *hubUI) Print(markdown string) {
 	if u.UI != nil {
-		u.UI.Print(markdown)
+		u.ap.print(markdown)
 	}
 	u.hub.print(markdown)
 }
@@ -63,7 +70,7 @@ func (u *hubUI) Print(markdown string) {
 // SetStatusSegment adds, replaces or removes a keyed segment and reports it.
 func (u *hubUI) SetStatusSegment(seg tui.Segment) {
 	if u.UI != nil {
-		u.UI.SetStatusSegment(seg)
+		u.ap.segment(seg)
 	}
 	u.hub.setSegment(seg)
 }
@@ -73,7 +80,7 @@ func (u *hubUI) SetStatusSegment(seg tui.Segment) {
 // SetModelOf where the full model is in hand.
 func (u *hubUI) SetModel(name, short string, maxTokens int) {
 	if u.UI != nil {
-		u.UI.SetModel(name, short, maxTokens)
+		u.ap.model(name, short, maxTokens)
 	}
 	u.hub.setModelLabel(name, short, maxTokens)
 }
@@ -82,23 +89,20 @@ func (u *hubUI) SetModel(name, short string, maxTokens int) {
 // hub's copy. Every live model switch routes through here.
 func (u *hubUI) SetModelOf(m llm.Model) {
 	if u.UI != nil {
-		u.UI.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+		u.ap.model(m.Key(), m.ShortName(), m.ContextWindow)
 	}
 	u.hub.setModel(m)
 }
 
 // SetActivity adds, replaces or removes a keyed activity row and reports it.
 func (u *hubUI) SetActivity(key, text string) {
-	if u.UI != nil {
-		u.UI.SetActivity(key, text)
-	}
-	u.hub.setActivity(key, text, activityUnranked)
+	u.SetActivityRanked(key, text, activityUnranked)
 }
 
 // SetActivityRanked is SetActivity with the producer's own stable order.
 func (u *hubUI) SetActivityRanked(key, text string, rank int) {
 	if u.UI != nil {
-		u.UI.SetActivityRanked(key, text, rank)
+		u.ap.activity(key, text, rank)
 	}
 	u.hub.setActivity(key, text, rank)
 }
@@ -107,7 +111,7 @@ func (u *hubUI) SetActivityRanked(key, text string, rank int) {
 // surface renders the real texts, the hub publishes rows with secrets redacted.
 func (u *hubUI) SetQueued(rows []ctl.QueueRow) {
 	if u.UI != nil {
-		u.UI.SetQueued(queueRowTexts(rows))
+		u.ap.queued(rows)
 	}
 	u.hub.setQueued(rows)
 }
@@ -115,7 +119,7 @@ func (u *hubUI) SetQueued(rows []ctl.QueueRow) {
 // SetIdle flips the prompt's rest state and reports it.
 func (u *hubUI) SetIdle(idle bool) {
 	if u.UI != nil {
-		u.UI.SetIdle(idle)
+		u.ap.idle(idle)
 	}
 	u.hub.setIdle(idle)
 }
@@ -144,10 +148,11 @@ func (u *hubUI) SetTheme(pal tui.Palette) {
 }
 
 // SetContext updates the context bar and reports it: the numbers are view
-// model state, published on the context event family.
+// model state, published on the context event family. The paint rides the
+// applier's own sink mapping, like an attached terminal's context event.
 func (u *hubUI) SetContext(ci tui.ContextInfo) {
 	if u.UI != nil {
-		u.UI.SetContext(ci)
+		u.ap.context(contextState(ci))
 	}
 	u.hub.setContext(contextState(ci))
 }
@@ -170,7 +175,7 @@ func (u *hubUI) Busy() func() {
 }
 
 // SetInput replaces the editor buffer and feeds the remembered draft, since a
-// host fill fires no edit callback.
+// host fill fires no edit callback. Local-only: drafts never leave the process.
 func (u *hubUI) SetInput(text string) {
 	if u.UI != nil {
 		u.UI.SetInput(text)
@@ -179,7 +184,7 @@ func (u *hubUI) SetInput(text string) {
 }
 
 // PrependInput inserts text above the editor's draft and feeds the remembered
-// draft the same way.
+// draft the same way. Local-only, like SetInput.
 func (u *hubUI) PrependInput(text string) {
 	if u.UI != nil {
 		u.UI.PrependInput(text)
@@ -191,7 +196,7 @@ func (u *hubUI) PrependInput(text string) {
 // prompts into. Serve mode answers false: an interrupt drops them instead.
 func (u *hubUI) Interactive() bool { return u.UI != nil }
 
-// contextState maps the terminal's context view onto the ledger's terms. The
+// contextState maps the terminal's context view onto the ledger's terms; the
 // field lists are pinned equal by tui/sink's own conversion test.
 func contextState(ci tui.ContextInfo) tokens.ContextState {
 	return tokens.ContextState{Used: ci.Used, Window: ci.Window,
