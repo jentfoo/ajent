@@ -115,8 +115,13 @@ The session hub stamps every observable change with one event number at commit, 
 fanout, so commit order equals event order for every connection. Every reply carries the
 number its result was taken at, a snapshot's own number for reads and the post-mutation
 watermark for writes. That is the whole reconciliation rule: events at or below it are
-superseded by the result, events above it apply. A snapshot reads its number, head and
-ephemeral state atomically, so it can never describe two moments.
+superseded by the result, events above it apply. A snapshot's number and its hub-held
+fields share one critical section; the sources that keep their own locks (the writer's
+head, the dialog broker, the agent, the barrier, the tool registry) are read immediately
+after, so a snapshot may describe a moment slightly newer than its own number. That
+direction is safe: the newer state already supersedes the at-or-below events, and an
+above-number event that re-describes it is idempotent by entry id, dialog id or full
+replacement.
 
 **Committed versus ephemeral.** Two families share the number space. The committed family
 is entry appends and branch changes, and everything scrollback-visible renders from it plus
@@ -136,6 +141,16 @@ cancels racers whose dialogs settled while it was away. Reconciliation stays the
 watermark rule, by dialog id. Open dialogs ride the socket only: never the transcript
 (they are runtime state, not history) and never the discovery record (which stays static
 facts for pickers).
+
+**Poll-only facts.** Not every snapshot field has a change event. The permission mode,
+tool rows, usage totals, model capabilities, the queue count and idle are announced by
+nothing: they mutate rarely and often note themselves another way (a mode cycle shows a
+notice and a status segment, tool toggles print), so a controller reads them by
+resnapshotting. The contract for a new snapshot field is to either publish a change
+event or join this named list, and the hub test holds the inventory to that, so a
+rendering surface can always tell which facts events carry and which only a snapshot
+reads. Seat release by disconnect follows the same rule: it rewrites the discovery
+record and never spends an event number.
 
 **Reconnect is always a resnapshot.** There is no retained-window replay on the wire. A
 reconnecting controller snapshots again and renders only the difference against what it has
@@ -236,7 +251,9 @@ prompts verbatim, so redaction covers the live surfaces only.
 2. One seat at a time, released by disconnection or yield. Observers never mutate, and local
    keys always work.
 3. One number space orders events and reply watermarks alike. Commit order equals event
-   order, so a snapshot and a live stream reconcile by one rule.
+   order, so a snapshot and a live stream reconcile by one rule. A snapshot field either
+   has a change event or sits on the named poll-only list, and the hub test holds that
+   inventory.
 4. Committed content is entry appends plus branch changes, reconciled by entry id alone.
    Everything else is ephemeral, governed by the watermark and never reconciled against the
    file, except open dialogs: they hold the run, so every snapshot lists them and every

@@ -3,7 +3,6 @@ package session
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -309,10 +308,33 @@ func TestReplay(t *testing.T) {
 	})
 }
 
-// TestEchoPrompt pins the live-echo rule against Replay's: only a typed prompt
-// echoes, tool-result carriers and injected context never do, and the text
-// matches what Replay draws for the same entry.
-func TestEchoPrompt(t *testing.T) {
+// echoSink records only the standalone shapes EchoEntry may paint, ignoring
+// the turn machinery and real tool headers Replay folds, so a parity run
+// compares like with like.
+type echoSink struct {
+	agent.NopSink
+	calls []string
+}
+
+func (s *echoSink) UserPrompt(text string) { s.calls = append(s.calls, "user:"+text) }
+func (s *echoSink) Notice(m string, l agent.Level) {
+	s.calls = append(s.calls, fmt.Sprintf("notice:%d:%s", l, m))
+}
+
+// ToolStart records a real tool header only when the call names a tool; an
+// injected block carries none, which is what distinguishes it from folding.
+func (s *echoSink) ToolStart(call agent.ToolCall, label string, _ bool) func(agent.ToolResult) {
+	if call.Name != "" {
+		return func(agent.ToolResult) {} // replay folding, not an echo shape
+	}
+	s.calls = append(s.calls, "iblock:"+label)
+	return func(res agent.ToolResult) { s.calls = append(s.calls, "ibody:"+res.Display) }
+}
+
+// TestEchoEntry pins the standalone paint rule entry by entry: a typed prompt
+// echoes, a replay-marked injected block draws as its own block, a notice
+// replays, and everything Replay folds or the stream owns paints nothing.
+func TestEchoEntry(t *testing.T) {
 	t.Parallel()
 
 	prompt := msgUser("m1", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
@@ -322,31 +344,36 @@ func TestEchoPrompt(t *testing.T) {
 	cases := []struct {
 		name string
 		e    Entry
-		want string
+		want []string
 	}{
-		{"prompt_joins_text", prompt, "one two"},
-		{"tool_result_carrier", resultMessage("r1", "c1", "denied by user"), ""},
-		{"parallel_result_carrier", parallelBranch()[2], ""},
-		{"error_result_carrier", resultMessageErr("r2", "c1"), ""},
-		{"injected_context", injectedUser("i1", "User Ran: date"), ""},
-		{"replayed_injected", replayedUser("i2", "User Ran: date"), ""},
-		{"assistant_message", assistantText("a1", "answer"), ""},
-		{"notice_entry", noticeEntry("n1", NoticeData{Message: "careful"}), ""},
-		{"undecodable_data", Entry{ID: "x", Type: TypeMessage, Data: []byte("{")}, ""},
+		{"prompt_joins_text", prompt, []string{"user:one two"}},
+		{"tool_result_carrier", resultMessage("r1", "c1", "denied by user"), nil},
+		{"parallel_result_carrier", parallelBranch()[2], nil},
+		{"error_result_carrier", resultMessageErr("r2", "c1"), nil},
+		{"injected_context", injectedUser("i1", "User Ran: date"), nil},
+		{"replayed_injected_draws_block", replayedUser("i2", "User Ran: date\n\nOutput:\n16:00"),
+			[]string{"iblock:User Ran: date", "ibody:Output:\n16:00"}},
+		{"replayed_injected_blank_label", replayedUser("i3", "   "), nil},
+		{"assistant_message", assistantText("a1", "answer"), nil},
+		{"notice_entry", noticeEntry("n1", NoticeData{Message: "careful"}), []string{"notice:0:careful"}},
+		{"session_entry", Entry{ID: "s", Type: TypeSession}, nil},
+		{"undecodable_data", Entry{ID: "x", Type: TypeMessage, Data: []byte("{")}, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, EchoPrompt(tc.e))
+			s := &echoSink{}
+			EchoEntry(tc.e, s)
+			assert.Equal(t, tc.want, s.calls)
 		})
 	}
 }
 
-// TestEchoPromptMatchesReplay pins the coupling between live rendering and
-// replay: for every entry of a branch carrying all message shapes, EchoPrompt
-// returns exactly the text Replay echoes as that entry's prompt, and nothing
-// for the entries Replay folds or draws as blocks. Replay may change how it
-// draws; this test is what forces the live echo rule to follow.
-func TestEchoPromptMatchesReplay(t *testing.T) {
+// TestEchoEntryMatchesReplay pins the coupling between live rendering and
+// replay: for every entry of a branch carrying all message shapes, EchoEntry
+// paints exactly the standalone calls Replay draws for that entry, in order.
+// Replay may change how it folds turns and tools; this test is what forces the
+// live echo rule to follow.
+func TestEchoEntryMatchesReplay(t *testing.T) {
 	t.Parallel()
 
 	branch := []Entry{
@@ -360,25 +387,28 @@ func TestEchoPromptMatchesReplay(t *testing.T) {
 		}}),
 		injectedUser("i1", "User Ran: date"),
 		replayedUser("i2", "User Ran: echo hi"),
+		replayedUser("i3", "   "),
 		msgUser("m3", llm.Text(llm.RoleUser, "last prompt")),
 		noticeEntry("n1", NoticeData{Message: "careful"}),
+		assistantText("a2", "done"),
+		{ID: "bad", Type: TypeMessage, Data: json.RawMessage(`"torn"`)},
 	}
 
-	s := &replaySink{}
-	Replay(branch, s, ReplayOptions{})
+	full := &echoSink{}
+	Replay(branch, full, ReplayOptions{})
 
-	var echoed []string
+	per := make([]string, 0, len(full.calls)) // parity: same calls, same order
 	for _, e := range branch {
-		if text := EchoPrompt(e); text != "" {
-			echoed = append(echoed, text)
-		}
+		s := &echoSink{}
+		EchoEntry(e, s)
+		per = append(per, s.calls...)
 	}
-	var replayed []string
-	for _, c := range s.calls {
-		if prompt, ok := strings.CutPrefix(c, "user:"); ok {
-			replayed = append(replayed, prompt)
-		}
-	}
-	assert.Equal(t, []string{"first prompt", "steering", "last prompt"}, replayed)
-	assert.Equal(t, replayed, echoed)
+	assert.Equal(t, []string{
+		"user:first prompt",
+		"user:steering",
+		"iblock:User Ran: echo hi", "ibody:", // no body: the label is the whole text
+		"user:last prompt",
+		"notice:0:careful",
+	}, full.calls)
+	assert.Equal(t, full.calls, per)
 }

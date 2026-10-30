@@ -12,6 +12,32 @@ type ReplayOptions struct {
 	Thinking bool // off by default, thinking is noise on resume
 }
 
+// userEcho classifies one decoded user message: which standalone shape, if
+// any, it paints. Replay and EchoEntry share this rule, so full replay and a
+// live append of the same message can never disagree on what it is.
+type userEcho uint8
+
+const (
+	userEchoNone     userEcho = iota // not a user message: the assistant branch owns it
+	userEchoPrompt                   // a typed prompt: echoes, opens a turn
+	userEchoCarrier                  // tool results only: folds under headers
+	userEchoInjected                 // system context: paints only when replay-marked
+)
+
+func classifyUserEcho(md MessageData) userEcho {
+	if md.Message.Role != llm.RoleUser {
+		return userEchoNone
+	}
+	switch {
+	case md.Injected:
+		return userEchoInjected
+	case llm.OnlyToolResults(md.Message.Content):
+		return userEchoCarrier
+	default:
+		return userEchoPrompt
+	}
+}
+
 // Replay echoes the branch's committed history onto sink: user prompts render
 // above their replies (UserPrompt), assistant content streams, tool headers carry
 // their result bodies, notices replay, and each turn closes with its stop reason.
@@ -61,14 +87,14 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 			m := md.Message
 			switch m.Role {
 			case llm.RoleUser:
-				if llm.OnlyToolResults(m.Content) {
+				switch classifyUserEcho(md) {
+				case userEchoCarrier:
 					foldResults(pending, m.Content, sink)
 					continue
-				}
-				// system-injected context (a staged `User Ran:` result or survey text) is not a
-				// typed prompt: it never opens or echoes as its own turn on replay. The ones
-				// marked replayed still belong in restored scrollback, drawn as their own block.
-				if md.Injected {
+				case userEchoInjected:
+					// system-injected context (a staged `User Ran:` result or survey text) is not a
+					// typed prompt: it never opens or echoes as its own turn on replay. The ones
+					// marked replayed still belong in restored scrollback, drawn as their own block.
 					if md.Replayed {
 						replayInjected(e.ID, userText(m), sink)
 					}
@@ -165,23 +191,33 @@ func toolBody(tr llm.ToolResultBlock) string {
 	return sb.String()
 }
 
-// EchoPrompt returns the text a live surface echoes for one committed entry
-// as a user prompt, empty when the entry is not a prompt echo: tool-result
-// carriers fold under their tool headers and injected context replays as its
-// own block, exactly the branches Replay never echoes. The text matches
-// Replay's, joined blocks with an image placeholder per image.
-func EchoPrompt(e Entry) string {
-	if e.Type != TypeMessage {
-		return ""
+// EchoEntry paints one committed entry's standalone shape onto sink: exactly
+// the shapes Replay draws outside its turn machinery, so a live append and a
+// full replay of the same entry render identically. A typed prompt echoes, a
+// replay-marked injected block draws as its own block and a notice replays;
+// tool carriers, unmarked injected context and everything the stream owns
+// (assistant content, tool calls) paint nothing here.
+func EchoEntry(e Entry, sink agent.Sink) {
+	switch e.Type {
+	case TypeMessage:
+		var md MessageData
+		if e.Decode(&md) != nil {
+			return
+		}
+		switch classifyUserEcho(md) {
+		case userEchoPrompt:
+			sink.UserPrompt(userText(md.Message))
+		case userEchoInjected:
+			if md.Replayed {
+				replayInjected(e.ID, userText(md.Message), sink)
+			}
+		}
+	case TypeNotice:
+		var nd NoticeData
+		if e.Decode(&nd) == nil {
+			sink.Notice(nd.Message, nd.Level)
+		}
 	}
-	var md MessageData
-	if err := e.Decode(&md); err != nil {
-		return ""
-	}
-	if md.Message.Role != llm.RoleUser || md.Injected || llm.OnlyToolResults(md.Message.Content) {
-		return ""
-	}
-	return userText(md.Message)
 }
 
 // userText extracts the plain text of a prompt message, with one image

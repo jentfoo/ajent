@@ -2,6 +2,7 @@ package app
 
 import (
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -600,4 +601,56 @@ func TestHubQueueRowsRedactSecrets(t *testing.T) {
 	queued := hub.queued
 	hub.mu.Unlock()
 	assert.Equal(t, []string{"visible prompt", "secret: hunter2"}, queued)
+}
+
+// TestHubSnapshotEventCoverage pins the event/snapshot contract
+// (control-design.md): every hubSnapshot field either has a change event that
+// announces it or sits on the poll-only list the design names, so a rendering
+// surface can tell which facts events carry and which only a snapshot reads.
+func TestHubSnapshotEventCoverage(t *testing.T) {
+	t.Parallel()
+
+	// eventCovered names the event(s) that announce each field's changes.
+	eventCovered := map[string]string{
+		"SessionName":  ctl.EventSessionRenamed,
+		"Head":         ctl.EventBranchChanged + ", " + ctl.EventEntryAppend,
+		"Model":        ctl.EventStatus,
+		"Context":      ctl.EventContext,
+		"Running":      ctl.EventTurnStart + ", " + ctl.EventTurnEnd,
+		"Spinning":     ctl.EventStatus,
+		"QueuedTexts":  ctl.EventQueued,
+		"Activity":     ctl.EventActivity,
+		"Status":       ctl.EventStatus,
+		"Interactions": ctl.EventInteractionPending + ", " + ctl.EventInteractionSettled,
+	}
+	// pollOnly names why no event announces the field; the design doc carries
+	// the same list.
+	pollOnly := map[string]string{
+		"SessionID": "static: identity never changes",
+		"Workspace": "static: fixed for the run",
+		"Cwd":       "static: fixed for the run",
+		"Permission": "mode changes note themselves as notice and segment; " +
+			"the authoritative mode is a snapshot read",
+		"Tools":  "toggles print their effect; the registry is a snapshot read",
+		"Usage":  "totals accumulate silently; usage events are per-report",
+		"Idle":   "key-meaning state; a snapshot's Running answers it",
+		"Queued": "the count; queued texts carry the event",
+	}
+
+	fields := make(map[string]bool)
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(hubSnapshot{})) {
+		fields[f.Name] = true
+		_, viaEvent := eventCovered[f.Name]
+		_, viaPoll := pollOnly[f.Name]
+		assert.True(t, viaEvent || viaPoll,
+			"field %s is neither event-covered nor poll-only: name its coverage here and in control-design.md", f.Name)
+	}
+	for name := range eventCovered {
+		assert.True(t, fields[name], "event-covered field %s no longer exists on hubSnapshot", name)
+		_, viaPoll := pollOnly[name]
+		assert.False(t, viaPoll, "field %s is both event-covered and poll-only", name)
+	}
+	for name := range pollOnly {
+		assert.True(t, fields[name], "poll-only field %s no longer exists on hubSnapshot", name)
+	}
 }

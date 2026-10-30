@@ -245,9 +245,7 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 	case first:
 		v.renderHistory(branch)
 	case headMoved:
-		v.ui.Reset()
-		v.ui.Divider() // mark where the restored branch begins, like a local rewind
-		v.renderHistory(branch)
+		v.repaint(branch)
 	default:
 		for _, e := range branch {
 			if _, ok := prev[e.ID]; !ok {
@@ -286,24 +284,12 @@ func (v *attachView) renderHistory(branch []session.Entry) {
 	session.Replay(branch, v.sink, session.ReplayOptions{})
 }
 
-// renderEntry renders one committed entry the surface has not shown. Only the
-// types with a standalone shape render here; the rest only appear inside
-// history replay.
+// renderEntry paints one committed entry the surface has not shown, through
+// the one echo rule Replay also applies (session.EchoEntry): a prompt echoes,
+// a replay-marked injected block draws as its own block, a notice replays, and
+// everything the stream or Replay's folding owns paints nothing.
 func (v *attachView) renderEntry(e session.Entry) {
-	switch e.Type {
-	case session.TypeMessage:
-		// the echo rule is Replay's: tool results fold under their tool headers
-		// (the stream's tool.result painted them) and injected context is its own
-		// block, so neither may echo as a prompt row
-		if text := session.EchoPrompt(e); text != "" {
-			v.sink.UserPrompt(text)
-		}
-	case session.TypeNotice:
-		var nd session.NoticeData
-		if json.Unmarshal(e.Data, &nd) == nil {
-			v.ui.Notify(nd.Message, tui.Level(nd.Level))
-		}
-	}
+	session.EchoEntry(e, v.sink)
 }
 
 // installRecall wires plain ↑/↓ and ctrl+r onto the terminal over the same
@@ -557,19 +543,19 @@ func (v *attachView) applyAppend(e ctl.Entry) {
 	v.rendered[e.ID] = struct{}{}
 	entry := session.Entry{ID: e.ID, ParentID: e.ParentID,
 		Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
-	if v.streaming && e.Type == string(session.TypeMessage) {
+	if entry.Type == session.TypeMessage {
 		var md session.MessageData
-		if json.Unmarshal(e.Data, &md) == nil &&
-			(md.Message.Role != llm.RoleUser || md.Injected) {
-			return // the in-flight turn painted this through the stream
-		}
-	}
-	if e.Type == string(session.TypeMessage) {
-		var md session.MessageData
-		if json.Unmarshal(e.Data, &md) == nil && md.Message.Role == llm.RoleUser &&
-			v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
-			// the row resolved with its entry: repaint without it
-			v.ui.SetQueued(v.withPending(v.wireQueued))
+		if entry.Decode(&md) == nil {
+			// the stream owns this turn's assistant content and injected context;
+			// a typed prompt is the one user shape it never painted
+			if v.streaming && (md.Message.Role != llm.RoleUser || md.Injected) {
+				return
+			}
+			if md.Message.Role == llm.RoleUser &&
+				v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
+				// the row resolved with its entry: repaint without it
+				v.ui.SetQueued(v.withPending(v.wireQueued))
+			}
 		}
 	}
 	v.renderEntry(entry)
@@ -724,6 +710,16 @@ func (v *attachView) requestRedraw() {
 	})
 }
 
+// repaint resets the screen and renders one whole branch, the single shape
+// every head move shares: a backfill onto a moved head and the redraw a
+// branch.changed event triggers.
+func (v *attachView) repaint(branch []session.Entry) {
+	v.ui.Reset()
+	v.ui.Divider() // mark where the restored branch begins, like a local rewind
+	v.rendered = bulk.SliceToSetBy(func(e session.Entry) string { return e.ID }, branch)
+	v.renderHistory(branch)
+}
+
 // redraw re-renders the branch under the current head from the transcript file
 // after a rewind or fork moved it, whether that move was local or came from the
 // other terminal. It runs on the actor, so appends landing while it reads queue
@@ -737,10 +733,7 @@ func (v *attachView) redraw() {
 		v.ui.Notify("refresh after rewind failed: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	v.ui.Reset()
-	v.ui.Divider() // mark where the restored branch begins, like a local rewind
-	v.rendered = bulk.SliceToSetBy(func(e session.Entry) string { return e.ID }, branch)
-	v.renderHistory(branch)
+	v.repaint(branch)
 	v.ui.SetIdle(!running)
 }
 

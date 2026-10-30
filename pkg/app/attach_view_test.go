@@ -246,6 +246,25 @@ func TestAttachToolResultEntryNoEcho(t *testing.T) {
 	})
 }
 
+// TestAttachReplayedInjectedDrawsBlock pins the live-append side of the echo
+// rule: a replay-marked injected entry appended at rest draws as its own block,
+// exactly as the replay of the same branch would, instead of painting nothing.
+func TestAttachReplayedInjectedDrawsBlock(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	rig.rec.rec.Message(agent.MessageInfo{
+		Message:  llm.Text(llm.RoleUser, "User Ran: echo hi\n\nOutput:\n16:00"),
+		Injected: true, Replayed: true,
+	})
+	writeMessage(t, rig.rec, "real prompt")
+
+	require.Eventually(t, func() bool { return strings.Contains(a.out(), "real prompt") },
+		ctlWait, 5*time.Millisecond)
+	assert.Contains(t, a.out(), "User Ran: echo hi", "replayed injected block missing from live append")
+	assert.Contains(t, a.out(), "16:00", "replayed injected body missing from live append")
+}
+
 // TestAttachViewWatermarkDropsStaleEvents pins the connect-time rule: events
 // at or below the backfill watermark are superseded by what was just rendered.
 func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
