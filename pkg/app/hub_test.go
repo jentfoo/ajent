@@ -584,7 +584,7 @@ func TestHubQueueRowsRedactSecrets(t *testing.T) {
 	ui := hub.ui
 
 	ui.SetQueued([]string{"visible prompt", "secret: hunter2"})
-	hub.queueDropped([]string{"visible prompt", "secret: hunter2"})
+	hub.queueDroppedCause("interrupt", []string{"visible prompt", "secret: hunter2"})
 
 	require.Eventually(t, func() bool { return len(log.queuesSeen()) == 1 },
 		2*time.Second, 5*time.Millisecond)

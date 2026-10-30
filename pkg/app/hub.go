@@ -388,14 +388,9 @@ func (h *sessionHub) setQueued(texts []string) {
 	h.mu.Unlock()
 }
 
-// queueDropped announces the queued prompts an interrupt cleared, so their
-// pending rows resolve instead of vanishing.
-func (h *sessionHub) queueDropped(texts []string) {
-	h.queueDroppedCause("interrupt", texts)
-}
-
-// queueDroppedCause is queueDropped naming its cause: an interrupt recovery or
-// a rewind clear.
+// queueDroppedCause announces queued prompts a removal cleared, so their
+// pending rows resolve instead of vanishing. The cause names what removed them:
+// an interrupt recovery, a rewind clear, or a recall back into an editor.
 func (h *sessionHub) queueDroppedCause(cause string, texts []string) {
 	h.publish(ctl.EventQueueDropped, ctl.QueueDroppedData{Texts: redactQueueTexts(texts), Cause: cause})
 }
@@ -755,6 +750,15 @@ func (s hubSink) TurnEnd(r agent.TurnResult) {
 func (s hubSink) UserPrompt(text string) {
 	for _, o := range s.h.observers() {
 		o.UserPrompt(text)
+	}
+}
+
+// InjectContext fans the steering echo out to observers. The wire sink drops
+// it: committed entries are the only injected-content form on the socket, and
+// every attached surface paints each one exactly once through the echo rule.
+func (s hubSink) InjectContext(text string) {
+	for _, o := range s.h.observers() {
+		o.InjectContext(text)
 	}
 }
 

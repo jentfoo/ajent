@@ -23,6 +23,7 @@ type Sink struct {
 	ui    *tui.UI
 	busy  func() // clears the working spinner, nil while idle
 	image bool   // image blocks draw via the terminal protocol, not during replay
+	inj   int    // synthetic call ids for injected-context blocks
 }
 
 // New returns a sink that drives ui.
@@ -55,6 +56,14 @@ func (s *Sink) TurnStart(agent.TurnInfo) {
 // ui.UserEcho at submission time, while replay uses this so restored context
 // shows each user message above its reply.
 func (s *Sink) UserPrompt(text string) { s.ui.UserEcho(text) }
+
+// InjectContext paints injected context in the block shape replay draws for a
+// replay-marked entry: label header, body collapsed beneath it. Steering
+// echoes ride it so a note renders identically live and across replay.
+func (s *Sink) InjectContext(text string) {
+	s.inj++ // one surface, one key space; the id only keys this commit's output
+	agent.InjectBlock(strconv.Itoa(s.inj), text, s)
+}
 
 // Thinking streams reasoning output.
 func (s *Sink) Thinking(delta string) { s.ui.Thinking(delta) }

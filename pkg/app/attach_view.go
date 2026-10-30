@@ -57,7 +57,6 @@ type attachView struct {
 	wireQueued   []string            // the last queued event's texts, for pending merges
 	dialogs      map[uint64]context.CancelFunc
 	calls        map[string]*attachCall
-	streaming    bool // a live turn may have painted entries the stream covered
 	outcome      *time.Timer
 	live         bool        // backfill completed; events apply instead of buffering
 	buf          []ctl.Event // events seen before backfill, applied against its watermark
@@ -256,7 +255,6 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 	v.reconcilePending(branch)
 	v.applySnapshot(snap)
 	v.reconcileDialogs(v.root, snap.Interactions)
-	v.streaming = snap.Running || snap.Spinning
 	return nil
 }
 
@@ -372,7 +370,6 @@ func (v *attachView) apply(ev ctl.Event) {
 	case ctl.EventTurnStart:
 		v.sink.TurnStart(agent.TurnInfo{})
 		v.setRunning(true)
-		v.streaming = true
 	case ctl.EventThinkingDelta:
 		var d ctl.TextData
 		if ev.Decode(&d) == nil {
@@ -425,6 +422,11 @@ func (v *attachView) apply(ev ctl.Event) {
 			// streamed deltas already commit at their end, so their full-text copy
 			// on the wire (for controllers without the stream) must not render again
 			res.Display = d.Output
+			if d.Error && strings.TrimSpace(d.Output) != "" {
+				// an error's body commits from Content on the shared sink path,
+				// never Display, so a denial reason survives the wire round trip
+				res.Content = llm.BlockList{llm.TextBlock{Text: d.Output}}
+			}
 		}
 		done(res)
 	case ctl.EventDiff:
@@ -442,7 +444,6 @@ func (v *attachView) apply(ev ctl.Event) {
 		v.sink.TurnEnd(agent.TurnResult{})
 		v.setRunning(false)
 		v.dropCalls() // calls whose result never landed keep nothing behind
-		v.streaming = false
 
 	// --- session events, forwarded to the methods that produced them ---
 
@@ -481,12 +482,8 @@ func (v *attachView) apply(ev ctl.Event) {
 			return
 		}
 		v.resolvePending(d.Texts)
-		cause := d.Cause
-		if cause == "" {
-			cause = "cleared"
-		}
 		for range d.Texts {
-			v.showOutcome("prompt dropped (" + cause + ")")
+			v.showOutcome(dropOutcome(d.Cause))
 		}
 
 	// editor drafts are droppable: two editors typing would fight over the buffer
@@ -525,12 +522,25 @@ func (v *attachView) apply(ev ctl.Event) {
 	}
 }
 
+// dropOutcome names a queue removal honestly: a recall returns the text to an
+// editor, everything else drops it. An unnamed cause is a cleared one.
+func dropOutcome(cause string) string {
+	switch cause {
+	case "recalled":
+		return "prompt recalled for editing"
+	case "":
+		cause = "cleared"
+	}
+	return "prompt dropped (" + cause + ")"
+}
+
 // applyAppend applies the wire rule for committed entries: ids already
-// rendered or already painted by the stream mark rendered without re-rendering,
-// a pending row resolves when the prompt it submitted commits and its committed
-// rendering takes the row's place, and everything else renders. The one
-// stream-painting exception is user prompts: no echo exists on the wire, so
-// entry.append is the only painter a live surface has for them.
+// rendered mark silently, a pending row resolves when the prompt it submitted
+// commits and its committed rendering takes the row's place, and everything
+// else renders through the one echo rule. EchoEntry paints nothing for shapes
+// the stream owns (assistant content, tool carriers, unmarked injected
+// context), so what draws here is exactly what replay would draw for the same
+// entry, mid-turn included.
 func (v *attachView) applyAppend(e ctl.Entry) {
 	if e.ID != "" { // appends extend the head silently; only a branch.changed redraws
 		v.mu.Lock()
@@ -545,17 +555,11 @@ func (v *attachView) applyAppend(e ctl.Entry) {
 		Type: session.Type(e.Type), TS: e.TS, Data: e.Data}
 	if entry.Type == session.TypeMessage {
 		var md session.MessageData
-		if entry.Decode(&md) == nil {
-			// the stream owns this turn's assistant content and injected context;
-			// a typed prompt is the one user shape it never painted
-			if v.streaming && (md.Message.Role != llm.RoleUser || md.Injected) {
-				return
-			}
-			if md.Message.Role == llm.RoleUser &&
-				v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
-				// the row resolved with its entry: repaint without it
-				v.ui.SetQueued(v.withPending(v.wireQueued))
-			}
+		if entry.Decode(&md) == nil &&
+			md.Message.Role == llm.RoleUser &&
+			v.takeCommitted(llm.FirstBlockText(md.Message.Content)) {
+			// the row resolved with its entry: repaint without it
+			v.ui.SetQueued(v.withPending(v.wireQueued))
 		}
 	}
 	v.renderEntry(entry)

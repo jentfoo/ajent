@@ -18,12 +18,13 @@ type ctxCatcher struct {
 	states []tokens.ContextState
 }
 
-func (c *ctxCatcher) TurnStart(TurnInfo) {}
-func (c *ctxCatcher) UserPrompt(string)  {}
-func (c *ctxCatcher) Thinking(string)    {}
-func (c *ctxCatcher) EndThinking()       {}
-func (c *ctxCatcher) Text(string)        {}
-func (c *ctxCatcher) EndText()           {}
+func (c *ctxCatcher) TurnStart(TurnInfo)   {}
+func (c *ctxCatcher) UserPrompt(string)    {}
+func (c *ctxCatcher) InjectContext(string) {}
+func (c *ctxCatcher) Thinking(string)      {}
+func (c *ctxCatcher) EndThinking()         {}
+func (c *ctxCatcher) Text(string)          {}
+func (c *ctxCatcher) EndText()             {}
 func (c *ctxCatcher) ToolStart(ToolCall, string, bool) func(ToolResult) {
 	return func(ToolResult) {}
 }

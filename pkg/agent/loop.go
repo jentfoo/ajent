@@ -393,7 +393,10 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 				Injected: in.Injected, Replayed: visible, Origin: in.Origin,
 			})
 			if visible && in.Echo != "" {
-				a.sink.UserPrompt(in.Echo)
+				// the echo rides InjectContext so a note's live shape matches its
+				// committed block everywhere; attached surfaces paint each entry
+				// once through the same rule on their side of the wire
+				a.sink.InjectContext(in.Echo)
 			}
 		}
 		// delivery is confirmed only when the message actually lands, and fires

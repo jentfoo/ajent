@@ -236,6 +236,42 @@ func TestAttachRewindFillsEditor(t *testing.T) {
 	}
 }
 
+// TestAttachQueueRecallFillsEditor pins Alt+Up over the wire: the newest
+// queued prompt pops from the session's queue into THIS terminal's editor, so
+// editing and resubmitting here replaces it; an observer refuses legibly.
+func TestAttachQueueRecallFillsEditor(t *testing.T) {
+	rig := newControlRig(t, nil)
+	term, feed, out := ptyUI(t)
+	a := newAttachRigTerm(t, rig, term, out)
+
+	// park two prompts as rows, the way a gate hold leaves them
+	rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
+		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+	rig.hub.q.hold(agent.Input{Text: "queued one"}, "queued one", 0)
+	rig.hub.q.hold(agent.Input{Text: "queued two"}, "queued two", 0)
+
+	// an observer's Alt+Up refuses, the queue untouched
+	attachRecallQueued(term, a.view)
+	require.Equal(t, 2, rig.hub.q.pending())
+
+	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
+	require.NoError(t, err)
+
+	attachRecallQueued(term, a.view) // LIFO: the newest pops into this editor
+	require.Equal(t, 1, rig.hub.q.pending())
+	require.Eventually(t, func() bool { return strings.Contains(out(), "queued two") },
+		ctlWait, 5*time.Millisecond)
+
+	// submitting proves what the buffer held: the edit resubmits from here
+	feed("\r")
+	select {
+	case line := <-term.Messages():
+		assert.Equal(t, "queued two", line)
+	case <-time.After(ctlWait):
+		t.Fatal("recall did not fill the editor")
+	}
+}
+
 // TestAttachSubmitRefusedWithoutRouter pins the legible refusal: submitting to
 // a run still wiring reports unavailable, never a silent drop.
 func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {

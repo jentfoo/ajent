@@ -17,6 +17,9 @@ func (r *recordingSink) UserPrompt(text string) {
 		r.calls = append(r.calls, "user:"+text)
 	}
 }
+func (r *recordingSink) InjectContext(text string) {
+	r.calls = append(r.calls, "inject:"+text)
+}
 func (r *recordingSink) Thinking(string) { r.calls = append(r.calls, "thinking") }
 func (r *recordingSink) EndThinking()    { r.calls = append(r.calls, "end_thinking") }
 func (r *recordingSink) Text(string)     { r.calls = append(r.calls, "text") }
@@ -46,12 +49,13 @@ type resultCatcher struct {
 	result TurnResult
 }
 
-func (c *resultCatcher) TurnStart(TurnInfo) {}
-func (c *resultCatcher) UserPrompt(string)  {}
-func (c *resultCatcher) Thinking(string)    {}
-func (c *resultCatcher) EndThinking()       {}
-func (c *resultCatcher) Text(string)        {}
-func (c *resultCatcher) EndText()           {}
+func (c *resultCatcher) TurnStart(TurnInfo)   {}
+func (c *resultCatcher) UserPrompt(string)    {}
+func (c *resultCatcher) InjectContext(string) {}
+func (c *resultCatcher) Thinking(string)      {}
+func (c *resultCatcher) EndThinking()         {}
+func (c *resultCatcher) Text(string)          {}
+func (c *resultCatcher) EndText()             {}
 func (c *resultCatcher) ToolStart(ToolCall, string, bool) func(ToolResult) {
 	return func(ToolResult) {}
 }

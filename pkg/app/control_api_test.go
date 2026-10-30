@@ -65,7 +65,7 @@ func TestControlAttach(t *testing.T) {
 
 		// every write method refuses the observer, each naming the holder
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodInputSet, ctl.MethodRewind, ctl.MethodResolve} {
+			ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind, ctl.MethodResolve} {
 			rp = two.call("obs-"+m, m, map[string]any{})
 			require.NotNil(t, rp.Error)
 			assert.Equal(t, ctl.CodeObserver, rp.Error.Code)
@@ -161,7 +161,7 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("write_methods_require_seat", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodInputSet, ctl.MethodRewind, ctl.MethodResolve} {
+			ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind, ctl.MethodResolve} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.True(t, entry.seat)
@@ -178,7 +178,7 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("mutating_verbs_run_the_lane", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt,
-			ctl.MethodModeCycle, ctl.MethodInputSet, ctl.MethodRewind} {
+			ctl.MethodModeCycle, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.True(t, entry.lane)
@@ -465,6 +465,84 @@ func TestControlInputSet(t *testing.T) {
 		require.NotNil(t, rp.Error)
 		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
 		assert.Contains(t, rp.Error.Message, "no editor")
+	})
+}
+
+// TestControlQueueRecall pins queue.recall: the newest queued prompt pops and
+// its text returns to the caller, empty when nothing is queued, refusals leave
+// the item queued, and the removal announces with rows so attached surfaces
+// resolve pending rows. No editor fill happens host-side — serve included.
+func TestControlQueueRecall(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+
+	t.Run("empty_queue", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "r")
+
+		rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
+			func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+
+		rp := c.call("q1", ctl.MethodQueueRecall, map[string]any{})
+		require.Nil(t, rp.Error) // an idle queue is a no-op result, like interrupt with nothing stopped
+		var res ctl.RecallResult
+		require.NoError(t, rp.DecodeResult(&res))
+		assert.Empty(t, res.Text)
+	})
+
+	t.Run("pops_and_announces", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "r")
+
+		// park two prompts as rows, the way a gate hold leaves them
+		rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
+			func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+		rig.hub.q.hold(agent.Input{Text: "queued one"}, "queued one", 0)
+		rig.hub.q.hold(agent.Input{Text: "queued two"}, "queued two", 0)
+
+		rp := c.call("q2", ctl.MethodQueueRecall, map[string]any{}) // LIFO: the newest first
+		require.Nil(t, rp.Error)
+		var res ctl.RecallResult
+		require.NoError(t, rp.DecodeResult(&res))
+		assert.Equal(t, "queued two", res.Text)
+
+		// the removal announces beside its rows, so attached surfaces resolve the
+		// row; both ride the lane's publish before this reply
+		all := c.collectEventsAny(t, 3)
+		var dropped ctl.QueueDroppedData
+		require.NoError(t, matchEvent(t, all, ctl.EventQueueDropped, "recalled").Decode(&dropped))
+		assert.Equal(t, []string{"queued two"}, dropped.Texts)
+
+		var queued ctl.QueuedData
+		require.NoError(t, lastEvent(t, all, ctl.EventQueued).Decode(&queued))
+		assert.Equal(t, []string{"queued one"}, queued.Texts)
+	})
+
+	t.Run("refusals_stay_queued", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "r")
+
+		rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
+			func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+		rig.hub.q.hold(agent.Input{Text: "secret work"}, "secret: hunter2", 0)
+
+		rp := c.call("q3", ctl.MethodQueueRecall, map[string]any{})
+		require.NotNil(t, rp.Error)
+		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
+		assert.Contains(t, rp.Error.Message, "secret prefix")
+		assert.Equal(t, 1, rig.hub.q.pending()) // refused in place
+
+		// the redaction rule holds on the refusal path too: nothing leaked
+		for _, ev := range c.takePending() {
+			if ev.Name == ctl.EventQueueDropped || ev.Name == ctl.EventQueued {
+				assert.NotContains(t, string(ev.Data), "hunter2")
+			}
+		}
 	})
 }
 

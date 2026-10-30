@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"strings"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -21,6 +23,11 @@ type Sink interface {
 	// UserPrompt echoes a prompt's words. Live sessions echo at submission time,
 	// replay calls this so restored context shows each user message above its reply.
 	UserPrompt(text string)
+	// InjectContext paints committed injected context where it lands, in the
+	// block shape InjectBlock defines. Steering notes and sub-agent notices
+	// echo through it, so their live rendering matches what replay draws for
+	// the same entry on every surface.
+	InjectContext(text string)
 	Thinking(delta string)
 	EndThinking()
 	Text(delta string)
@@ -54,9 +61,28 @@ func (f *fanoutSink) TurnStart(i TurnInfo) {
 		s.TurnStart(i)
 	}
 }
+
+// InjectBlock paints one committed injected context block: first line as its
+// header label, remainder collapsed beneath it. The single shape for
+// replay-marked injected content, shared by the live steering echo and session
+// replay, so a note renders identically on every surface.
+func InjectBlock(id string, text string, sink Sink) {
+	label, body, _ := strings.Cut(text, "\n")
+	if strings.TrimSpace(label) == "" {
+		return
+	}
+	body = strings.TrimLeft(body, "\n") // the blank line separating label from body
+	sink.ToolStart(ToolCall{ID: id}, label, false)(ToolResult{Display: body})
+}
 func (f *fanoutSink) UserPrompt(text string) {
 	for _, s := range f.sinks {
 		s.UserPrompt(text)
+	}
+}
+
+func (f *fanoutSink) InjectContext(text string) {
+	for _, s := range f.sinks {
+		s.InjectContext(text)
 	}
 }
 func (f *fanoutSink) Thinking(d string) {
@@ -134,12 +160,13 @@ func (f *fanoutSink) TurnEnd(r TurnResult) {
 // NopSink discards every event, for a sub-agent with no UI.
 type NopSink struct{}
 
-func (NopSink) TurnStart(TurnInfo) {}
-func (NopSink) UserPrompt(string)  {}
-func (NopSink) Thinking(string)    {}
-func (NopSink) EndThinking()       {}
-func (NopSink) Text(string)        {}
-func (NopSink) EndText()           {}
+func (NopSink) TurnStart(TurnInfo)   {}
+func (NopSink) UserPrompt(string)    {}
+func (NopSink) InjectContext(string) {}
+func (NopSink) Thinking(string)      {}
+func (NopSink) EndThinking()         {}
+func (NopSink) Text(string)          {}
+func (NopSink) EndText()             {}
 func (NopSink) ToolStart(call ToolCall, label string, full bool) func(ToolResult) {
 	return func(ToolResult) {}
 }

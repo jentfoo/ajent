@@ -762,7 +762,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 	}
 	assert.True(t, foundSteer)
 	live := bulk.SliceFilter(func(c string) bool { return strings.HasPrefix(c, "user:") }, sink.calls)
-	assert.Equal(t, []string{"user:Allowed with note: keep it"}, live) // only the injected steer echoes
+	assert.Empty(t, live) // no prompt-row echo: injected context paints in its block shape
 }
 
 // appendSteer marks every injected text for replay redraw, while the live echo
@@ -779,7 +779,7 @@ func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
 	}{
 		{"typed_stays_silent_unmarked", Input{Text: "typed"}, []string{}, false},
 		{"injected_marked_no_echo", Input{Text: "kickoff", Injected: true}, []string{}, true},
-		{"injected_echoes_and_marks", Input{Text: "note", Echo: "note", Injected: true}, []string{"user:note"}, true},
+		{"injected_echoes_and_marks", Input{Text: "note", Echo: "note", Injected: true}, []string{"inject:note"}, true},
 		{"tool_results_silent_unmarked", Input{Injected: true, Blocks: llm.BlockList{
 			llm.ToolResultBlock{CallID: "c1", Content: llm.BlockList{llm.TextBlock{Text: "out"}}},
 		}}, []string{}, false},
@@ -802,7 +802,9 @@ func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
 				}
 			}
 			assert.Equal(t, tc.wantMarked, marked)
-			live := bulk.SliceFilter(func(c string) bool { return strings.HasPrefix(c, "user:") }, sink.calls)
+			live := bulk.SliceFilter(func(c string) bool {
+				return strings.HasPrefix(c, "user:") || strings.HasPrefix(c, "inject:")
+			}, sink.calls)
 			assert.Equal(t, tc.wantEcho, live)
 		})
 	}

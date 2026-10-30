@@ -56,13 +56,14 @@ deliberately no second dispatch, so remote behavior shares local behavior and it
 and a controller cannot reach a state the operator cannot produce by hand. Three rules
 keep that single path honest under concurrent controllers.
 
-- **Mutating verbs run on one lane.** Submit, interrupt, rewind and mode cycle are
-  serialized, so guards revalidate at execution time rather than at request time and a
-  reply follows the effects it acknowledges. Interrupts jump the queue, so Esc never
-  waits behind a queued rewind. The lane only orders and validates, then calls the
-  keyboard's implementation, and the prompt pump stays the only turn starter. A submit
-  that would block on a busy pump refuses with a retryable code instead of parking the
-  lane behind it, which is what keeps interrupt latency alive.
+- **Mutating verbs run on one lane.** Submit, interrupt, recall, rewind and mode
+  cycle are serialized, so guards revalidate at execution time rather than at
+  request time and a reply follows the effects it acknowledges. Interrupts jump
+  the queue, so Esc never waits behind a queued rewind. The lane only orders and
+  validates, then calls the keyboard's implementation, and the prompt pump stays
+  the only turn starter. A submit that would block on a busy pump refuses with a
+  retryable code instead of parking the lane behind it, which is what keeps
+  interrupt latency alive.
 - **Rewind is one transaction.** Swapping agent state, moving the writer head and
   publishing the branch change form one ordered operation shared by double-Esc and the
   wire, so live state and the writer head cannot diverge and the last rewind wins no
@@ -175,9 +176,11 @@ events, and an append is idempotent by entry id, so an entry that arrives both a
 event and through backfill renders once.
 
 A submit paints an ephemeral pending row before any reply, which the committed entry
-replaces on success, a drop outcome replaces when the queue clears, and a failed submit
-resolves inline. Only prompts paint one, since slash and shell lines commit no message
-entry and surface through their effects.
+replaces on success and a drop, recall or failed submit resolves inline. Only prompts
+paint one, since slash and shell lines commit no message entry and surface through their
+effects. A recall is therefore announced like every other queue exit: queue.dropped with
+cause "recalled" names the text that left for an editor, so every surface's pending row
+follows its prompt wherever it goes — delivered, dropped, or back in a draft.
 
 ## Attach mode
 
@@ -190,11 +193,14 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
   than silently ignored.
 - **Parity is structural.** Events replay through the same sink mapping the host terminal
   applies to its own output, and committed history through transcript replay. State that
-  would fight the host's stays local: editor drafts, prompt recall, and the pre-fill a
-  rewind computes from the branch it already read. Recall reads the same local stores the
-  host keyboard recalls from (`command-design.md`), keyed by hello's workspace: Ctrl+R
-  walks the workspace-wide store, arrows scope to this session's transcript. The served
-  run owns every write; an attached terminal only reads.
+  would fight the host's stays local: editor drafts, prompt recall from history, and the
+  pre-fill a rewind computes from the branch it already read. Recall reads the same
+  local stores the host keyboard recalls from (`command-design.md`), keyed by hello's
+  workspace: Ctrl+R walks the workspace-wide store, arrows scope to this session's
+  transcript. The one editor gesture that reaches across is Alt+Up: queue recall runs
+  over the wire and the popped text fills this terminal's editor instead of the host's,
+  so editing a queued prompt on either surface replaces it exactly once. The served run
+  owns every other write; an attached terminal only reads.
 - **The seat degrades honestly.** Attach claims the seat, or attaches as a named read-only
   viewer when another controller holds it. Detaching frees the seat by disconnection and
   never ends the served run, while `/exit` submitted from either side does.
@@ -238,8 +244,9 @@ place of the greeting. A platform that cannot attest credentials refuses every c
 instead of widening the model silently.
 
 Two corollaries are enforced because they are cheap. Secret values never appear on the live
-surfaces (events, drafts, queue rows, dialog outcomes), and transport lifecycle stays out of
-the event stream since it is not session state and would consume event numbers. One exposure
+surfaces (events, drafts, queue rows, recalled texts, dialog outcomes — a recall of a
+secret-prefixed prompt refuses rather than leak), and transport lifecycle stays out of the
+event stream since it is not session state and would consume event numbers. One exposure
 is stated honestly: controllers receive the transcript path, whose entries contain such
 prompts verbatim, so redaction covers the live surfaces only.
 

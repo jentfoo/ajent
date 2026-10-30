@@ -265,6 +265,48 @@ func TestAttachReplayedInjectedDrawsBlock(t *testing.T) {
 	assert.Contains(t, a.out(), "16:00", "replayed injected body missing from live append")
 }
 
+// TestAttachSteeredNoteMidTurn pins the note path: a barrier note lands as an
+// injected, replay-marked message mid-turn, and its committed entry paints on
+// the attached terminal exactly as backfill would draw it — never dropped for
+// arriving while the turn streams.
+func TestAttachSteeredNoteMidTurn(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+
+	rig.hub.publish(ctl.EventTurnStart, ctl.TurnStartData{}) // this view is mid-turn
+	rig.rec.rec.Message(agent.MessageInfo{
+		Message:  llm.Text(llm.RoleUser, "Denied with note: test"),
+		Injected: true,
+		Replayed: true,
+	})
+	writeMessage(t, rig.rec, "settling prompt") // ordered after the note
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(a.out(), "Denied with note: test")
+	}, ctlWait, 5*time.Millisecond)
+	assert.NotContains(t, a.out(), "❯ \n", "note echoed as a prompt row")
+}
+
+// TestAttachErrorResultBody pins the failed-call body: a tool.result error's
+// Output commits under its header, like the host terminal commits Content, so
+// a denial reason is never lost between the wire shape and the sink.
+func TestAttachErrorResultBody(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+
+	rig.hub.publish(ctl.EventToolStart, ctl.ToolStartData{ID: "t1", Name: "bash",
+		Label: `bash: echo "expands to: $(echo \"date\")"`})
+	rig.hub.publish(ctl.EventToolResult, ctl.ToolResultData{ID: "t1", Name: "bash",
+		Output: "denied by user: test", Error: true})
+
+	require.Eventually(t, func() bool {
+		return strings.Contains(a.out(), "denied by user: test")
+	}, ctlWait, 5*time.Millisecond)
+	assert.Contains(t, a.out(), "tool bash failed")
+}
+
 // TestAttachViewWatermarkDropsStaleEvents pins the connect-time rule: events
 // at or below the backfill watermark are superseded by what was just rendered.
 func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
@@ -658,6 +700,31 @@ func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 		assert.Empty(t, a.view.pending)
 		assert.Empty(t, a.view.ui.Queued())
 	})
+}
+
+// TestAttachRecallResolvesPending pins the recall rule: a queued prompt the
+// host recalled for editing resolves this terminal's pending row through its
+// drop event, so the resubmitted replacement never shows beside the original.
+func TestAttachRecallResolvesPending(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	a.view.submitPending("original")
+	a.view.waitIdle()
+	assert.Equal(t, []string{"original"}, a.view.ui.Queued())
+
+	// the host queued it, then recalled it: rows replace and the drop event names it
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 1, ctl.QueuedData{Texts: []string{"original"}}))
+	a.view.waitIdle()
+	a.view.handle(ctl.NewEvent(ctl.EventQueueDropped, 2,
+		ctl.QueueDroppedData{Texts: []string{"original"}, Cause: "recalled"}))
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 3, ctl.QueuedData{}))
+	a.view.waitIdle()
+	assert.Empty(t, a.view.pending)
+
+	// the edited resubmission queues as its own row, the original gone for good
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 4, ctl.QueuedData{Texts: []string{"edited"}}))
+	a.view.waitIdle()
+	assert.Equal(t, []string{"edited"}, a.view.ui.Queued())
 }
 
 // TestAttachReconnectResolvesPending pins the resnapshot rule: prompts that

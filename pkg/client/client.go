@@ -294,6 +294,15 @@ func (c *Conn) Rewind(ctx context.Context, head string) (string, error) {
 	return res.Head, err
 }
 
+// QueueRecall pops the newest queued prompt for this surface's editor, Alt+Up
+// over the wire. Empty text means nothing was queued; a refused recall errors,
+// leaving the item queued.
+func (c *Conn) QueueRecall(ctx context.Context) (string, error) {
+	var res ctl.RecallResult
+	_, err := c.Call(ctx, ctl.MethodQueueRecall, nil, &res)
+	return res.Text, err
+}
+
 // Resolve answers one pending interaction.
 func (c *Conn) Resolve(ctx context.Context, params ctl.ResolveParams) error {
 	_, err := c.Call(ctx, ctl.MethodResolve, params, nil)

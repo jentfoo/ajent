@@ -264,6 +264,24 @@ func TestControlSurfaceParity(t *testing.T) {
 	assert.Equal(t, []string{"queued a", "queued b"}, qd.Texts)
 }
 
+// TestControlInjectContextStaysOffWire pins the injected-echo ownership: a
+// steering note's live echo fans to observers but never becomes an event, so
+// attached surfaces paint each committed entry exactly once through the echo
+// rule instead of doubling it with a stream copy.
+func TestControlInjectContextStaysOffWire(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	rig := newControlRig(t, nil)
+	c := dialControl(t, rig.path)
+	c.hello()
+
+	rig.hub.sink().InjectContext("Denied with note: test")
+	rig.hub.publish(ctl.EventNotice, ctl.NoticeData{Text: "sentinel"}) // orders after any echo leak
+
+	all := c.collectEventsAny(t, 1)
+	require.Len(t, all, 1)
+	assert.Equal(t, ctl.EventNotice, all[0].Name) // the sentinel alone: no echo event rode along
+}
+
 // matchEvent finds the event named name whose payload contains want.
 func matchEvent(t *testing.T, evs []ctl.Event, name, want string) ctl.Event {
 	t.Helper()

@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/png"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -414,6 +415,75 @@ func TestSteerQueue(t *testing.T) {
 
 		assert.False(t, q.recall())
 		require.GreaterOrEqual(t, refreshes, 2)
+	})
+
+	t.Run("recall_announces_removal", func(t *testing.T) {
+		// every recall names its row on the drop seam, so attached surfaces
+		// resolve the pending row a prompt left behind when it left the queue
+		fake := &fakeQueueUI{}
+		var drop string
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady,
+			func(cause string, texts []string) {
+				drop = cause + ":" + strings.Join(texts, "|")
+			})
+
+		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
+
+		require.True(t, q.recall())
+		assert.Equal(t, "recalled:beta", drop)
+		assert.Empty(t, fake.lastQueued())
+	})
+
+	t.Run("recall_into_serves_wire", func(t *testing.T) {
+		// the remote surface gets the text and no editor is touched; rows,
+		// accounting and the removal notice update exactly like the keyboard path
+		fake := &fakeQueueUI{}
+		var drop string
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady,
+			func(cause string, texts []string) {
+				drop = cause + ":" + strings.Join(texts, "|")
+			})
+
+		text, err := q.recallInto()
+		require.NoError(t, err)
+		assert.Empty(t, text) // nothing queued: an empty result, no error
+
+		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Text: "remote work"}, "remote row", 2))
+
+		text, err = q.recallInto()
+		require.NoError(t, err)
+		assert.Equal(t, "remote row", text) // the typed line, restored for the caller's draft
+		assert.Empty(t, fake.prepended)     // no host editor fill: the text travels instead
+		assert.Empty(t, fake.lastQueued())  // rows refresh like any other recall
+		assert.Equal(t, "recalled:remote row", drop)
+	})
+
+	t.Run("recall_into_refuses_payloads", func(t *testing.T) {
+		// an item whose payload cannot cross the wire refuses in place and stays
+		// queued; a secret's text never rides it and images have no local slot
+		var pngBuf bytes.Buffer
+		require.NoError(t, png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 4, 4))))
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Blocks: llm.BlockList{
+			llm.ImageBlock{MediaType: "image/png", Data: pngBuf.Bytes()}},
+		}, "", 2))
+		_, err := q.recallInto()
+		require.ErrorIs(t, err, errImageQueued)
+		require.Len(t, fake.lastQueued(), 1) // still queued
+
+		q.recall() // the image row leaves by keyboard recall
+		assert.True(t, q.offer(agent.Input{Text: "secret work"}, "secret: hunter2", 2))
+		_, err = q.recallInto()
+		require.ErrorIs(t, err, errSecretQueued)
+		require.Len(t, fake.lastQueued(), 1) // still queued
 	})
 
 	t.Run("abort_recovers_all", func(t *testing.T) {

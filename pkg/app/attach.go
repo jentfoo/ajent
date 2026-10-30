@@ -528,8 +528,7 @@ func attachControls(ui *tui.UI, view *attachView, stopLocal func()) {
 					}()
 				}
 			case tui.ControlRecallQueued:
-				// recall returns a queued prompt to the session's own editor; there
-				// is no wire shape for reaching into this terminal's twin
+				attachRecallQueued(ui, view)
 			}
 		}
 	}
@@ -561,6 +560,32 @@ func attachModeCycle(ui *tui.UI, view *attachView, back bool) {
 	defer cancel()
 	if _, err := conn.ModeCycle(ctx, back); err != nil {
 		ui.Notify("mode change failed: "+err.Error(), tui.LevelWarn)
+	}
+}
+
+// attachRecallQueued runs Alt+Up against the served run: the newest queued
+// prompt pops from the session's queue into this terminal's editor, so editing
+// and resubmitting here replaces it. Nothing queued is a silent no-op,
+// matching the local key; the recalled row resolves through its drop event.
+func attachRecallQueued(ui *tui.UI, view *attachView) {
+	conn := view.connFor()
+	if conn == nil {
+		ui.Notify("recall failed: not connected", tui.LevelWarn)
+		return
+	}
+	rctx, rcancel := context.WithTimeout(context.Background(), client.CallWait)
+	defer rcancel()
+	text, err := conn.QueueRecall(rctx)
+	var wire *ctl.Error
+	switch {
+	case err == nil:
+		if text != "" {
+			ui.PrependInput(text)
+		}
+	case errors.As(err, &wire):
+		ui.Notify("recall refused: "+wire.Message, tui.LevelWarn)
+	default:
+		ui.Notify("recall failed: "+err.Error(), tui.LevelWarn)
 	}
 }
 

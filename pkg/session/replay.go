@@ -137,16 +137,11 @@ func Replay(branch []Entry, sink agent.Sink, opts ReplayOptions) {
 	endTurn()
 }
 
-// replayInjected draws one replayed injected message as its own block: the first
-// line is its label and the remainder its body, so it commits through the same
+// replayInjected draws one replayed injected message as its own block, the
+// shared shape agent.InjectBlock defines, so it commits through the same
 // head-and-collapse rules as a tool result rather than dumping in full.
 func replayInjected(id, text string, sink agent.Sink) {
-	label, body, _ := strings.Cut(text, "\n")
-	if strings.TrimSpace(label) == "" {
-		return
-	}
-	body = strings.TrimLeft(body, "\n") // the blank line separating label from body
-	sink.ToolStart(agent.ToolCall{ID: id}, label, false)(agent.ToolResult{Display: body})
+	agent.InjectBlock(id, text, sink)
 }
 
 // foldResults resolves every tool result in content against pending calls. Each

@@ -1840,11 +1840,11 @@ func TestRewindClearsQueuedWithNotice(t *testing.T) {
 	// the rig wires no pump, so the queue stands alone with the hub's drop seam
 	// and the transaction's clear seam, exactly what the driver installs
 	rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
-		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDropped)
+		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
 	rig.rec.clearQueued = func() []string {
 		labels := rig.hub.q.clearForRewind()
 		if len(labels) > 0 {
-			rig.hub.queueDropped(labels)
+			rig.hub.queueDroppedCause("rewind", labels)
 		}
 		return labels
 	}

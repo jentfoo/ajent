@@ -20,6 +20,7 @@ type captureSink struct {
 
 func (c *captureSink) TurnStart(agent.TurnInfo) {}
 func (c *captureSink) UserPrompt(string)        {}
+func (c *captureSink) InjectContext(string)     {}
 func (c *captureSink) Thinking(string)          {}
 func (c *captureSink) EndThinking()             {}
 func (c *captureSink) Text(string)              {}

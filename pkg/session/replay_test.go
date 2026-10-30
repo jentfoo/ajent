@@ -19,6 +19,7 @@ type replaySink struct {
 
 func (s *replaySink) TurnStart(i agent.TurnInfo) { s.calls = append(s.calls, "start:"+i.Input.Text) }
 func (s *replaySink) UserPrompt(text string)     { s.calls = append(s.calls, "user:"+text) }
+func (s *replaySink) InjectContext(string)       {}
 func (s *replaySink) Thinking(string)            { s.calls = append(s.calls, "thinking") }
 func (s *replaySink) EndThinking()               { s.calls = append(s.calls, "end_thinking") }
 func (s *replaySink) Text(d string)              { s.calls = append(s.calls, "text:"+d) }

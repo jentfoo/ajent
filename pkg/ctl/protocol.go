@@ -23,14 +23,15 @@ const Protocol = 2
 const (
 	MethodState = "state.get"
 
-	MethodAttach    = "attach"
-	MethodSubmit    = "submit"
-	MethodInterrupt = "interrupt"
-	MethodModeCycle = "mode.cycle"
-	MethodInputSet  = "input.set"
-	MethodRewind    = "session.rewind"
-	MethodResolve   = "interaction.resolve"
-	MethodSeatYield = "seat.yield"
+	MethodAttach      = "attach"
+	MethodSubmit      = "submit"
+	MethodInterrupt   = "interrupt"
+	MethodModeCycle   = "mode.cycle"
+	MethodInputSet    = "input.set"
+	MethodQueueRecall = "queue.recall"
+	MethodRewind      = "session.rewind"
+	MethodResolve     = "interaction.resolve"
+	MethodSeatYield   = "seat.yield"
 )
 
 // Event names, grouped by family. Stream events mirror the agent sink one to

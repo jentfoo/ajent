@@ -54,6 +54,10 @@ var controlMethods = map[string]controlMethod{
 		res, rerr := c.srv.inputSet(p)
 		return res, 0, rerr
 	}},
+	ctl.MethodQueueRecall: {seat: true, lane: true, handle: func(c *controlConn, _ []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.queueRecall()
+		return res, 0, rerr
+	}},
 	ctl.MethodRewind: {seat: true, lane: true, handle: func(c *controlConn, p []byte) (any, uint64, *ctl.Error) {
 		res, rerr := c.srv.rewind(p)
 		return res, 0, rerr
@@ -255,6 +259,22 @@ func (s *controlServer) inputSet(params []byte) (any, *ctl.Error) {
 	}
 	s.hub.ui.SetInput(p.Text)
 	return nil, nil
+}
+
+// queueRecall runs the body behind Alt+Up on one lane: the newest queued
+// prompt pops from the session's queue and its text returns to the calling
+// surface's editor rather than the host's, so editing there resubmits the edit.
+// An empty queue answers an empty result like interrupt naming nothing stopped;
+// an item whose payload cannot cross the wire refuses in place and stays queued.
+func (s *controlServer) queueRecall() (any, *ctl.Error) {
+	if s.hub.q == nil {
+		return nil, ctl.Errf(ctl.CodeUnavailable, "recall unavailable: the run is still starting")
+	}
+	text, err := s.hub.q.recallInto()
+	if err != nil {
+		return nil, ctl.Errf(ctl.CodeUnavailable, "recall refused: %v", err)
+	}
+	return ctl.RecallResult{Text: text}, nil
 }
 
 // rewind forks onto an earlier transcript entry through the same transaction

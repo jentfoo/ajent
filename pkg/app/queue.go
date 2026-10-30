@@ -2,14 +2,23 @@ package app
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 	tuisink "github.com/jentfoo/ajent/pkg/tui/sink"
+)
+
+// Recall refusals: the newest queued prompt's payload cannot cross the wire,
+// so a remote surface recalls it at the session's own terminal instead.
+var (
+	errSecretQueued = errors.New("the newest queued prompt carries a secret prefix")
+	errImageQueued  = errors.New("the newest queued prompt carries images")
 )
 
 // queueUI is the narrow TUI surface the steer queue needs, *tui.UI satisfies it.
@@ -31,11 +40,11 @@ type queueUI interface {
 // tui.UI lock.
 type steerQueue struct {
 	ui        queueUI
-	submit    func(est int)              // SetSubmit(sum) while anything is pending
-	clear     func()                     // SetSubmit(0) once the batch and its reads have landed
-	waitReady func(context.Context)      // stager.WaitReady: block until staged commands finish
-	takeReady func() []agent.MessageInfo // stager.TakeReady: consume finished staged output
-	dropped   func(texts []string)       // names queued prompts an interrupt cleared, for pending rows
+	submit    func(est int)                      // SetSubmit(sum) while anything is pending
+	clear     func()                             // SetSubmit(0) once the batch and its reads have landed
+	waitReady func(context.Context)              // stager.WaitReady: block until staged commands finish
+	takeReady func() []agent.MessageInfo         // stager.TakeReady: consume finished staged output
+	dropped   func(cause string, texts []string) // names queued prompts a removal cleared, for pending rows
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -51,7 +60,7 @@ type steerItem struct {
 	est   int         // token estimate carried in the submit bucket until landed
 }
 
-func newSteerQueue(ui queueUI, submit func(int), clear func(), waitReady func(context.Context), takeReady func() []agent.MessageInfo, dropped func([]string)) *steerQueue {
+func newSteerQueue(ui queueUI, submit func(int), clear func(), waitReady func(context.Context), takeReady func() []agent.MessageInfo, dropped func(cause string, texts []string)) *steerQueue {
 	return &steerQueue{ui: ui, submit: submit, clear: clear, waitReady: waitReady, takeReady: takeReady, dropped: dropped}
 }
 
@@ -278,8 +287,9 @@ func (s *steerQueue) stopDrain() {
 	s.draining = false
 }
 
-// recall pops the newest item back into the editor and refreshes rows and
-// accounting. It reports whether anything was recalled.
+// recall pops the newest item back into the editor and refreshes rows,
+// accounting and the removal notice, so attached surfaces resolve its pending
+// row like any other queue exit. It reports whether anything was recalled.
 func (s *steerQueue) recall() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -287,15 +297,47 @@ func (s *steerQueue) recall() bool {
 	if len(s.items) == 0 {
 		return false
 	}
-	i := len(s.items) - 1 // LIFO: the most recently queued message first
-	last := s.items[i]
-	s.items = s.items[:i]
-	label := restoredLabel(last)
-	if label != "" {
+	item := s.items[len(s.items)-1]
+	s.items = s.items[:len(s.items)-1]
+	if label := restoredLabel(item); label != "" {
 		s.ui.PrependInput(label)
 	}
-	s.refreshLocked()
+	s.announceRecallLocked(queuedLabel(item))
 	return true
+}
+
+// recallInto pops the newest item for a remote surface: rows, accounting and
+// the removal notice update exactly like the keyboard path, but no editor is
+// touched — the returned text fills the caller's own draft instead. An empty
+// queue answers "" with no error; an item whose payload cannot cross the wire
+// refuses in place and stays queued.
+func (s *steerQueue) recallInto() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.items) == 0 {
+		return "", nil
+	}
+	item := s.items[len(s.items)-1]
+	row := queuedLabel(item)
+	switch {
+	case session.HasSecretPrefix(secretPrefix, row):
+		return "", errSecretQueued
+	case llm.HasImageBlocks(item.input.Blocks):
+		return "", errImageQueued
+	}
+	s.items = s.items[:len(s.items)-1]
+	s.announceRecallLocked(row)
+	return restoredLabel(item), nil
+}
+
+// announceRecallLocked publishes the removal notice naming row and refreshes
+// rows and accounting after any recall. Caller holds q.mu.
+func (s *steerQueue) announceRecallLocked(row string) {
+	if row != "" && s.dropped != nil {
+		s.dropped("recalled", []string{row})
+	}
+	s.refreshLocked()
 }
 
 // restoredLabel refiles an item's image blocks under fresh slots, their
@@ -344,7 +386,7 @@ func (s *steerQueue) abort() {
 		}
 		s.items = nil
 		if s.dropped != nil {
-			s.dropped(labels) // pending rows resolve instead of vanishing
+			s.dropped("interrupt", labels) // pending rows resolve instead of vanishing
 		}
 	}
 	s.refreshLocked()

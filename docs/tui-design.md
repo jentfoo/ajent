@@ -1189,9 +1189,11 @@ Replay rendering differs from live output in ways that matter for fidelity:
 - **Assistant text replays verbatim** through `Text`/`EndText`, so replies
   survive intact.
 - **Injected context renders as its own block.** A message marked `replayed`
-  (staged `!` output, a plan kickoff) redraws with the label as its first line
-  and the body beneath it, collapsed through the normal output-head rule,
-  without opening a turn.
+  (staged `!` output, a plan kickoff, a barrier note) redraws with the label as
+  its first line and the body beneath it, collapsed through the normal
+  output-head rule, without opening a turn. Live steering echoes (`InjectContext`)
+  paint that same shape where the note lands, so host, replay, resume and every
+  attached surface render one entry identically.
 
 The design intent: a restore reproduces the committed history (user prompts,
 tool headers with their bodies, injected blocks, and assistant content) minus

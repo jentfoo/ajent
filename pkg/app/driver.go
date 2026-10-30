@@ -295,7 +295,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		settled,
 		stager.WaitReady,
 		stager.TakeReady,
-		hub.queueDropped,
+		hub.queueDroppedCause,
 	)
 	hub.q = q
 	// /copy reads the transcript as of the last turn end while a turn streams,

@@ -235,10 +235,11 @@ type BranchChangedData struct {
 	Cause string `json:"cause,omitempty"`
 }
 
-// QueueDroppedData names the queued prompts an interrupt or rewind cleared, so
-// their pending rows resolve instead of vanishing. Cause says which ("interrupt"
-// or "rewind") so the drop line reads honestly. Secret-prefixed texts are
-// redacted like queue rows.
+// QueueDroppedData names the queued prompts a removal cleared — an interrupt,
+// a rewind, or a recall back into an editor — so their pending rows resolve
+// instead of vanishing. Cause says which ("interrupt", "rewind" or "recalled")
+// so the drop line reads honestly. Secret-prefixed texts are redacted like
+// queue rows.
 type QueueDroppedData struct {
 	Texts []string `json:"texts"`
 	Cause string   `json:"cause,omitempty"`
@@ -343,6 +344,13 @@ type RewindParams struct {
 // RewindResult names the head entry the session now sits on.
 type RewindResult struct {
 	Head string `json:"head"`
+}
+
+// RecallResult carries the recalled queued prompt's text back to the calling
+// surface's own editor, Alt+Up over the wire. Empty when nothing was queued,
+// like interrupt naming nothing stopped.
+type RecallResult struct {
+	Text string `json:"text,omitempty"`
 }
 
 // ResolveParams answers one pending interaction. Exactly one answer shape
