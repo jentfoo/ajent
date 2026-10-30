@@ -226,7 +226,7 @@ func planCommands(ctl *plan.Controller) []command.Command {
 // change so a resumed branch can resolve it.
 func (r *sessRec) forkTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head string, m llm.Model) error {
 	moved := head != r.w.Head() // a fork in place only records the model, nothing to divide
-	if err := r.switchState(ui, ag, reg, head, "plan: "); err != nil {
+	if err := r.switchState(ui, ag, reg, head, rewindCauseFork, "plan: "); err != nil {
 		return err
 	}
 	// record ahead of the live restore: a moved head keeps its model entry even

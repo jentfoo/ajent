@@ -113,7 +113,7 @@ func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 
 	fakeUI := &fakeQueueUI{}
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(fakeUI, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(fakeUI, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
 	held := make(chan struct{}, 1)
@@ -237,7 +237,7 @@ func TestControlLoop(t *testing.T) {
 		stager := command.NewStager(t.Context(), nil, nil)
 		hub = newTestHub(ui)
 		hub.ag = ag
-		hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+		hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
 		hub.stager = stager
 		// a spy over a production-shaped barrier reports each cycle's resulting
 		// mode, giving the test a signal ordered behind earlier controls

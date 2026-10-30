@@ -262,21 +262,23 @@ The CLI is deliberately small. Run `ajent --help` for the full list, and the imp
     --deny-tools       one-shot: tool names to withhold
     --stats            one-shot: print a tool and token summary when the run ends
     --serve            run with no terminal, serving the session over the
-                       control socket (needs control.enabled)
-    --attach <socket>  mirror a running session on this terminal and
+                       control socket
+    --attach <name|id> mirror a running session on this terminal and
                        interact with it from either process
+    --force            with --delete: remove a session even while another
+                       ajent instance holds it live
 ```
 
 Sessions are normally identified by an opaque id, and `--resume` takes the full id or any unique prefix of it. `--session <name>` adds a human-readable name instead: the first run creates that session and every later one resumes it, so `--resume <name>` reaches it too. `/session <name>` names or renames the running session, and `/session` alone reports its name. When a named session ends, the exit hint prints `ajent --resume <name>` rather than its id.
 
-`--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one. Delete those by name when you are done with them. Both flags act on the current workspace only, and both exit without starting a session.
+`--delete <id|name>` removes one saved session from disk, resolving its target exactly as `--resume` does. A session another ajent instance still holds live refuses the delete, naming the count; `--delete --force` removes it anyway. `--delete-old` sweeps the tail: it deletes every **unnamed** session in the workspace that has not been used in over 28 days (`--delete-old 7` for a different window), listing what it will remove and asking to confirm first. A name marks a session as worth keeping, so `--delete-old` never touches one, and sessions a running instance holds are listed as skipped rather than deleted. Both flags act on the current workspace only, and both exit without starting a session.
 
 The `-p/--prompt` flags turn the interactive agent into a scriptable one shot. Piping stdin or stdout takes the same path, so `echo "question" | ajent` runs one turn and exits, the pipe standing in for `--prompt`. Bare `--resume` still wants its interactive picker, so a piped run refuses it (exit code 1) instead of silently starting a fresh transcript. Scripts should name the session (`--resume <id|name>`) or use `--continue`. There is no dialog in headless mode, so without a scope flag the barrier runs at **auto+write** (`permissions.headlessMode` overrides, and a scope flag overrides both): workspace-confined writes run free, and anything else the static analysis cannot verify is model-classified, its verdict final. Scope flags (`--allow-all`, `--read-only`, `--allow-auto`, `--allow-autowrite`) are mutually exclusive. `--allow-tools` pre-grants an "allow for session": a tool name (`--allow-tools write`, writers included), `bash` for any nameable shell call, or a bare word for bash commands with that head (`--allow-tools python3`). A nameable bash call no grant covers is still model-reviewed under the auto scopes, and a line static analysis cannot parse (redirect, substitution) refuses outright. `--deny-tools` withholds tools. A refusal in a one-shot reads `permission not given`, so a script never prompts and never hangs on a dialog.
 
 ## Control socket
 
 Setting `"control": { "enabled": true }` exposes the running session on a local
-unix socket, `~/.ajent/control/<session-id>.sock`, so another program can watch
+unix socket, `~/.ajent/control/<session-id>/<token>.sock`, so another program can watch
 it live: streaming output, tool activity, notices and every dialog the session
 opens are announced as it happens, and the transcript can be read back to
 reconcile. A controller that claims the control seat (`attach`) can also drive
@@ -285,17 +287,19 @@ commands and shell lines, answering dialogs (approval prompts included),
 interrupting and ending it. Only one connection holds the seat; everyone else
 is a read-only observer. It is **off by default** and same-user local only
 (the socket and its directory are locked to your account), so enabling it
-shares nothing beyond your own account. A second `ajent` on the same session
-refuses to start rather than fight over the socket, and the socket disappears
-when the run ends.
+shares nothing beyond your own account. Each serving instance owns its own
+socket and registry file under the session's directory, so two ajent processes
+can serve one session side by side without fighting, and a killed instance's
+files are collected the next time an ajent instance starts.
 
 `ajent --serve` runs the same session with **no terminal at all**: the socket is
 the only front end, prompts and dialogs hold until a controller answers them,
-and the run stays up until it is ended. Serve mode requires `control.enabled`
-and refuses otherwise. A plain one-shot (`-p`, piped stdio) never opens a
-socket: it exits with its one turn, so there is nothing to attach to.
+and the run stays up until it is ended. Serve implies control whatever
+`control.enabled` says, since without a socket it would have no prompt source.
+A plain one-shot (`-p`, piped stdio) never opens a socket: it exits with its
+one turn, so there is nothing to attach to.
 
-`ajent --attach <socket>` turns a second ajent process into that controller,
+`ajent --attach <name|id>` turns a second ajent process into that controller,
 with a full terminal of its own: it backfills the conversation, then mirrors
 streaming output, tool activity and status live, and every input works from
 either side — prompts, slash commands and `!shell` submit remotely, Esc and
@@ -304,8 +308,16 @@ and dialogs (approval prompts included) open in both terminals with the first
 answer winning. Attach claims the control seat; if another controller holds it
 the second process attaches as a read-only viewer instead. Detaching is local
 to the attached terminal: ctrl+c twice leaves the session running, and only
-`/exit` (from either side) ends it. The value may be a socket path or any
-unique prefix of a live session id; with no match, ajent lists what is running.
-This is also the easiest way to give a `--serve` run a terminal: start it head-
-less, then attach from anywhere and interact as if you had been there all
-along.
+`/exit` (from either side) ends it. The target resolves like `--resume` does:
+an exact name, a full id or a unique prefix; bare `--attach` opens a picker of
+live sessions; with no match, ajent says what is running. If the connection
+drops while the session lives on, the attach terminal keeps its scrollback and
+reconnects automatically, following a restarted instance when exactly one
+remains.
+
+You never need the socket to share a session between terminals: two `ajent
+--continue` (or `--resume <name>`) processes on one session work concurrently.
+Their entries interleave in one transcript tree, each writer keeps its own
+branch, `--delete` refuses while a peer is live, and resume picks up each
+writer's branch after a crash. Attach is for mirroring one *live* run, not a
+prerequisite for sharing.

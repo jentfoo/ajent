@@ -15,6 +15,13 @@ root, tightening a group or world accessible mode in place and reporting what it
 found as a warning. Callers surface that warning beside their other startup output:
 the notice line interactively, stderr under serve and CLI paths.
 
+The control directory holds one subdirectory per served session, and inside it one socket
+plus one discovery record per running instance, named for that instance's writer slot
+token (see `session-design.md`). Per-instance naming is what lets two processes serve
+one session at a time and keeps every removal scoped to the remover's own token. The
+layout belongs to the control surface (see `control-design.md`), and the directory is
+created and pinned through the same `SubDir` path as every other ajent-owned directory.
+
 ## Layers
 
 Configuration resolves lowest to highest precedence:
@@ -245,11 +252,12 @@ are seeded so a session saved blocked comes back blocked.
 ### Control
 
 `control.enabled`, off by default, is the deliberate act of turning on a local
-control surface: it exposes the running session on a same-user unix socket for
-read-only controllers and enables `--serve`. It is read once at process start, with
-no `/settings` row, no session override and no live toggle. The socket is a runtime
-artifact, so a key that could flip mid-run would leave a controller attached to
-nothing.
+control surface for an interactive run: it exposes the running session on a
+same-user unix socket for controllers. `--serve` always implies it, since a serve
+run with no socket has no prompt source at all. It is read once at process start,
+with no `/settings` row, no session override and no live toggle. The socket is a
+runtime artifact, so a key that could flip mid-run would leave a controller attached
+to nothing.
 
 ## The writer
 

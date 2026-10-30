@@ -17,7 +17,8 @@ import (
 // Concurrency: ToolStart, ToolOutput, Diff and the done hook may be called from
 // parallel tool goroutines, and a staged `!` shell streams alongside an agent
 // turn. *tui.UI serializes them all and keys each call's output by its ID.
-// busy is only touched from the loop goroutine (TurnStart/TurnEnd) and must stay that way.
+// busy is only touched from the one goroutine driving the turn (the agent loop,
+// or an attach view's actor) and must stay that way.
 type Sink struct {
 	ui    *tui.UI
 	busy  func() // clears the working spinner, nil while idle

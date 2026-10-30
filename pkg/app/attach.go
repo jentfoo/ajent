@@ -10,6 +10,8 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/clipboard"
+	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -19,29 +21,49 @@ import (
 // further submissions rather than dropping them.
 const submitBuffer = 16
 
+// reconnectBackoff bounds the retry cadence while the socket is down.
+const (
+	reconnectFirst = 250 * time.Millisecond
+	reconnectMax   = 5 * time.Second
+
+	// reconnectHintWait is the offline stretch before the attach-again hint
+	// surfaces once. Retries continue at the backoff cap regardless.
+	reconnectHintWait = 30 * time.Second
+)
+
+// reconnectGiveUp is the offline stretch after which attach stops retrying and
+// exits with a distinct code, so a script can tell a lost session from a clean
+// end. A var so tests can shrink it.
+var reconnectGiveUp = 5 * time.Minute
+
+// attachOutcome is one attach session's end, deciding what the outer loop does.
+type attachOutcome int
+
+const (
+	attachEnded    attachOutcome = iota // the remote run exited: session.exit arrived
+	attachDetached                      // this terminal quit: the session keeps running
+	attachDropped                       // the socket died without an exit: reconnect
+	attachBackfill                      // connected but the transcript would not read: retry slower
+)
+
 // RunAttach mirrors the session behind o.Socket on this terminal: backfill,
 // then the live event stream, with every input riding the control methods an
 // out-of-process controller has. It opens no transcript and runs no agent loop;
 // the remote run owns model, tools and permission mode. The exit code follows
-// the same table as a local run.
+// the same table as a local run. A dropped socket reconnects rather than
+// exiting bare, rediscovery and banners included.
 func RunAttach(o AttachOptions) int {
-	path, live, err := client.Resolve(o.Socket)
+	matches, live, err := client.Resolve(o.Socket)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
-		listLiveSessions(live)
+		explainNoControl(o.Socket, live)
 		return ExitUsage
 	}
-	conn, hello, err := client.Dial(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
-		listLiveSessions(live)
+	// a bare attach with nothing live explains itself like a targeted miss
+	if o.Socket == "" && len(matches) == 0 {
+		explainNoControl("", nil)
 		return ExitUsage
 	}
-	defer conn.Close()
-
-	// the view's background requests (a head-driven redraw) die with this run
-	root, stopRoot := context.WithCancel(context.Background())
-	defer stopRoot()
 
 	ui, err := tui.New(tui.Options{Mode: o.Mode, Color: o.Color,
 		Palette: o.Palette, Images: o.Images})
@@ -54,137 +76,402 @@ func RunAttach(o AttachOptions) int {
 		ui.Notify(w, tui.LevelWarn)
 	}
 
-	view := newAttachView(ui, conn, root, hello.TranscriptPath)
+	// the view's lifetime ties to this run: background requests die with it
+	root, stopRoot := context.WithCancel(context.Background())
+	defer stopRoot()
 
-	// the reader starts before anything requests: replies route through it, so a
-	// call issued first would wait forever. Lifecycle surfaces (dialogs, exit)
-	// apply immediately; everything else rides the view's backfill buffer.
-	exited := make(chan struct{})
-	var exitOnce sync.Once
-	exitReason := ""
+	// one instance connects directly, several open the picker (never a silent
+	// pick), and bare --attach picks among every live session
+	picked := matches
+	if len(picked) != 1 {
+		picked, err = pickInstances(root, ui, picked, o.Socket == "")
+		if err != nil {
+			ui.Close() // restore the terminal before explaining
+			if errors.Is(err, tui.ErrCancelled) {
+				return ExitOK
+			}
+			fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
+			return ExitUsage
+		}
+	}
+
+	hello := ctl.Hello{}
+	var conn *client.Conn
+	view := newAttachView(ui, nil, root, "")
 	holderName := fmt.Sprintf("ajent attach (pid %d)", os.Getpid())
+
+	// one pump and one control reader serve every reconnect cycle: per-cycle
+	// copies would leak the old goroutine and race for the terminal's channels
+	quit := make(chan struct{})
+	var quitOnce sync.Once
+	stopLocal := func() { quitOnce.Do(func() { close(quit) }) }
+	defer stopLocal()
+	go attachControls(ui, view, stopLocal)
+	submissions := make(chan string, submitBuffer)
+	defer close(submissions)
+	go pumpSubmissions(view, submissions)
+
+	// run attaches once, then reconnects follow the state machine until the
+	// session ends or this terminal detaches
+	var backfillFails int
+	for {
+		if conn == nil {
+			conn, hello, err = client.Dial(picked[0].Socket)
+			if err != nil {
+				ui.Close() // restore the terminal before explaining
+				fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
+				return ExitUsage
+			}
+			view.setHello(hello)
+			view.setTranscript(hello.TranscriptPath)
+		}
+
+		outcome, exitReason := attachOnce(view, conn, hello, holderName, submissions, quit)
+		conn.Close()
+
+		switch outcome {
+		case attachEnded:
+			// a clean end is definitive: the transcript stays, so the hint is
+			// resume, never attach
+			ui.Notify("the attached session ended", tui.LevelInfo)
+			if exitReason != "" {
+				ui.Notify(exitReason, tui.LevelWarn)
+			}
+			ui.Notify("resume it later with: ajent --resume "+resumeLabel(hello), tui.LevelInfo)
+			return ExitOK
+		case attachDetached:
+			return ExitOK
+		case attachDropped:
+			backfillFails = 0
+			view.connDown() // helpers report not connected until a reconnect swaps one in
+		case attachBackfill:
+			// the instance serves but its transcript does not read (deleted under
+			// it, moved): back off, or the dial-success path spins the seat
+			backfillFails++
+			view.connDown()
+			ui.Notify("attach failed: the transcript could not be read; retrying", tui.LevelWarn)
+		}
+		if backfillFails > 0 {
+			wait := min(reconnectFirst*time.Duration(1<<min(backfillFails, 4)), reconnectMax)
+			select {
+			case <-quit:
+				return ExitOK
+			case <-root.Done():
+				return ExitOK
+			case <-time.After(wait):
+			}
+		}
+
+		// reconnect state machine: keep scrollback and the local draft (drafts
+		// are local state by design), retry with backoff, re-discover by
+		// session id, then resnapshot and render only the difference
+		ready, gaveUp := view.reconnectLoop(ui, hello, root, quit)
+		if gaveUp {
+			ui.Notify("gave up reconnecting; attach again with: ajent --attach "+resumeLabel(hello), tui.LevelWarn)
+			return ExitTurn
+		}
+		if !ready {
+			return ExitOK // the user detached while reconnecting
+		}
+		conn, hello = view.connFor(), view.helloNow() // swapped in by the loop
+	}
+}
+
+// resumeLabel names a hello's session the way --resume takes it back.
+func resumeLabel(h ctl.Hello) string {
+	if h.Session.Name != "" {
+		return h.Session.Name
+	}
+	return h.Session.ID
+}
+
+// attachOnce runs one attach session to an outcome: backfill, seat claim, the
+// event pump and the input loop. The reason is set only when the session
+// itself exited.
+func attachOnce(view *attachView, conn *client.Conn, hello ctl.Hello, holderName string,
+	submissions chan<- string, quit <-chan struct{}) (attachOutcome, string) {
+	var exitReason string
+	onExit := make(chan struct{}) // closed once per connection on session.exit
+	var exitOnce sync.Once
+	view.swapConn(conn)
+
+	// the reader starts before anything requests: replies route through it, so
+	// a call issued first would wait forever. Lifecycle surfaces (exit, seat)
+	// apply immediately; everything else rides the actor.
 	go conn.Serve(func(ev ctl.Event) {
 		switch ev.Name {
 		case ctl.EventSessionExit:
 			var d ctl.SessionExitData
 			_ = ev.Decode(&d)
-			exitReason = d.Reason // reader-only until exited closes, which orders the read
-			exitOnce.Do(func() { close(exited) })
+			exitOnce.Do(func() {
+				exitReason = d.Reason // reader-only until the exit closes, which orders the read
+				close(onExit)
+			})
 			return
 		case ctl.EventSeatLost:
 			var d ctl.SeatLostData
 			if ev.Decode(&d) == nil && d.From == holderName {
 				// force-displaced: downgraded to observer without any write probing it
-				ui.Notify("control seat taken by "+seatLabel(d.To)+"; watching read-only", tui.LevelWarn)
-			}
-			return
-		case ctl.EventInteractionPending:
-			var d ctl.InteractionPendingData
-			if ev.Decode(&d) == nil {
-				view.beginInteraction(d)
-			}
-			return
-		case ctl.EventInteractionSettled:
-			var d ctl.InteractionSettledData
-			if ev.Decode(&d) == nil {
-				view.settleInteraction(d.ID)
+				view.ui.Notify("control seat taken by "+seatLabel(d.To)+"; watching read-only", tui.LevelWarn)
 			}
 			return
 		}
 		view.handle(ev)
 	})
 
-	// the seat makes this connection the session's one remote controller; a held
-	// seat degrades to watching instead of fighting over it
-	control, err := conn.ClaimSeat(context.Background(), holderName, false)
+	// the seat claim carries the standard request budget: a wedged-but-alive
+	// host fails into the reconnect loop instead of hanging before any banner
+	cctx, ccancel := context.WithTimeout(context.Background(), client.CallWait)
+	control, err := conn.ClaimSeat(cctx, holderName, false)
+	ccancel()
 	var wire *ctl.Error
 	switch {
 	case err == nil:
 	case errors.As(err, &wire):
-		ui.Notify(wire.Message, tui.LevelWarn) // seat-held names the holder
+		view.ui.Notify(wire.Message, tui.LevelWarn) // seat-held names the holder
 	default:
-		ui.Close() // restore the terminal before explaining
-		fmt.Fprintf(os.Stderr, "ajent: attach refused: %v\n", err)
-		return ExitTurn
+		return attachDropped, ""
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
-	berr := view.backfill(ctx)
-	cancel()
+	bctx, bcancel := context.WithTimeout(context.Background(), client.CallWait)
+	berr := view.backfill(bctx)
+	bcancel()
 	if berr != nil {
-		ui.Close() // restore the terminal before explaining
-		fmt.Fprintf(os.Stderr, "ajent: reading the session: %v\n", berr)
-		return ExitTurn
+		return attachBackfill, ""
 	}
 
-	label := hello.Session.ID
-	if hello.Session.Name != "" {
-		label = hello.Session.Name
-	}
-	ui.Notify(fmt.Sprintf("attached to session %s (host pid %d)", label, hello.PID), tui.LevelInfo)
+	ui := view.ui
+	ui.Notify(fmt.Sprintf("attached to session %s (host pid %d)", resumeLabel(hello), hello.PID), tui.LevelInfo)
 	if !control {
 		ui.Notify("watching read-only: writes need the control seat", tui.LevelWarn)
 	}
 
-	view.mu.Lock()
-	running := view.running
-	view.mu.Unlock()
-	ui.SetIdle(!running) // arm rewind only while the session is at rest
-	view.installRecall() // ↑/↓ recall and ctrl+r search read this session's transcript
-
-	// submissions serialize through one worker so rapid lines keep their order
-	// on the wire, which is the queue order the remote pump applies.
-	submissions := make(chan string, submitBuffer)
-	go func() {
-		for line := range submissions {
-			sctx, scancel := context.WithTimeout(context.Background(), client.CallWait)
-			err := conn.Submit(sctx, line)
-			scancel()
-			if err != nil {
-				ui.Notify("submit failed: "+err.Error(), tui.LevelWarn)
-			}
-		}
-	}()
-
-	quit := make(chan struct{})
-	var quitOnce sync.Once
-	stopLocal := func() { quitOnce.Do(func() { close(quit) }) }
-	go attachControls(ui, conn, stopLocal)
-
-	// rewind rides the same double-Esc gesture as a local run; the picker reads
-	// the tree from the wire and names the head remotely
+	view.waitIdle()
+	ui.SetIdle(!view.isRunning())
+	view.installRecall()
 	ui.SetOnRewind(func() { view.rewindPicker() })
 
 	for {
 		select {
 		case line, ok := <-ui.Messages():
 			if !ok {
-				stopLocal()
-				return ExitOK // stdin EOF detaches, like a ctrl+c quit
+				return attachDetached, "" // stdin EOF detaches, like a ctrl+c quit
 			}
 			select {
 			case submissions <- line:
 			case <-quit:
-				return ExitOK
-			case <-exited:
-				return attachRemoteEnded(ui, exitReason)
+				return attachDetached, ""
+			case <-onExit:
+				return attachEnded, exitReason
 			case <-conn.Done():
-				return attachConnectionLost(ui, view, exited)
+				// exit and EOF can land together. The exit is the truth when both
+				// are ready, and the line stays in the editor through the reconnect
+				select {
+				case <-onExit:
+					return attachEnded, exitReason
+				default:
+				}
+				view.notConnected(line)
+				return attachDropped, ""
 			}
 		case <-quit:
-			return ExitOK // the user detached; the session keeps running
-		case <-exited:
-			return attachRemoteEnded(ui, exitReason)
+			return attachDetached, "" // the user detached; the session keeps running
+		case <-onExit:
+			return attachEnded, exitReason
 		case <-conn.Done():
-			return attachConnectionLost(ui, view, exited)
+			// same preference: a raced exit never reads as a loss
+			select {
+			case <-onExit:
+				return attachEnded, exitReason
+			default:
+			}
+			return attachDropped, ""
 		}
 	}
+}
+
+// pumpSubmissions serializes one terminal's submits onto the wire in channel
+// order, which is the queue order the remote pump applies. Only prompts paint
+// a pending row: slash and shell lines commit no message entry, they surface
+// through their effects.
+func pumpSubmissions(view *attachView, submissions <-chan string) {
+	for line := range submissions {
+		conn := view.connFor()
+		if conn == nil {
+			view.notConnected(line)
+			continue
+		}
+		if command.ParseLine(line).Kind == command.KindPrompt {
+			view.submitPending(line)
+		}
+		sctx, scancel := context.WithTimeout(context.Background(), client.CallWait)
+		serr := conn.Submit(sctx, line)
+		scancel()
+		if serr != nil {
+			view.submitFailed(line, serr)
+		}
+	}
+}
+
+// reconnectLoop keeps trying until one instance of the session serves again.
+// It prefers the same instance; one other live instance is followed with a
+// naming banner; several open the picker, never a silent swap. Lines typed
+// while offline are refused with their text kept, never held by the retry. It
+// reports whether a connection is ready, false when the user detached, and
+// true in gaveUp when the offline stretch outlasts reconnectGiveUp: a lost
+// session exits with a distinct code instead of retrying forever.
+func (v *attachView) reconnectLoop(ui *tui.UI, hello ctl.Hello, root context.Context, quit <-chan struct{}) (ready, gaveUp bool) {
+	ui.Notify("connection lost; reconnecting", tui.LevelWarn)
+
+	backoff := reconnectFirst
+	started := time.Now()
+	hinted := false
+	for {
+		if !hinted && time.Since(started) >= reconnectHintWait {
+			// the hint a drop eventually owes: attaching again, never a resume,
+			// the session may be gone for good
+			ui.Notify("still offline; the session may have exited, attach again later with: ajent --attach "+
+				resumeLabel(hello), tui.LevelWarn)
+			hinted = true
+		}
+		if time.Since(started) >= reconnectGiveUp {
+			return false, true
+		}
+		live, err := client.Discover()
+		if err == nil {
+			follow := client.Followable(live, hello.Session.ID, hello.Token)
+			switch len(follow) {
+			case 1:
+				next := follow[0]
+				if next.Token != hello.Token && !next.Started().IsZero() {
+					ui.Notify(fmt.Sprintf("following new instance of %s (pid %d, started %s)",
+						next.Label(), next.PID, next.Started().Local().Format("15:04:05")), tui.LevelInfo)
+				}
+				conn, nh, derr := client.Dial(next.Socket)
+				if derr == nil {
+					// the resnapshot rides attachOnce's backfill, which renders
+					// only the difference against the rendered set
+					v.swapConn(conn)
+					v.setHello(nh)
+					return true, false
+				}
+			case 0:
+				// none serving yet; fall through to the wait
+			default:
+				picked, perr := pickInstances(root, ui, follow, false)
+				if perr != nil {
+					if errors.Is(perr, tui.ErrCancelled) {
+						return false, false
+					}
+					continue // picker failed; keep retrying rather than die
+				}
+				hello.Token = picked[0].Token // the user chose: follow it like a first attach
+				continue                      // dial through the same path next round
+			}
+		}
+		select {
+		case line, ok := <-ui.Messages():
+			if !ok {
+				return false, false // stdin EOF detaches, like a ctrl+c quit
+			}
+			v.notConnected(line)
+		case <-quit:
+			return false, false // the double-ctrl+c detach works mid-reconnect too
+		case <-root.Done():
+			return false, false
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, reconnectMax)
+	}
+}
+
+// pickInstances runs the instance picker, mirroring the resume picker's mental
+// model: workspace, started time, model and seat state per row.
+func pickInstances(ctx context.Context, ui *tui.UI, live []client.Instance, bare bool) ([]client.Instance, error) {
+	if len(live) == 0 {
+		return nil, errors.New("no live control sessions")
+	}
+	items := make([]tui.PickItem, len(live))
+	for i, in := range live {
+		detail := in.Workspace
+		if !in.Started().IsZero() {
+			detail += " · started " + in.Started().Local().Format("2006-01-02 15:04")
+		}
+		if in.Model != "" {
+			detail += " · " + in.Model
+		}
+		seat := "seat open"
+		if in.SeatHeld {
+			seat = "seat held"
+		}
+		detail += " · " + seat
+		items[i] = tui.PickItem{Label: in.Label(), Detail: detail,
+			Tag: in.SessionName, Terms: []string{in.SessionID}}
+	}
+	title := "Attach to instance"
+	if bare {
+		title = "Attach to session"
+	}
+	picked, err := ui.PickContext(ctx, title, items,
+		tui.PickOptions{Placeholder: pickFilterPlaceholder})
+	if err != nil {
+		return nil, err
+	}
+	return []client.Instance{live[picked]}, nil
+}
+
+// explainNoControl distinguishes the empty answers: no live control
+// sessions at all, versus sessions in the store that serve no control socket.
+// It names control.enabled, points at the socket-free path, and when the
+// target names a recorded session, at resuming that one directly.
+func explainNoControl(target string, live []client.Instance) {
+	if len(live) > 0 {
+		fmt.Fprintln(os.Stderr, "live control sessions:")
+		for _, in := range live {
+			fmt.Fprintf(os.Stderr, "  %s\n", in.String())
+		}
+	}
+	if target != "" {
+		if name := storedSessionName(target); name != "" {
+			fmt.Fprintf(os.Stderr, "resume without a socket instead: ajent --resume %s\n", name)
+			return
+		}
+	}
+	if len(live) > 0 {
+		return
+	}
+	store, err := session.NewStore()
+	if err == nil {
+		stderrNote(store.Note())
+		if rows, lerr := store.List(config.Cwd()); lerr == nil && len(rows) > 0 {
+			fmt.Fprintf(os.Stderr,
+				"ajent: no session is serving control; set control.enabled in config.json on the running instance\n"+
+					"resume without a socket instead: ajent --resume <name> (or --continue)\n")
+			return
+		}
+	}
+	fmt.Fprintf(os.Stderr, "ajent: no live control sessions to attach to\n")
+}
+
+// storedSessionName resolves target against the recorded sessions --resume
+// would search, naming the session a failed attach can still reach. Empty when
+// nothing recorded answers to it.
+func storedSessionName(target string) string {
+	store, err := session.NewStore()
+	if err != nil {
+		return ""
+	}
+	info, err := store.Find(config.Cwd(), target)
+	if err != nil {
+		return ""
+	}
+	return info.Label()
 }
 
 // attachControls serves the terminal's out-of-band keys until quit: Esc and
 // ctrl+c interrupt the remote session, a double ctrl+c detaches this process,
 // Shift+Tab cycles the permission mode remotely. Everything else is local.
-func attachControls(ui *tui.UI, conn *client.Conn, stopLocal func()) {
+func attachControls(ui *tui.UI, view *attachView, stopLocal func()) {
 	// armed is when the first idle ctrl+c landed; inside the window a second one
 	// detaches. The hint line holds for exactly the window, like a local quit's.
 	var armed time.Time
@@ -206,9 +493,9 @@ func attachControls(ui *tui.UI, conn *client.Conn, stopLocal func()) {
 			}
 			switch c {
 			case tui.ControlEscape:
-				_, _ = attachInterrupt(ui, conn) // a lone Esc is the interrupt key
+				_, _ = attachInterrupt(ui, view) // a lone Esc is the interrupt key
 			case tui.ControlInterrupt:
-				stopped, err := attachInterrupt(ui, conn)
+				stopped, err := attachInterrupt(ui, view)
 				if err == nil && stopped != "" {
 					continue // something was running: the press did its work
 				}
@@ -221,9 +508,9 @@ func attachControls(ui *tui.UI, conn *client.Conn, stopLocal func()) {
 				quitHint = time.After(doublePressWindow)
 				arm.Set("ctrl+c again to detach", "")
 			case tui.ControlModeCycle:
-				attachModeCycle(ui, conn, false)
+				attachModeCycle(ui, view, false)
 			case tui.ControlModeCycleBack:
-				attachModeCycle(ui, conn, true)
+				attachModeCycle(ui, view, true)
 			case tui.ControlClipboardImage:
 				ui.Notify("clipboard images cannot ride an attach; paste text instead", tui.LevelWarn)
 			case tui.ControlCopySelection:
@@ -249,7 +536,11 @@ func attachControls(ui *tui.UI, conn *client.Conn, stopLocal func()) {
 }
 
 // attachInterrupt runs the Esc body remotely, surfacing a refusal.
-func attachInterrupt(ui *tui.UI, conn *client.Conn) (string, error) {
+func attachInterrupt(ui *tui.UI, view *attachView) (string, error) {
+	conn := view.connFor()
+	if conn == nil {
+		return "", errors.New("not connected")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
 	defer cancel()
 	stopped, err := conn.Interrupt(ctx)
@@ -260,7 +551,12 @@ func attachInterrupt(ui *tui.UI, conn *client.Conn) (string, error) {
 }
 
 // attachModeCycle steps the remote permission mode, surfacing a refusal.
-func attachModeCycle(ui *tui.UI, conn *client.Conn, back bool) {
+func attachModeCycle(ui *tui.UI, view *attachView, back bool) {
+	conn := view.connFor()
+	if conn == nil {
+		ui.Notify("mode change failed: not connected", tui.LevelWarn)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
 	defer cancel()
 	if _, err := conn.ModeCycle(ctx, back); err != nil {
@@ -269,23 +565,29 @@ func attachModeCycle(ui *tui.UI, conn *client.Conn, back bool) {
 }
 
 // rewindPicker opens the context-tree picker over the transcript file and
-// rewinds the session onto the chosen entry. Only the current branch is known
-// here, so abandoned forks appear once a remote rewind makes one current.
+// rewinds the session onto the chosen entry. The whole recorded tree reads from
+// the same file the host terminal uses, so abandoned forks are pickable here
+// exactly like a local double-Esc shows them.
 func (v *attachView) rewindPicker() {
+	conn := v.connFor()
+	if conn == nil {
+		v.ui.Notify("rewind: not connected", tui.LevelWarn)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), client.CallWait)
-	snap, _, err := v.conn.State(ctx)
+	snap, _, err := conn.State(ctx)
 	cancel()
 	if err != nil {
 		v.ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
 		return
 	}
-	branch, rerr := client.ReadBranch(v.path, snap.Head)
+	entries, _, rerr := session.Read(v.path) // whole tree, forks included
 	if rerr != nil {
 		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
 		return
 	}
 	head := snap.Head // wire-fresh: the tree matches what the session sits on now
-	tree := session.TreeRows(branch, head)
+	tree := session.TreeRows(entries, head)
 	if len(tree) == 0 {
 		v.ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
 		return
@@ -302,11 +604,11 @@ func (v *attachView) rewindPicker() {
 		defer v.ui.SetDeferHistory(false)
 	}
 	picked, err := v.ui.PickContext(context.Background(), "Rewind to", items,
-		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})
+		tui.PickOptions{Placeholder: pickFilterPlaceholder, Initial: initialRow(tree, head)})
 	if err != nil {
 		return // cancelled
 	}
-	if rerr := v.rewindToRow(branch, tree[picked].ID); rerr != nil {
+	if rerr := v.rewindToRow(conn, entries, tree[picked].ID); rerr != nil {
 		v.ui.Notify("rewind: "+rerr.Error(), tui.LevelWarn)
 	}
 }
@@ -314,51 +616,16 @@ func (v *attachView) rewindPicker() {
 // rewindToRow names rowID as the new head over the wire and pre-fills this
 // editor with its prompt, matching what a local double-Esc lands on: edit or
 // resend it as the restored branch's first message.
-func (v *attachView) rewindToRow(branch []session.Entry, rowID string) error {
+func (v *attachView) rewindToRow(conn *client.Conn, entries []session.Entry, rowID string) error {
 	rctx, rcancel := context.WithTimeout(context.Background(), client.CallWait)
-	newHead, err := v.conn.Rewind(rctx, rowID)
+	newHead, err := conn.Rewind(rctx, rowID)
 	rcancel()
 	if err != nil {
 		return err
 	}
-	if _, fill, ok := session.RewindTarget(branch, rowID); ok && fill != "" {
+	if _, fill, ok := session.RewindTarget(entries, rowID); ok && fill != "" {
 		v.ui.SetInput(fill)
 	}
-	v.setHead(newHead) // the head event redraws every view including this one
+	v.setHeadNow(newHead) // the branch.changed event redraws every view including this one
 	return nil
-}
-
-// attachRemoteEnded announces the session's exit and reports success: the
-// remote run ended, which is not a failure of this viewer.
-func attachRemoteEnded(ui *tui.UI, reason string) int {
-	ui.Notify("the attached session ended", tui.LevelInfo)
-	if reason != "" {
-		ui.Notify(reason, tui.LevelWarn)
-	}
-	return ExitOK
-}
-
-// attachConnectionLost reports a socket that died without a session.exit and
-// cancels any dialog racer still open.
-func attachConnectionLost(ui *tui.UI, view *attachView, exited chan struct{}) int {
-	select {
-	case <-exited: // the exit raced the close; treat it as an ending
-		return attachRemoteEnded(ui, "")
-	default:
-	}
-	view.closeDialogs()
-	ui.Notify("control connection lost; the session may still be running", tui.LevelWarn)
-	return ExitTurn
-}
-
-// listLiveSessions prints the sessions another --attach target could name,
-// turning a wrong path into a pickable answer.
-func listLiveSessions(live []client.Session) {
-	if len(live) == 0 {
-		return
-	}
-	fmt.Fprintln(os.Stderr, "live sessions:")
-	for _, s := range live {
-		fmt.Fprintf(os.Stderr, "  %s\n", s.String())
-	}
 }

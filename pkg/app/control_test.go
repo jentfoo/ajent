@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -67,7 +69,7 @@ func newControlRigUI(t *testing.T, pre func(rec *sessRec), term *tui.UI) *contro
 	hub := newSessionHub(hubDeps{
 		ui: term, dialogs: broker, workspace: "/repo",
 		cwd: "/repo", acct: tokens.New(llm.Model{}),
-	}, hubEmitters{})
+	})
 
 	store, err := session.NewStore()
 	require.NoError(t, err)
@@ -83,7 +85,7 @@ func newControlRigUI(t *testing.T, pre func(rec *sessRec), term *tui.UI) *contro
 		pre(rec)
 	}
 
-	srv, _, err := startControl(hub, broker, rec, term == nil)
+	srv, _, err := startControl(t.Context(), hub, broker, rec, term == nil)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -99,7 +101,7 @@ func newServeRig(t *testing.T, local localDialogs) *controlRig {
 	broker := newInteractionBroker(local, nil, nil)
 	hub := newSessionHub(hubDeps{
 		dialogs: broker, workspace: "/repo", cwd: "/repo", acct: tokens.New(llm.Model{}),
-	}, hubEmitters{})
+	})
 	return finishControlRig(t, hub, broker, true)
 }
 
@@ -115,7 +117,7 @@ func newInteractiveRig(t *testing.T, local localDialogs) *controlRig {
 	hub := newSessionHub(hubDeps{
 		ui: term, dialogs: broker, workspace: "/repo",
 		cwd: "/repo", acct: tokens.New(llm.Model{}),
-	}, hubEmitters{})
+	})
 	return finishControlRig(t, hub, broker, false)
 }
 
@@ -135,12 +137,12 @@ func finishControlRig(t *testing.T, hub *sessionHub, broker *interactionBroker, 
 	require.NoError(t, err)
 	rec.hint = rootID(entries)
 	hub.bindSession(rec)
-	rec.onSwitch = func([]llm.Message) {
+	rec.onSwitch = func([]llm.Message, string) {
 		hub.syncLedger()
-		hub.setHead(rec.w.Head())
+		hub.setHead(rec.w.Head(), rewindCauseRewind)
 	}
 
-	srv, _, err := startControl(hub, broker, rec, serve)
+	srv, _, err := startControl(t.Context(), hub, broker, rec, serve)
 	require.NoError(t, err)
 	srv.start() // the rig is fully wired at construction
 	t.Cleanup(func() { srv.Close("test") })
@@ -270,20 +272,6 @@ func (c *ctlClient) collect(name string, n int) []ctl.Event {
 	return out
 }
 
-// drainUntil keeps reading until reports true, discarding lines, so a client
-// observing a flood never overflows its own buffers.
-func (c *ctlClient) drainUntil(until func() bool) {
-	c.t.Helper()
-	for !until() {
-		select {
-		case _, ok := <-c.inc:
-			require.True(c.t, ok)
-		case <-time.After(ctlWait):
-			c.t.Fatal("timed out draining control lines")
-		}
-	}
-}
-
 // awaitExit reads until session.exit arrives.
 func (c *ctlClient) awaitExit(t *testing.T) {
 	t.Helper()
@@ -308,38 +296,65 @@ func (s *controlServer) seatFree() bool {
 	return s.seat == nil
 }
 
-// TestControlSocketPathLayoutAndLength pins the socket location and the sun_path
-// guard: a home deep enough to overflow the budget fails with a clear error
-// rather than a truncated bind.
-func TestControlSocketPathLayoutAndLength(t *testing.T) {
+// TestTokenSuffixDiffersSameMillisecond pins the instance file names: tokenSuffix
+// takes the random tail of a token, so tokens minted in the same millisecond
+// (identical ULID timestamp prefixes) still name different files.
+func TestTokenSuffixDiffersSameMillisecond(t *testing.T) {
+	t.Parallel()
+	a := "01ABCD0123456789ABCDEFGHXY"
+	b := "01ABCD0123456789ZZZZZZZZZZZZ"
+	assert.Equal(t, a[:10], b[:10]) // same timestamp prefix
+	assert.NotEqual(t, tokenSuffix(a), tokenSuffix(b))
+	assert.Equal(t, a[len(a)-tokenPrefixLen:], tokenSuffix(a))
+}
+
+// TestDeadDial separates proof of death from weak evidence: only refusal or a
+// gone file collects, so fd exhaustion can never unlink a live peer.
+func TestDeadDial(t *testing.T) {
+	t.Parallel()
+	assert.True(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: syscall.ECONNREFUSED}))
+	assert.True(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: syscall.ENOENT}))
+	assert.False(t, deadDial(&net.OpError{Op: "dial", Net: "unix", Err: os.ErrDeadlineExceeded}))
+	assert.False(t, deadDial(errors.New("boom")))
+}
+
+// TestControlLayoutPinsPerInstanceNames pins the per-instance file layout and
+// the sun_path guard: socket and registry live under one per-session directory
+// named for the token prefix, and a home deep enough to overflow the budget
+// fails with a clear error rather than a truncated bind.
+func TestControlLayoutPinsPerInstanceNames(t *testing.T) {
 	// not parallel: AJENT_HOME pins the path root
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 
-	id := "01J8Z9Q5W2K7D4R3M6T0V1B2C"
-	path, warn, err := controlSocketPath(id)
+	id := "01J8Z9Q5W2K7D4R3M6"
+	token := "01ABCD0123456789ABCDEFGHXY"
+	dir, sock, reg, warn, err := controlLayout(id, token)
 	require.NoError(t, err)
 	assert.Empty(t, warn) // a fresh directory carries the right mode already
-	assert.Equal(t, filepath.Join(home, paths.ControlDirName, id+".sock"), path)
-	fi, err := os.Stat(filepath.Dir(path))
+	assert.Equal(t, filepath.Join(home, paths.ControlDirName, id), dir)
+	assert.Equal(t, filepath.Join(dir, tokenSuffix(token)+".sock"), sock)
+	assert.Equal(t, filepath.Join(dir, tokenSuffix(token)+".json"), reg)
+	fi, err := os.Stat(dir)
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o700), fi.Mode().Perm())
 
-	// grow the home until the budget breaks: the id plus suffix still fits, so
-	// the depth comes from the directory chain
+	// grow the home until the budget breaks: the session dir plus token prefix
+	// still fits, so the depth comes from the directory chain
 	deep := home
 	for len(deep) < controlSocketMax+64 {
 		deep = filepath.Join(deep, "very-long-directory-name-padding-the-path")
 	}
 	t.Setenv(config.EnvHome, deep)
-	_, _, err = controlSocketPath(id)
+	_, _, _, _, err = controlLayout(id, token)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unix socket limit")
 }
 
-// TestBindControlListener covers bind's socket-file contract: a SIGKILL leftover
-// with a dead peer is unlinked and rebound, an alive peer refuses the bind,
-// and a non-socket file is never deleted.
+// TestBindControlListener covers bind's socket-file contract: a SIGKILL
+// leftover at this token's own path is unlinked and rebound, and a non-socket
+// file is never deleted. There is no probe: sockets are per instance, so no
+// live peer can sit at this path.
 func TestBindControlListener(t *testing.T) {
 	t.Parallel()
 
@@ -354,7 +369,7 @@ func TestBindControlListener(t *testing.T) {
 		_, err = (&net.Dialer{}).DialContext(t.Context(), "unix", path) // dead peer probes refuse
 		require.Error(t, err)
 
-		ln2, err := bindControlListener(path, "sess-1")
+		ln2, err := bindControlListener(t.Context(), path)
 		require.NoError(t, err)
 		t.Cleanup(func() { _ = ln2.Close() })
 
@@ -363,29 +378,114 @@ func TestBindControlListener(t *testing.T) {
 		_ = c.Close()
 	})
 
-	t.Run("refuses_live_peer", func(t *testing.T) {
-		path := filepath.Join(t.TempDir(), "s.sock")
-		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = ln.Close() })
-
-		_, err = bindControlListener(path, "01JSESS")
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "01JSESS")
-		assert.Contains(t, err.Error(), "already running")
-	})
-
 	t.Run("refuses_foreign_file", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "s.sock")
 		require.NoError(t, os.WriteFile(path, []byte("not a socket"), 0o600))
 
-		_, err := bindControlListener(path, "s")
+		_, err := bindControlListener(t.Context(), path)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not a socket")
 		data, rerr := os.ReadFile(path)
 		require.NoError(t, rerr)
 		assert.Equal(t, "not a socket", string(data))
 	})
+}
+
+// TestControlRegistryTracksInstanceState pins the discovery record: written
+// after listen with the instance identity, rewritten on seat claim and yield,
+// so pickers stay current without dialing.
+func TestControlRegistryTracksInstanceState(t *testing.T) {
+	rig := newControlRig(t, nil)
+
+	raw, err := os.ReadFile(rig.srv.regPath)
+	require.NoError(t, err)
+	var reg controlRegistry
+	require.NoError(t, json.Unmarshal(raw, &reg))
+	assert.Equal(t, rig.hub.Snapshot().SessionID, reg.SessionID)
+	assert.Equal(t, rig.srv.token, reg.Token)
+	assert.Equal(t, rig.srv.path, reg.Socket)
+	assert.Positive(t, reg.PID)
+	assert.False(t, reg.SeatHeld)
+
+	// the wire shape agrees with the discovery reader: the same file decodes as
+	// a client.Instance with its start time intact
+	var asInstance client.Instance
+	require.NoError(t, json.Unmarshal(raw, &asInstance))
+	assert.False(t, asInstance.Started().IsZero())
+	assert.Equal(t, rig.srv.token, asInstance.Token)
+
+	c := dialControl(t, rig.path)
+	c.hello()
+	rp := c.call("a", ctl.MethodAttach, map[string]any{"control": true, "holder": "ci"})
+	require.Nil(t, rp.Error)
+
+	raw, err = os.ReadFile(rig.srv.regPath)
+	require.NoError(t, err)
+	reg = controlRegistry{}
+	require.NoError(t, json.Unmarshal(raw, &reg))
+	assert.True(t, reg.SeatHeld)
+	started := reg.StartedAt
+
+	// yield hands the seat back and the registry follows
+	rp = c.call("y", ctl.MethodSeatYield, map[string]any{})
+	require.Nil(t, rp.Error)
+	raw, err = os.ReadFile(rig.srv.regPath)
+	require.NoError(t, err)
+	reg = controlRegistry{} // reuse merges: absent fields must not keep old values
+	require.NoError(t, json.Unmarshal(raw, &reg))
+	assert.False(t, reg.SeatHeld)
+	assert.Equal(t, started, reg.StartedAt) // stamped once, rewrites never drift it
+
+	// close removes this instance's own files only
+	rig.srv.Close("test")
+	assert.NoFileExists(t, rig.srv.path)
+	assert.NoFileExists(t, rig.srv.regPath)
+}
+
+// TestControlCollectStaleRemovesDeadInstances pins the registry GC: an entry
+// whose socket refuses a connect and whose file is old enough is collected with
+// its socket, a live peer is untouched, this instance's own record is never
+// judged, and empty session dirs go with the dead.
+func TestControlCollectStaleRemovesDeadInstances(t *testing.T) {
+	rig := newControlRig(t, nil)
+	base := filepath.Dir(rig.srv.regPath) // <control>/<sessionID>
+	root := filepath.Dir(base)            // <control>
+
+	// a dead sibling in its own session directory, old enough to judge
+	deadDir := filepath.Join(root, "01DEADSESSION000000000000000")
+	require.NoError(t, os.MkdirAll(deadDir, paths.DirPerm))
+	deadSock := filepath.Join(deadDir, "deadbeef.sock")
+	deadReg := filepath.Join(deadDir, "deadbeef.json")
+	writeControlDead := controlRegistry{SessionID: "01DEADSESSION000000000000000",
+		Token: "deadbeef0000000000000000", Socket: deadSock, PID: os.Getpid()}
+	b, err := json.Marshal(writeControlDead)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(deadReg, b, 0o600))
+	past := time.Now().Add(-2 * gcStaleRegistry)
+	require.NoError(t, os.Chtimes(deadReg, past, past))
+
+	// this instance's own token is never dial-probed: a stale self record
+	// survives, since ringing our own socket only wakes the accept log
+	ownDir := filepath.Join(root, "01OWNSESSION000000000000000")
+	require.NoError(t, os.MkdirAll(ownDir, paths.DirPerm))
+	ownReg := filepath.Join(ownDir, "selfrecord.json")
+	writeControlOwn := controlRegistry{SessionID: "01OWNSESSION000000000000000",
+		Token: rig.srv.token, Socket: filepath.Join(ownDir, "selfrecord.sock"), PID: os.Getpid()}
+	b, err = json.Marshal(writeControlOwn)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(ownReg, b, 0o600))
+	require.NoError(t, os.Chtimes(ownReg, past, past))
+
+	rig.srv.collectStale()
+
+	assert.NoFileExists(t, deadReg)
+	assert.NoFileExists(t, deadSock)
+	assert.NoDirExists(t, deadDir) // the emptied session dir went too
+	require.FileExists(t, ownReg)  // the own-token record survived untouched
+
+	// the live instance survives its own GC pass
+	require.FileExists(t, rig.srv.path)
+	require.FileExists(t, rig.srv.regPath)
 }
 
 // TestControlCloseUnlinksSocket pins the shutdown contract: Close removes the
@@ -462,35 +562,35 @@ func writeServeHome(t *testing.T, controlEnabled bool) {
 	require.NoError(t, os.WriteFile(filepath.Join(home, config.ConfigFileName), []byte(conf), 0o600))
 }
 
-// onlySocket reports the one live control socket under the config dir.
+// onlySocket reports the one live control socket under the config dir: one
+// per-session directory holding one instance's socket.
 func onlySocket(t *testing.T) (string, bool) {
 	t.Helper()
 	dir, err := paths.Dir()
 	require.NoError(t, err)
-	entries, rerr := os.ReadDir(filepath.Join(dir, paths.ControlDirName))
-	if rerr != nil || len(entries) != 1 {
+	sessions, rerr := os.ReadDir(filepath.Join(dir, paths.ControlDirName))
+	if rerr != nil || len(sessions) != 1 || !sessions[0].IsDir() {
 		return "", false
 	}
-	name := entries[0].Name()
-	if !strings.HasSuffix(name, ".sock") {
+	files, ferr := os.ReadDir(filepath.Join(dir, paths.ControlDirName, sessions[0].Name()))
+	if ferr != nil {
 		return "", false
 	}
-	return filepath.Join(dir, paths.ControlDirName, name), true
+	for _, f := range files {
+		if strings.HasSuffix(f.Name(), ".sock") {
+			return filepath.Join(dir, paths.ControlDirName, sessions[0].Name(), f.Name()), true
+		}
+	}
+	return "", false
 }
 
-// TestServeRun pins the serve contract end to end: without control.enabled the
-// run refuses with a usage error; with it, the socket binds before serving, a
-// controller attaches and polls, SIGTERM ends the run cleanly with every
-// connection seeing session.exit before the socket unlinks, and /exit through
-// submit is the controller's kill switch.
+// TestServeRun pins the serve contract end to end: the socket binds before
+// serving, a controller attaches and polls, SIGTERM ends the run cleanly with
+// every connection seeing session.exit before this instance's files unlink,
+// and /exit through submit is the controller's kill switch. Serve implies
+// control whatever control.enabled says: the socket is the only front end.
 func TestServeRun(t *testing.T) {
 	// not parallel: AJENT_HOME isolates config, socket dir and sessions
-
-	t.Run("needs_control_enabled", func(t *testing.T) {
-		writeServeHome(t, false)
-
-		assert.Equal(t, ExitUsage, Run(RunOptions{Serve: true}))
-	})
 
 	t.Run("lifecycle_sigterm", func(t *testing.T) {
 		writeServeHome(t, true)

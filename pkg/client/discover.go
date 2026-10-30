@@ -4,66 +4,20 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/paths"
 )
 
-// Session is one live session's socket with the identity its hello announced.
-type Session struct {
-	Path string
-	ID   string
-	Name string
-	PID  int
-}
-
-// String renders one listing row: id, name and pid as far as each is known.
-func (s Session) String() string {
-	name := s.Name
-	if name == "" {
-		name = "-"
-	}
-	return fmt.Sprintf("%s  %s  pid %d", s.ID, name, s.PID)
-}
-
-// Resolve turns an --attach-style target into a socket path: an existing file
-// wins, then <session>.sock in the control dir, then a unique session id
-// prefix. The returned list covers every live socket for the failure message.
-func Resolve(target string) (string, []Session, error) {
-	live, _ := Discover()
-	if target == "" {
-		return "", live, errors.New("no attach target given")
-	}
-	if fi, serr := os.Stat(target); serr == nil && fi.Mode()&os.ModeSocket != 0 {
-		return target, live, nil
-	}
-	dir, derr := Dir()
-	if derr != nil {
-		return "", live, derr
-	}
-	direct := filepath.Join(dir, target+".sock")
-	if fi, serr := os.Stat(direct); serr == nil && fi.Mode()&os.ModeSocket != 0 {
-		return direct, live, nil
-	}
-
-	matches := slices.DeleteFunc(slices.Clone(live), func(s Session) bool {
-		return !strings.HasPrefix(s.ID, target)
-	})
-	switch len(matches) {
-	case 1:
-		return matches[0].Path, live, nil
-	case 0:
-		return "", live, fmt.Errorf("no session socket at %s", target)
-	default:
-		return "", live, fmt.Errorf("%q matches %d sessions; give the full id or path", target, len(matches))
-	}
-}
+// Instance is one live session's serving instance, read from the registry file
+// beside its socket. Discovery never dials: every field was written by the
+// instance after listen, and the one remaining dial is the final connect.
+type Instance = ctl.Instance
 
 // Dir returns <config>/<control socket dir> without creating it.
 func Dir() (string, error) {
@@ -74,54 +28,101 @@ func Dir() (string, error) {
 	return filepath.Join(home, paths.ControlDirName), nil
 }
 
-// Discover probes every socket in the control dir and returns the live ones,
-// sorted by session id. A peer that never says hello is skipped: nothing to
-// attach to.
-func Discover() ([]Session, error) {
+// Discover reads the registry: every live instance's record, sorted by session
+// id. A corrupt or truncated file reads as absent, and nothing here dials, so
+// discovery costs one directory read.
+func Discover() ([]Instance, error) {
 	dir, err := Dir()
 	if err != nil {
 		return nil, err
 	}
-	names, err := os.ReadDir(dir)
+	sessions, err := os.ReadDir(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
 	}
-
-	var out []Session
-	for _, name := range names {
-		path := filepath.Join(dir, name.Name())
-		fi, serr := os.Stat(path)
-		if serr != nil || fi.Mode()&os.ModeSocket == 0 {
-			continue // a stale or foreign file is never attachable anyway
+	var out []Instance
+	for _, dirEntry := range sessions {
+		if !dirEntry.IsDir() {
+			continue
 		}
-		hello, err := probeHello(path)
+		files, err := os.ReadDir(filepath.Join(dir, dirEntry.Name()))
 		if err != nil {
 			continue
 		}
-		out = append(out, Session{Path: path, ID: hello.Session.ID,
-			Name: hello.Session.Name, PID: hello.PID})
+		for _, f := range files {
+			if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+				continue
+			}
+			b, err := os.ReadFile(filepath.Join(dir, dirEntry.Name(), f.Name()))
+			if err != nil {
+				continue
+			}
+			var in Instance
+			if json.Unmarshal(b, &in) != nil || in.SessionID == "" || in.Socket == "" {
+				continue
+			}
+			out = append(out, in)
+		}
 	}
-	slices.SortFunc(out, func(a, b Session) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(out, func(a, b Instance) int { return strings.Compare(a.SessionID, b.SessionID) })
 	return out, nil
 }
 
-// probeHello reads one socket's hello line.
-func probeHello(path string) (hello ctl.Hello, err error) {
-	conn, derr := (&net.Dialer{Timeout: CallWait}).Dial("unix", path)
-	if derr != nil {
-		return hello, derr
+// Resolve turns an --attach-style target into its live instances, with the
+// same rules --resume resolves names by: an exact name first (case
+// insensitive), then a full id or unique prefix. An existing socket path wins
+// outright, the escape hatch tests and scripts use. The second slice covers
+// every live instance, for failure messages and pickers.
+func Resolve(target string) ([]Instance, []Instance, error) {
+	live, err := Discover()
+	if err != nil {
+		return nil, nil, err
 	}
-	defer func() { _ = conn.Close(); _ = conn.SetDeadline(time.Time{}) }()
-	if err = conn.SetDeadline(time.Now().Add(helloWait)); err != nil {
-		return ctl.Hello{}, err
+	if target == "" {
+		return live, live, nil
 	}
+	if fi, serr := os.Stat(target); serr == nil && fi.Mode()&os.ModeSocket != 0 {
+		direct := []Instance{{Socket: target}}
+		return direct, live, nil
+	}
+	matches := matchInstances(live, target)
+	switch len(matches) {
+	case 0:
+		return nil, live, fmt.Errorf("no live control session matches %q", target)
+	default:
+		return matches, live, nil
+	}
+}
 
-	var raw json.RawMessage
-	if err = ctl.NewDecoder(conn).Decode(&raw); err != nil {
-		return ctl.Hello{}, err
+// matchInstances applies the resume rules over registry rows: exact name, then
+// full id or unique prefix. An ambiguous prefix matches nothing and names the
+// error at the caller.
+func matchInstances(live []Instance, target string) []Instance {
+	named := slices.DeleteFunc(slices.Clone(live), func(in Instance) bool {
+		return in.SessionName == "" || !strings.EqualFold(in.SessionName, target)
+	})
+	if len(named) > 0 {
+		return named
 	}
-	return helloLine(raw)
+	return slices.DeleteFunc(slices.Clone(live), func(in Instance) bool {
+		return in.SessionID != target && !strings.HasPrefix(in.SessionID, target)
+	})
+}
+
+// Followable picks the instance a reconnecting controller follows: the same
+// token when it still serves, else the one remaining instance of the session
+// (the restarted-serve case). Several remaining answers nil, never a silent
+// swap onto a sibling's head.
+func Followable(live []Instance, sessionID, token string) []Instance {
+	ofSession := bulk.SliceFilter(func(in Instance) bool { return in.SessionID == sessionID }, live)
+	if i := slices.IndexFunc(ofSession, func(in Instance) bool { return in.Token == token }); i >= 0 {
+		return ofSession[i : i+1]
+	}
+	if len(ofSession) == 1 {
+		return ofSession
+	}
+	return nil
 }

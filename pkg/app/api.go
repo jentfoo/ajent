@@ -98,18 +98,19 @@ type HeadlessOptions struct {
 
 // RunOptions carries the parsed command line into app.Run.
 type RunOptions struct {
-	Model      string
-	Render     string // ui.render override, "auto" means unset
-	System     string // --system: replaces ajent's default prose guidance when non-empty
-	Prompt     string
-	Output     string // OutputText or OutputJSON
-	Stats      bool
-	Scope      ToolScope
-	AllowTools []string
-	DenyTools  []string
-	Args       []string // positional arguments, joined into a bootstrap prompt
-	Serve      bool     // --serve: run with the control socket as the only front end
-	Attach     string   // --attach <socket>: mirror that running session over its control socket
+	Model       string
+	Render      string // ui.render override, "auto" means unset
+	System      string // --system: replaces ajent's default prose guidance when non-empty
+	Prompt      string
+	Output      string // OutputText or OutputJSON
+	Stats       bool
+	Scope       ToolScope
+	AllowTools  []string
+	DenyTools   []string
+	Args        []string // positional arguments, joined into a bootstrap prompt
+	Serve       bool     // --serve: run with the control socket as the only front end
+	Attach      string   // --attach [name|id|socket]: mirror that session's control socket
+	AttachGiven bool     // --attach was given, bare or with a target
 
 	SessMode     ResumeMode
 	SessTarget   string

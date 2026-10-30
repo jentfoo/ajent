@@ -57,6 +57,34 @@ func TestParseFlags(t *testing.T) {
 		assert.False(t, f.promptGiven)
 	})
 
+	t.Run("attach_target", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach", "shared"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Equal(t, "shared", f.attach)
+	})
+
+	// bare --attach opens the live-session picker, never pflag's missing-value error
+	t.Run("attach_bare", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Empty(t, f.attach)
+
+		f, err = parseFlags([]string{"--attach", "--render", "plain"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven) // the next token is a flag, so the target stays empty
+		assert.Empty(t, f.attach)
+		assert.Equal(t, "plain", f.render)
+	})
+
+	t.Run("attach_equals_form", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach=01ABC"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Equal(t, "01ABC", f.attach)
+	})
+
 	t.Run("output_and_scopes", func(t *testing.T) {
 		f, err := parseFlags([]string{"-p", "x", "-o", "json", "--read-only"})
 		require.NoError(t, err)
@@ -167,6 +195,7 @@ func TestWriteUsage(t *testing.T) {
 	assert.Equal(t, "ajent version "+version.Version, strings.SplitN(out, "\n", 2)[0])
 	assert.Contains(t, out, "usage of ")
 	assert.Contains(t, out, "--resume")
+	assert.Contains(t, out, "--attach")
 	assert.Contains(t, out, "--delete-old")
 }
 
@@ -196,8 +225,16 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"empty_session_name", []string{"--session", ""}, false},
 		{"session_name_with_space", []string{"--session", "fix parser"}, false},
 		{"delete_target", []string{"--delete", "fix-parser"}, true},
+		{"delete_with_force", []string{"--delete", "fix-parser", "--force"}, true},
+		{"attach_bare", []string{"--attach"}, true},
+		{"attach_target", []string{"--attach", "shared"}, true},
+		{"attach_with_prompt", []string{"--attach", "shared", "-p", "hi"}, false},
+		{"attach_with_positional", []string{"--attach", "shared", "extra"}, false},
+		{"attach_with_serve", []string{"--attach", "shared", "--serve"}, false},
 		{"delete_old_bare", []string{"--delete-old"}, true},
 		{"delete_old_with_days", []string{"--delete-old", "7"}, true},
+		{"delete_old_with_force", []string{"--delete-old", "--force"}, false},
+		{"force_without_delete", []string{"--force"}, false},
 		{"delete_with_model", []string{"--delete", "a", "-m", "p/m"}, true},
 		{"empty_delete_target", []string{"--delete", "  "}, false},
 		{"delete_with_delete_old", []string{"--delete", "a", "--delete-old"}, false},
@@ -331,6 +368,26 @@ func TestExtractResume(t *testing.T) {
 	assert.True(t, given)
 	assert.Equal(t, "01ZZZ", id)
 	assert.Equal(t, []string{"seed"}, rest)
+}
+
+func TestExtractAttach(t *testing.T) {
+	t.Parallel()
+	given, target, rest := extractAttach([]string{"--attach", "shared"})
+	assert.True(t, given)
+	assert.Equal(t, "shared", target)
+	assert.Empty(t, rest)
+
+	given, target, rest = extractAttach([]string{"--attach"})
+	assert.True(t, given)
+	assert.Empty(t, target)
+	assert.Empty(t, rest)
+
+	_, target, _ = extractAttach([]string{"--attach=01ABC", "--continue"})
+	assert.Equal(t, "01ABC", target)
+
+	given, _, rest = extractAttach([]string{"-m", "p/m", "hello"})
+	assert.False(t, given)
+	assert.Equal(t, []string{"-m", "p/m", "hello"}, rest)
 }
 
 func TestExtractDeleteOld(t *testing.T) {

@@ -28,7 +28,7 @@ type streamCallSink struct {
 func (s *streamCallSink) log(name string) { s.calls = append(s.calls, name) }
 
 func (s *streamCallSink) TurnStart(agent.TurnInfo)  { s.log(ctl.EventTurnStart) }
-func (s *streamCallSink) UserPrompt(string)         { s.log(ctl.EventUserPrompt) }
+func (s *streamCallSink) UserPrompt(string)         {} // prompts render at entry.append; no echo exists
 func (s *streamCallSink) Thinking(string)           { s.log(ctl.EventThinkingDelta) }
 func (s *streamCallSink) EndThinking()              { s.log(ctl.EventThinkingEnd) }
 func (s *streamCallSink) Text(string)               { s.log(ctl.EventTextDelta) }
@@ -119,7 +119,7 @@ func lastEvent(t *testing.T, evs []ctl.Event, name string) ctl.Event {
 // streamEvent reports whether name belongs to the agent-sink family.
 func streamEvent(name string) bool {
 	switch name {
-	case ctl.EventTurnStart, ctl.EventUserPrompt,
+	case ctl.EventTurnStart,
 		ctl.EventThinkingDelta, ctl.EventThinkingEnd,
 		ctl.EventTextDelta, ctl.EventTextEnd,
 		ctl.EventToolStart, ctl.EventToolOutput, ctl.EventToolProgress,
@@ -220,8 +220,7 @@ func TestControlSurfaceParity(t *testing.T) {
 	c.hello()
 
 	ui := rig.hub.ui
-	ui.UserEcho("a prompt")
-	ui.Print("# printed block")
+	ui.Print("# printed block") // UserEcho publishes nothing: prompts ride entry.append
 	ui.Notify("plain notice", tui.LevelWarn)
 	ui.NotifyKeyed("subagent", "keyed notice", tui.LevelInfo)
 	ui.SetStatusSegment(segment(segMCP, "mcp 2/2", "2/2"))
@@ -229,7 +228,7 @@ func TestControlSurfaceParity(t *testing.T) {
 	ui.SetQueued([]string{"queued a", "queued b"})
 
 	want := []string{
-		ctl.EventEcho, ctl.EventPrint, ctl.EventNotice, ctl.EventNotice,
+		ctl.EventPrint, ctl.EventNotice, ctl.EventNotice,
 		ctl.EventStatus, ctl.EventStatus, ctl.EventQueued,
 	}
 	all := c.collectEventsAny(t, len(want))
@@ -238,10 +237,6 @@ func TestControlSurfaceParity(t *testing.T) {
 		names = append(names, ev.Name)
 	}
 	assert.Equal(t, want, names)
-
-	var echo ctl.EchoData
-	require.NoError(t, lastEvent(t, all, ctl.EventEcho).Decode(&echo))
-	assert.Equal(t, "a prompt", echo.Text)
 
 	var pr ctl.PrintData
 	require.NoError(t, lastEvent(t, all, ctl.EventPrint).Decode(&pr))

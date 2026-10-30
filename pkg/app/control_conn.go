@@ -85,6 +85,7 @@ func newControlConn(srv *controlServer, nc net.Conn) *controlConn {
 		Interactive: srv.hub.Interactive(), Serve: srv.serve,
 		PID: os.Getpid(), Version: version.Version,
 		TranscriptPath: srv.transcriptPath,
+		Token:          srv.token,
 	}))
 	_ = c.flushHello() // the hello must land before anything can queue behind it
 	return c
@@ -110,9 +111,10 @@ func (c *controlConn) start() {
 
 // deliver stages one event. It runs on the publishing goroutine, under the
 // hub's lock, so it never blocks: a full stage drops the connection
-// asynchronously.
+// asynchronously. The exit event stages past every bound, so an attached
+// terminal can always say "session ended" definitively.
 func (c *controlConn) deliver(ev ctl.Event) {
-	if !c.stageOutgoing(outgoing{event: &ev}) {
+	if !c.stageOutgoing(outgoing{event: &ev}, ev.Name == ctl.EventSessionExit) {
 		go c.detach(false) // off the hub lock: detach unregisters under it
 	}
 }
@@ -130,7 +132,7 @@ func (c *controlConn) reply(id string, seq uint64, result any, rerr *ctl.Error) 
 		}
 	}
 	rp := ctl.Reply{ID: id, Seq: seq, Result: raw, Error: rerr}
-	if !c.stageOutgoing(outgoing{reply: &rp}) {
+	if !c.stageOutgoing(outgoing{reply: &rp}, false) {
 		go c.detach(false)
 	}
 }
@@ -139,7 +141,8 @@ func (c *controlConn) reply(id string, seq uint64, result any, rerr *ctl.Error) 
 // reporting false once the connection is detached or a bound tripped: the
 // hard caps always drop, the soft item count drops only when the writer has
 // not flushed for controlStallWait, which is the peer-stopped-reading shape.
-func (c *controlConn) stageOutgoing(out outgoing) bool {
+// reserved bypasses every bound: the exit event can never be the drop.
+func (c *controlConn) stageOutgoing(out outgoing, reserved bool) bool {
 	select {
 	case <-c.done:
 		return false
@@ -148,11 +151,13 @@ func (c *controlConn) stageOutgoing(out outgoing) bool {
 	c.stageMu.Lock()
 	defer c.stageMu.Unlock()
 	size := out.size()
-	if len(c.stage) >= stageHardItems || c.stageBytes+size > stageHardBytes {
-		return false
-	}
-	if len(c.stage) >= stageSoftItems && c.stalledLocked() {
-		return false
+	if !reserved {
+		if len(c.stage) >= stageHardItems || c.stageBytes+size > stageHardBytes {
+			return false
+		}
+		if len(c.stage) >= stageSoftItems && c.stalledLocked() {
+			return false
+		}
 	}
 	c.stage = append(c.stage, out)
 	c.stageBytes += size
@@ -302,9 +307,11 @@ func (c *controlConn) flushBuffer() error {
 	return err
 }
 
-// dispatch answers one request through the method registry. The watermark
-// reads before anything runs, so events racing the reply stay above its seq;
-// a seat refusal lands after it for the same reason.
+// dispatch answers one request through the method registry. Off-lane calls
+// run here. Lane calls enqueue on the control executor, whose pop-time run
+// revalidates the seat so a takeover can never leave a success after its
+// effect. Reads reply with the seq their result was taken at, writes reply
+// with the watermark after their mutation, superseding its events.
 func (c *controlConn) dispatch(req ctl.Request) {
 	m, ok := controlMethods[req.Method]
 	if !ok {
@@ -312,13 +319,38 @@ func (c *controlConn) dispatch(req ctl.Request) {
 			ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method))
 		return
 	}
-	seq := c.srv.hub.evWatermark()
+	if m.lane {
+		run := c.srv.exec.runPriority
+		if !m.priority {
+			run = c.srv.exec.run
+		}
+		if !run(func() {
+			if m.seat {
+				if rerr := c.srv.seatRefusal(c); rerr != nil {
+					c.reply(req.ID, c.srv.hub.evWatermark(), nil, rerr)
+					return
+				}
+			}
+			result, _, rerr := m.handle(c, req.Params)
+			c.reply(req.ID, c.srv.hub.evWatermark(), result, rerr)
+		}) {
+			c.reply(req.ID, c.srv.hub.evWatermark(), nil,
+				ctl.Errf(ctl.CodeUnavailable, "the session is shutting down"))
+		}
+		return
+	}
 	if m.seat {
 		if rerr := c.srv.seatRefusal(c); rerr != nil {
-			c.reply(req.ID, seq, nil, rerr)
+			c.reply(req.ID, c.srv.hub.evWatermark(), nil, rerr)
 			return
 		}
 	}
-	result, rerr := m.handle(c, req.Params)
+	result, seq, rerr := m.handle(c, req.Params)
+	if sr, ok := result.(seqResult); ok {
+		result = sr.val
+		seq = sr.seq
+	} else if seq == 0 {
+		seq = c.srv.hub.evWatermark()
+	}
 	c.reply(req.ID, seq, result, rerr)
 }

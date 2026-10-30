@@ -124,7 +124,7 @@ func TestForkToRefusedAfterSwitch(t *testing.T) {
 	require.NoError(t, err)
 	ag, _, start, release := heldTurnAgent(t)
 	// onSwitch fires between the head move and the restore: land the turn there
-	r.onSwitch = func([]llm.Message) { start() }
+	r.onSwitch = func([]llm.Message, string) { start() }
 
 	err = r.forkTo(wrapUI(t, ui), ag, reg, "", m) // empty head: the implementation round's new root
 	release()

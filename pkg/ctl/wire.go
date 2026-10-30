@@ -1,6 +1,10 @@
 package ctl
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+	"time"
+)
 
 // Hello is the first line after accept: what this run is and where it is.
 type Hello struct {
@@ -16,12 +20,56 @@ type Hello struct {
 	// recording is off. Controllers backfill from this file: bulk catch-up
 	// never rides the socket.
 	TranscriptPath string `json:"transcriptPath,omitempty"`
+	// Token is the serving instance's writer token, so a reconnecting
+	// controller can prefer the same instance.
+	Token string `json:"token,omitempty"`
 }
 
 // Session names the transcript a controller attaches to.
 type Session struct {
 	ID   string `json:"id"`
 	Name string `json:"name,omitempty"`
+}
+
+// Instance is one live serving instance's discovery record: written by the
+// server beside its socket after listen and rewritten on seat changes and
+// session renames, so controllers pick without dialing. Fields are additive
+// only, so older binaries skip unknown ones.
+type Instance struct {
+	SessionID   string `json:"sessionID"`
+	SessionName string `json:"sessionName,omitempty"`
+	Workspace   string `json:"workspace,omitempty"`
+	Model       string `json:"model,omitempty"`
+	StartedAt   int64  `json:"startedAt"`
+	PID         int    `json:"pid"`
+	Token       string `json:"token"`
+	Socket      string `json:"socket"`
+	SeatHeld    bool   `json:"seatHeld,omitempty"`
+}
+
+// Label names the instance's session the way --resume takes it back.
+func (in Instance) Label() string {
+	if in.SessionName != "" {
+		return in.SessionName
+	}
+	return in.SessionID
+}
+
+// Started returns when the instance came up.
+func (in Instance) Started() time.Time {
+	if in.StartedAt == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(in.StartedAt)
+}
+
+// String renders one listing row: label, model and pid as far as each is known.
+func (in Instance) String() string {
+	model := in.Model
+	if model == "" {
+		model = "-"
+	}
+	return fmt.Sprintf("%s  %s  pid %d", in.Label(), model, in.PID)
 }
 
 // --- stream event payloads, one per agent sink call ---
@@ -34,12 +82,6 @@ type TurnStartData struct {
 // TextData carries one streamed delta of text or thinking.
 type TextData struct {
 	Delta string `json:"delta"`
-}
-
-// UserPromptData echoes a prompt's words, replay only: a live submission
-// arrives as an echo event instead.
-type UserPromptData struct {
-	Text string `json:"text"`
 }
 
 // ToolStartData opens one tool call. Input is the raw call arguments.
@@ -118,11 +160,6 @@ type TurnEndData struct {
 
 // --- session event payloads ---
 
-// EchoData echoes one committed user message.
-type EchoData struct {
-	Text string `json:"text"`
-}
-
 // ImageData is one committed image beside a prompt; Data carries the encoded
 // bytes the terminal surface holds.
 type ImageData struct {
@@ -131,11 +168,6 @@ type ImageData struct {
 	Label     string `json:"label,omitempty"`
 	W         int    `json:"w,omitempty"`
 	H         int    `json:"h,omitempty"`
-}
-
-// EchoImagesData echoes the images committed beside a prompt.
-type EchoImagesData struct {
-	Images []ImageData `json:"images"`
 }
 
 // PrintData is one markdown block, the form /help and /usage use.
@@ -193,10 +225,29 @@ type EditorData struct {
 	Text string `json:"text"`
 }
 
-// HeadData reports the session head moving (a rewind or fork); observers
-// re-read the branch rather than guessing.
-type HeadData struct {
-	ID string `json:"id"`
+// BranchChangedData reports the session head moving (a rewind or fork), the
+// committed family's head event beside entry.append: from names the head left,
+// head the one now current, cause why it moved (rewind, fork). No other event
+// may move a head.
+type BranchChangedData struct {
+	From  string `json:"from,omitempty"`
+	Head  string `json:"head"`
+	Cause string `json:"cause,omitempty"`
+}
+
+// QueueDroppedData names the queued prompts an interrupt or rewind cleared, so
+// their pending rows resolve instead of vanishing. Cause says which ("interrupt"
+// or "rewind") so the drop line reads honestly. Secret-prefixed texts are
+// redacted like queue rows.
+type QueueDroppedData struct {
+	Texts []string `json:"texts"`
+	Cause string   `json:"cause,omitempty"`
+}
+
+// SessionRenamedData announces a rename, so controllers and pickers learn it
+// without polling. The committed truth rides entry.append of the rename entry.
+type SessionRenamedData struct {
+	Name string `json:"name"`
 }
 
 // InteractionPendingData announces one open dialog and how it may be answered.
@@ -306,16 +357,6 @@ type ResolveParams struct {
 	Text    *string `json:"text,omitempty"`
 	Chat    bool    `json:"chat,omitempty"`
 	Cancel  bool    `json:"cancel,omitempty"`
-}
-
-// ReplayParams asks for the events past a seq the client already holds.
-type ReplayParams struct {
-	Since uint64 `json:"since"`
-}
-
-// ReplayResult carries the retained events past Since, in seq order.
-type ReplayResult struct {
-	Events []Event `json:"events"`
 }
 
 // SeatLostData announces one force takeover of the control seat: From names

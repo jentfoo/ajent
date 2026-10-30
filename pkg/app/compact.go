@@ -249,7 +249,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	// a cut or an elided result takes file content out of context that read
 	// tracking still vouches for, so this rebuild reports like any other
 	if c.rec != nil && c.rec.onSwitch != nil {
-		c.rec.onSwitch(rebuilt.Messages)
+		c.rec.onSwitch(rebuilt.Messages, rewindCauseCompact)
 	}
 
 	t := c.st.Tokens

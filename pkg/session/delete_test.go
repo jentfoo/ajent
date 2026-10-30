@@ -46,7 +46,7 @@ func TestDeleteSession(t *testing.T) {
 		writeDeletableSession(t, store, ws, "fix-parser")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "fix-parser"))
+		require.NoError(t, DeleteSession(&buf, store, ws, "fix-parser", false))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestDeleteSession(t *testing.T) {
 		id := writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, id[:10]))
+		require.NoError(t, DeleteSession(&buf, store, ws, id[:10], false))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestDeleteSession(t *testing.T) {
 		keep := writeDeletableSession(t, store, ws, "keep-me")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "drop-me"))
+		require.NoError(t, DeleteSession(&buf, store, ws, "drop-me", false))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestDeleteSession(t *testing.T) {
 		store, ws := deleteWorkspace(t)
 
 		var buf bytes.Buffer
-		err := DeleteSession(&buf, store, ws, "no-such-session")
+		err := DeleteSession(&buf, store, ws, "no-such-session", false)
 		assert.ErrorContains(t, err, "no session matches")
 	})
 
@@ -95,7 +95,7 @@ func TestDeleteSession(t *testing.T) {
 		writeNewer(t, store, ws, "future-work")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "future-work"))
+		require.NoError(t, DeleteSession(&buf, store, ws, "future-work", false))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestDeleteSession(t *testing.T) {
 		damaged := writeDamaged(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, damaged.Path))
+		require.NoError(t, DeleteSession(&buf, store, ws, damaged.Path, false))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestDeleteSession(t *testing.T) {
 		damaged := writeDamaged(t, store, ws, "")
 
 		var buf bytes.Buffer
-		err := DeleteSession(&buf, store, ws, "no-such-session")
+		err := DeleteSession(&buf, store, ws, "no-such-session", false)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), damaged.Path)
 	})

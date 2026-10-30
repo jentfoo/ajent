@@ -122,7 +122,7 @@ func benchBranch(b *testing.B, path string) ([]Entry, CompactionData) {
 	entries, warns, err := Read(path)
 	require.NoError(b, err)
 	require.Empty(b, warns)
-	branch := Branch(entries, headFor(path, entries))
+	branch := Branch(entries, headForEntries(path, entries, true))
 	require.NotEmpty(b, branch)
 
 	var cd CompactionData
@@ -161,7 +161,7 @@ func BenchmarkResumeReplay(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if branch := Branch(entries, headFor(path, entries)); len(branch) == 0 {
+			if branch := Branch(entries, headForEntries(path, entries, true)); len(branch) == 0 {
 				b.Fatal("empty branch")
 			}
 		}
@@ -172,7 +172,7 @@ func BenchmarkResumeReplay(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			branch := Branch(entries, headFor(path, entries))
+			branch := Branch(entries, headForEntries(path, entries, true))
 			msgs, warns := ContextMessages(branch, cd, resolve)
 			if len(warns) > 0 {
 				b.Fatalf("rebuild warnings: %v", warns)

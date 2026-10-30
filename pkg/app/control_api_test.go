@@ -168,11 +168,22 @@ func TestControlMethods(t *testing.T) {
 	})
 
 	t.Run("read_methods_stay_open", func(t *testing.T) {
-		for _, m := range []string{ctl.MethodState, ctl.MethodReplay, ctl.MethodAttach} {
+		for _, m := range []string{ctl.MethodState, ctl.MethodAttach} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.False(t, entry.seat)
 		}
+	})
+
+	t.Run("mutating_verbs_run_the_lane", func(t *testing.T) {
+		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt,
+			ctl.MethodModeCycle, ctl.MethodInputSet, ctl.MethodRewind} {
+			entry, ok := controlMethods[m]
+			require.True(t, ok)
+			assert.True(t, entry.lane)
+		}
+		// interrupt jumps the queue so Esc latency never waits behind a rewind
+		assert.True(t, controlMethods[ctl.MethodInterrupt].priority)
 	})
 
 	t.Run("unknown_method_refused", func(t *testing.T) {
@@ -268,6 +279,13 @@ func TestControlSubmit(t *testing.T) {
 		rp := c.call("u", ctl.MethodSubmit, map[string]any{"line": "hi"})
 		require.NotNil(t, rp.Error)
 		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
+
+		// a full prompt queue refuses busy instead of parking the control lane
+		rig.hub.setSubmitLine(func(string, string) error { return errPromptQueueFull })
+		rp = c.call("b", ctl.MethodSubmit, map[string]any{"line": "hi"})
+		require.NotNil(t, rp.Error)
+		assert.Equal(t, ctl.CodeBusy, rp.Error.Code)
+		assert.Contains(t, rp.Error.Message, "retry")
 	})
 
 	t.Run("steers_and_interrupts", func(t *testing.T) {
@@ -354,7 +372,7 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 
 	stager := command.NewStager(t.Context(), toolReg, agent.NopSink{})
 	t.Cleanup(stager.Cancel)
-	q := newSteerQueue(rig.hub.ui, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	q := newSteerQueue(rig.hub.ui, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
 	rig.hub.q = q
 	rig.hub.stager = stager
 	gate := &typingGate{idle: time.Hour, handoff: 10 * time.Millisecond,
@@ -365,6 +383,14 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 			select {
 			case pump <- pl:
 			case <-t.Context().Done():
+			}
+		},
+		trySend: func(pl pumpLine) bool {
+			select {
+			case pump <- pl:
+				return true
+			default:
+				return false
 			}
 		}}
 	rig.hub.submitLine = router.submit
@@ -828,10 +854,11 @@ func TestControlRewind(t *testing.T) {
 		assert.NotEmpty(t, res.Head)
 		assert.True(t, *cw.stopped)
 
-		ev := c.collect(ctl.EventHead, 1)[0]
-		var hd ctl.HeadData
+		ev := c.collect(ctl.EventBranchChanged, 1)[0]
+		var hd ctl.BranchChangedData
 		require.NoError(t, ev.Decode(&hd))
-		assert.Equal(t, res.Head, hd.ID)
+		assert.Equal(t, res.Head, hd.Head)
+		assert.Equal(t, rewindCauseRewind, hd.Cause)
 
 		assert.Equal(t, res.Head, rig.rec.w.Head()) // the branch rebuilt without the second prompt
 		var texts []string
@@ -909,9 +936,9 @@ func wireControlRewind(t *testing.T, rig *controlRig) *controlRewind {
 	rig.hub.ag = ag
 	rig.hub.syncLedger()
 	var stopped bool
-	rig.hub.rewindTo = func(head string) (string, error) {
+	rig.hub.rewindTo = func(head, cause string) (string, error) {
 		stopped = true // the driver ends a plan workflow before switching
-		return rig.rec.rewindTo(rig.hub.ui, ag, reg, head)
+		return rig.rec.rewindTo(rig.hub.ui, ag, reg, head, cause)
 	}
 	return &controlRewind{stopped: &stopped, entered: entered, release: release}
 }
@@ -1052,46 +1079,23 @@ func TestControlEvents(t *testing.T) {
 		assert.Equal(t, "three", d.V)
 	})
 
-	t.Run("replay_past_since", func(t *testing.T) {
+	t.Run("watermark_supersedes_own_effects", func(t *testing.T) {
 		rig := newControlRig(t, nil)
 		c := dialControl(t, rig.path)
 		c.hello()
 
-		for range 4 {
+		// the state.get reply carries the seq its snapshot was taken at, so an
+		// event racing the read can never sit below a reconciled watermark
+		rp := c.call("s", ctl.MethodState, map[string]any{})
+		require.Nil(t, rp.Error)
+		snapSeq := rp.Seq // zero is legal: the hub has published nothing yet
+
+		for range 3 {
 			rig.hub.publish("marker", nil)
 		}
-		var rr ctl.ReplayResult
-		rp := c.call("r1", ctl.MethodReplay, ctl.ReplayParams{Since: 2})
+		rp = c.call("s2", ctl.MethodState, map[string]any{})
 		require.Nil(t, rp.Error)
-		require.NoError(t, rp.DecodeResult(&rr))
-		require.Len(t, rr.Events, 2)
-		assert.Equal(t, uint64(3), rr.Events[0].Seq)
-		assert.Equal(t, uint64(4), rr.Events[1].Seq)
-
-		// a since at or past the present answers empty, never errors
-		rp = c.call("r2", ctl.MethodReplay, ctl.ReplayParams{Since: 99})
-		require.Nil(t, rp.Error)
-		require.NoError(t, rp.DecodeResult(&rr))
-		assert.Empty(t, rr.Events)
-
-		// overflow the ring: the trimmed history answers too-old. The fill runs in
-		// the background while the client keeps reading, so only the intended
-		// connection state changes, never this client's own buffers.
-		filled := make(chan struct{})
-		go func() {
-			defer close(filled)
-			for range eventRingSize {
-				rig.hub.publish("filler", nil)
-			}
-		}()
-		c.drainUntil(func() bool { return hubRingLen(rig.hub) >= eventRingSize })
-		<-filled
-		rp = c.call("r3", ctl.MethodReplay, ctl.ReplayParams{Since: 0})
-		require.NotNil(t, rp.Error)
-		assert.Equal(t, ctl.CodeTooOld, rp.Error.Code)
-
-		_, ok := rig.hub.eventsSince(4) // first filler seq still retained
-		require.True(t, ok)
+		assert.Equal(t, snapSeq+3, rp.Seq) // exactly the three markers, nothing between
 	})
 
 	t.Run("concurrent_observers", func(t *testing.T) {
@@ -1120,10 +1124,4 @@ func TestControlEvents(t *testing.T) {
 			assert.Equal(t, []uint64{1, 2, 3, 4, 5}, seqs)
 		}
 	})
-}
-
-func hubRingLen(h *sessionHub) int {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return len(h.evRing)
 }

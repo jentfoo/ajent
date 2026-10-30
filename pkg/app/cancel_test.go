@@ -348,7 +348,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			controls := make(chan tui.Control, 4)
 			hub := newTestHub(ui)
 			hub.ag = ag
-			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
 			hub.stager = stager
 			go controlLoop(t.Context(), controls,
 				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
@@ -431,7 +431,7 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			// queue takes the hubUI wrapper, whose Interactive gates recovery.
 			waitReady, takeReady := stagePair(t)
 			hub := newTestHub(ui)
-			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
+			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady, nil)
 			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 
 			quit := make(chan struct{})
@@ -504,7 +504,7 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	q := newSteerQueue(fake, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
 	stager.Run("echo boom", false) // output stages while the turn runs
 	q.hold(agent.Input{Text: "why did it fail"}, "why did it fail", 1)
 

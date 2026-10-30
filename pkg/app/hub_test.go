@@ -13,6 +13,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
@@ -25,7 +26,7 @@ import (
 // tests that drive the control loop or submit paths.
 func newTestHub(ui *tui.UI) *sessionHub {
 	b := newInteractionBroker(ui, nil, nil)
-	return newSessionHub(hubDeps{ui: ui, dialogs: b, acct: tokens.New(llm.Model{})}, hubEmitters{})
+	return newSessionHub(hubDeps{ui: ui, dialogs: b, acct: tokens.New(llm.Model{})})
 }
 
 // hubRig is one submit-and-observe harness: a hub wired to a real router,
@@ -58,6 +59,10 @@ func newHubRig(t *testing.T) *hubRig {
 			rig.mu.Lock()
 			rig.lines = append(rig.lines, pl)
 			rig.mu.Unlock()
+		},
+		trySend: func(pl pumpLine) bool {
+			rig.router.send(pl)
+			return true
 		},
 	}
 	hub.submitLine = rig.router.submit
@@ -110,7 +115,7 @@ func TestHubSubmitRoutesLikeTheEditor(t *testing.T) {
 		if fromEditor {
 			rig.router.route(line, true)
 		} else {
-			rig.hub.Submit(line, "controller")
+			require.NoError(t, rig.hub.Submit(line, "controller"))
 		}
 		return rig.recorded()
 	}
@@ -158,13 +163,35 @@ func TestHubSubmitForeignGoroutine(t *testing.T) {
 
 	rig := newHubRig(t)
 	done := make(chan struct{})
+	var serr error
 	go func() {
 		defer close(done)
-		rig.hub.Submit("from elsewhere", "controller")
+		serr = rig.hub.Submit("from elsewhere", "controller")
 	}()
 	<-done
+	require.NoError(t, serr)
 
 	require.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "from elsewhere", origin: "controller"}},
+		rig.recorded())
+}
+
+// TestHubSubmitFullQueueRefuses pins the lane-safety rule: a remote submit
+// never blocks on a full pump queue, it reports errPromptQueueFull so the wire
+// can refuse busy and the priority interrupt lane stays live. The editor path
+// keeps its blocking send.
+func TestHubSubmitFullQueueRefuses(t *testing.T) {
+	t.Parallel()
+
+	rig := newHubRig(t)
+	rig.router.trySend = func(pumpLine) bool { return false }
+
+	err := rig.hub.Submit("while wedged", "controller")
+	require.ErrorIs(t, err, errPromptQueueFull)
+	assert.Empty(t, rig.recorded())
+
+	// the editor path is unaffected: it rides the blocking send
+	rig.router.route("typed locally", true)
+	assert.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "typed locally"}},
 		rig.recorded())
 }
 
@@ -280,7 +307,7 @@ func TestHubInterruptMatchesKeypress(t *testing.T) {
 	})
 	hub.ag = ag
 	waitReady, takeReady := stagePair(t)
-	hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 	stager := command.NewStager(t.Context(), nil, agent.NopSink{})
 	hub.stager = stager
 	t.Cleanup(stager.Cancel)
@@ -355,7 +382,7 @@ func TestHubSnapshotTruth(t *testing.T) {
 	hub.tools = reg
 
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady, nil)
 	hub.q = q
 	q.hold(agent.Input{Text: "queued one"}, "queued one", 1)
 
@@ -458,25 +485,65 @@ func TestHubHeadTracksSwitches(t *testing.T) {
 	term, _ := pipeUI(t)
 	log := &emitLog{}
 	hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
-		acct: tokens.New(llm.Model{})}, log.emitters())
+		acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 	hub.bindSession(rec)
 	assert.Equal(t, w.Head(), hub.Snapshot().Head)
 
 	// the driver's switch callback: a compaction fires it with the head unmoved
-	hub.setHead(w.Head())
-	log.mu.Lock()
-	assert.Empty(t, log.heads)
-	log.mu.Unlock()
+	hub.setHead(w.Head(), rewindCauseRewind)
+	assert.Empty(t, log.named(ctl.EventBranchChanged))
 
 	// a rewind moves the head onto the root entry, an earlier point
 	rewound := entries[0].ID
 	w.SetHead(rewound)
-	hub.setHead(w.Head())
+	hub.setHead(w.Head(), rewindCauseRewind)
 
-	log.mu.Lock()
-	assert.Equal(t, []string{rewound}, log.heads)
-	log.mu.Unlock()
+	moved := log.named(ctl.EventBranchChanged)
+	require.Len(t, moved, 1)
+	var bd ctl.BranchChangedData
+	require.NoError(t, moved[0].Decode(&bd))
+	assert.Equal(t, rewound, bd.Head)
 	assert.Equal(t, rewound, hub.Snapshot().Head)
+}
+
+// TestHubHeadTracksAppends pins the append side of the head surface: appends
+// advance the gate too, so rewinding back onto the pre-append head still
+// publishes branch.changed with the real from-id instead of reading as no move.
+func TestHubHeadTracksAppends(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	entries, _, err := session.Read(p)
+	require.NoError(t, err)
+	root := entries[0].ID
+	rec := &sessRec{w: w, rec: session.NewRecorder(w), snapshot: snapshot{entries: entries}}
+
+	term, _ := pipeUI(t)
+	log := &emitLog{}
+	hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
+		acct: tokens.New(llm.Model{})})
+	log.attach(hub)
+	hub.bindSession(rec) // binds the root, before any append
+
+	e1, aerr := w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, aerr)
+	hub.noteAppend(e1.ID) // what entryAppended fires per append
+	assert.Equal(t, e1.ID, hub.Snapshot().Head)
+
+	// rewind back onto the bind-time head: a real move, must publish
+	w.SetHead(root)
+	hub.setHead(w.Head(), rewindCauseRewind)
+	moved := log.named(ctl.EventBranchChanged)
+	require.Len(t, moved, 1)
+	var bd ctl.BranchChangedData
+	require.NoError(t, moved[0].Decode(&bd))
+	assert.Equal(t, root, bd.Head)
+	assert.Equal(t, e1.ID, bd.From)
 }
 
 // TestHubBindSession pins the identity fields: root id from the transcript,
@@ -501,4 +568,36 @@ func TestHubBindSession(t *testing.T) {
 	snap := hub.Snapshot()
 	assert.Equal(t, rec.w.Head(), snap.SessionID)
 	assert.Equal(t, "named-one", snap.SessionName)
+}
+
+// TestHubQueueRowsRedactSecrets pins the parity rule: secret-prefixed queue
+// rows render locally but never ride the wire, matching the draft rule.
+func TestHubQueueRowsRedactSecrets(t *testing.T) {
+	t.Parallel()
+
+	term, _ := pipeUI(t)
+	log := &emitLog{}
+	hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
+		acct: tokens.New(llm.Model{})})
+	log.attach(hub)
+	ui := hub.ui
+
+	ui.SetQueued([]string{"visible prompt", "secret: hunter2"})
+	hub.queueDropped([]string{"visible prompt", "secret: hunter2"})
+
+	require.Eventually(t, func() bool { return len(log.queuesSeen()) == 1 },
+		2*time.Second, 5*time.Millisecond)
+	assert.Equal(t, []string{"visible prompt"}, log.queuesSeen()[0])
+
+	require.Eventually(t, func() bool { return len(log.named(ctl.EventQueueDropped)) == 1 },
+		2*time.Second, 5*time.Millisecond)
+	var d ctl.QueueDroppedData
+	require.NoError(t, log.named(ctl.EventQueueDropped)[0].Decode(&d))
+	assert.Equal(t, []string{"visible prompt"}, d.Texts)
+
+	// the remembered copy stays whole for snapshots of the local truth
+	hub.mu.Lock()
+	queued := hub.queued
+	hub.mu.Unlock()
+	assert.Equal(t, []string{"visible prompt", "secret: hunter2"}, queued)
 }

@@ -12,13 +12,16 @@ import (
 
 // Protocol is the wire protocol version announced in the hello event. Bump on
 // any incompatible change to an event, reply or method shape.
-const Protocol = 1
+//
+// v2 splits events into a committed family reconciled by entry id (entry.append,
+// branch.changed) and an ephemeral family governed by the watermark alone, and
+// deletes the echo concepts that made dedupe the client's job.
+const Protocol = 2
 
 // Method names a controller may call. The read-only set answers any
 // connection; every write method requires the control seat.
 const (
-	MethodState  = "state.get"
-	MethodReplay = "events.replay"
+	MethodState = "state.get"
 
 	MethodAttach    = "attach"
 	MethodSubmit    = "submit"
@@ -27,6 +30,7 @@ const (
 	MethodInputSet  = "input.set"
 	MethodRewind    = "session.rewind"
 	MethodResolve   = "interaction.resolve"
+	MethodSeatYield = "seat.yield"
 )
 
 // Event names, grouped by family. Stream events mirror the agent sink one to
@@ -36,9 +40,8 @@ const (
 	EventHello = "hello"
 
 	// EventTurnStart opens a turn; the stream events mirror the agent sink one
-	// to one.
+	// to one and belong to the ephemeral family.
 	EventTurnStart     = "turn.start"
-	EventUserPrompt    = "user_prompt"
 	EventThinkingDelta = "thinking.delta"
 	EventThinkingEnd   = "thinking.end"
 	EventTextDelta     = "text.delta"
@@ -50,20 +53,21 @@ const (
 	EventDiff          = "diff"
 	EventUsage         = "usage"
 	EventContext       = "context"
-	EventNotice        = "notice"
+	EventNotice        = "notice" // transient notices only; recorded ones ride entry.append
 	EventTurnEnd       = "turn.end"
 
-	// EventEcho re-emits one committed user message; the session events cover
-	// the rendered surfaces outside the turn loop.
-	EventEcho               = "echo"
-	EventEchoImages         = "echo.images"
+	// EventPrint covers the rendered surfaces outside the turn loop. Committed
+	// content is entry.append and branch.changed, reconciled by entry id;
+	// everything else is ephemeral, governed by the watermark alone.
 	EventPrint              = "print"
 	EventEntryAppend        = "entry.append"
+	EventBranchChanged      = "branch.changed"
 	EventStatus             = "status"
 	EventActivity           = "activity"
 	EventQueued             = "queued"
+	EventQueueDropped       = "queue.dropped"
+	EventSessionRenamed     = "session.renamed"
 	EventEditor             = "editor"
-	EventHead               = "head"
 	EventInteractionPending = "interaction.pending"
 	EventInteractionSettled = "interaction.settled"
 
@@ -85,12 +89,12 @@ const (
 const (
 	CodeUnknownMethod = "unknown-method"
 	CodeBadRequest    = "bad-request"
-	CodeTooOld        = "too-old"
 	CodeUnavailable   = "unavailable"
-	CodeSeatHeld      = "seat-held" // another controller owns the seat
+	CodeSeatHeld      = "seat-held" // another controller owns the seat; Error.Holder names it
 	CodeObserver      = "observer"  // mutating call from a connection without the seat
 	CodeNotFound      = "not-found"
 	CodeSettled       = "settled"
+	CodeBusy          = "busy" // the target queue is full; retry once it drains
 )
 
 // Request is one controller line: a method call carrying a caller-chosen id
@@ -111,10 +115,13 @@ type Reply struct {
 	Error  *Error          `json:"error,omitempty"`
 }
 
-// Error is one legible refusal on a Reply.
+// Error is one legible refusal on a Reply. Holder is set on seat-held
+// refusals, so a script can decide between takeover, waiting and exiting
+// without parsing the message.
 type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	Holder  string `json:"holder,omitempty"`
 }
 
 // Errf builds a Reply error from a code and formatted message.

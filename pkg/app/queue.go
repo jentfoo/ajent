@@ -35,6 +35,7 @@ type steerQueue struct {
 	clear     func()                     // SetSubmit(0) once the batch and its reads have landed
 	waitReady func(context.Context)      // stager.WaitReady: block until staged commands finish
 	takeReady func() []agent.MessageInfo // stager.TakeReady: consume finished staged output
+	dropped   func(texts []string)       // names queued prompts an interrupt cleared, for pending rows
 
 	mu       sync.Mutex
 	items    []steerItem // oldest first
@@ -50,8 +51,8 @@ type steerItem struct {
 	est   int         // token estimate carried in the submit bucket until landed
 }
 
-func newSteerQueue(ui queueUI, submit func(int), clear func(), waitReady func(context.Context), takeReady func() []agent.MessageInfo) *steerQueue {
-	return &steerQueue{ui: ui, submit: submit, clear: clear, waitReady: waitReady, takeReady: takeReady}
+func newSteerQueue(ui queueUI, submit func(int), clear func(), waitReady func(context.Context), takeReady func() []agent.MessageInfo, dropped func([]string)) *steerQueue {
+	return &steerQueue{ui: ui, submit: submit, clear: clear, waitReady: waitReady, takeReady: takeReady, dropped: dropped}
 }
 
 // offer is the pump entry. When a drain goroutine runs it queues the item and
@@ -333,26 +334,51 @@ func (s *steerQueue) abort() {
 	defer s.mu.Unlock()
 
 	if len(s.items) > 0 {
+		labels := s.queuedLabels()
 		if s.ui.Interactive() {
-			labels := make([]string, len(s.items))
+			recovered := make([]string, len(s.items))
 			for i, it := range s.items {
-				labels[i] = restoredLabel(it)
+				recovered[i] = restoredLabel(it)
 			}
-			s.ui.PrependInput(strings.Join(labels, "\n"))
+			s.ui.PrependInput(strings.Join(recovered, "\n"))
 		}
 		s.items = nil
+		if s.dropped != nil {
+			s.dropped(labels) // pending rows resolve instead of vanishing
+		}
 	}
 	s.refreshLocked()
+}
+
+// clearForRewind drops every queued item with its rows, returning the labels
+// it cleared. A rewind re-targets nothing: the prompts stay recallable from
+// editor history, and the caller records the notice naming them.
+func (s *steerQueue) clearForRewind() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.items) == 0 {
+		return nil
+	}
+	labels := s.queuedLabels()
+	s.items = nil
+	s.refreshLocked()
+	return labels
+}
+
+// queuedLabels renders every queued item's label, oldest first.
+func (s *steerQueue) queuedLabels() []string {
+	labels := make([]string, len(s.items))
+	for i, it := range s.items {
+		labels[i] = queuedLabel(it)
+	}
+	return labels
 }
 
 // refreshLocked re-renders the queued rows and keeps the submit bucket in step.
 // Caller holds q.mu, UI calls happen under it (queue→UI lock order).
 func (s *steerQueue) refreshLocked() {
-	labels := make([]string, len(s.items))
-	for i, it := range s.items {
-		labels[i] = queuedLabel(it)
-	}
-	s.ui.SetQueued(labels)
+	s.ui.SetQueued(s.queuedLabels())
 	var sum int
 	for _, it := range s.items {
 		sum += it.est

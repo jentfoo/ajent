@@ -3,16 +3,17 @@ package app
 import (
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -24,77 +25,116 @@ func wrapUI(tb testing.TB, ui *tui.UI) *hubUI {
 	tb.Helper()
 
 	b := newInteractionBroker(ui, nil, nil)
-	h := newSessionHub(hubDeps{ui: ui, dialogs: b, acct: tokens.New(llm.Model{})}, hubEmitters{})
+	h := newSessionHub(hubDeps{ui: ui, dialogs: b, acct: tokens.New(llm.Model{})})
 	return h.ui
 }
 
-// emitLog records every hub emission in arrival order.
+// emitLog records every control event a hub publishes, in seq order, via the
+// same delivery seam a connection uses.
 type emitLog struct {
-	mu      sync.Mutex
-	notices []string
-	prints  []string
-	echoes  []string
-	images  [][]tui.Image
-	segs    []tui.Segment
-	models  []string
-	idles   []bool
-	spins   []bool
-	acts    []string
-	queues  [][]string
-	drafts  []string
-	heads   []string
+	mu  sync.Mutex
+	evs []ctl.Event
 }
 
-// rowsSeen-style snapshots final assertions read; each copies under the lock.
+// attach subscribes the log to the hub's event fanout.
+func (l *emitLog) attach(hub *sessionHub) {
+	hub.evListen(func(ev ctl.Event) {
+		l.mu.Lock()
+		l.evs = append(l.evs, ev)
+		l.mu.Unlock()
+	})
+}
+
+// named copies the recorded events carrying one name.
+func (l *emitLog) named(name string) []ctl.Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return bulk.SliceFilter(func(ev ctl.Event) bool { return ev.Name == name }, l.evs)
+}
+
+// noticesSeen renders notice events as key|text, matching the old log rows.
 func (l *emitLog) noticesSeen() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.notices)
-}
-
-func (l *emitLog) printsSeen() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.prints)
-}
-
-func (l *emitLog) echoesSeen() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.echoes)
-}
-
-func (l *emitLog) segsSeen() []tui.Segment {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.segs)
-}
-
-func (l *emitLog) draftsSeen() []string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return slices.Clone(l.drafts)
-}
-
-func (l *emitLog) emitters() hubEmitters {
-	return hubEmitters{
-		Head:       func(id string) { l.mu.Lock(); l.heads = append(l.heads, id); l.mu.Unlock() },
-		Echo:       func(text string) { l.mu.Lock(); l.echoes = append(l.echoes, text); l.mu.Unlock() },
-		EchoImages: func(imgs []tui.Image) { l.mu.Lock(); l.images = append(l.images, imgs); l.mu.Unlock() },
-		Notice: func(key, msg string, level tui.Level) {
-			l.mu.Lock()
-			l.notices = append(l.notices, key+"|"+msg)
-			l.mu.Unlock()
-		},
-		Print:    func(markdown string) { l.mu.Lock(); l.prints = append(l.prints, markdown); l.mu.Unlock() },
-		Segment:  func(seg tui.Segment) { l.mu.Lock(); l.segs = append(l.segs, seg); l.mu.Unlock() },
-		Model:    func(key, short string, window int) { l.mu.Lock(); l.models = append(l.models, key); l.mu.Unlock() },
-		Idle:     func(idle bool) { l.mu.Lock(); l.idles = append(l.idles, idle); l.mu.Unlock() },
-		Spinning: func(on bool) { l.mu.Lock(); l.spins = append(l.spins, on); l.mu.Unlock() },
-		Activity: func(key, text string, rank int) { l.mu.Lock(); l.acts = append(l.acts, key+":"+text); l.mu.Unlock() },
-		Queued:   func(texts []string) { l.mu.Lock(); l.queues = append(l.queues, texts); l.mu.Unlock() },
-		Draft:    func(text string) { l.mu.Lock(); l.drafts = append(l.drafts, text); l.mu.Unlock() },
+	var rows []string
+	for _, ev := range l.named(ctl.EventNotice) {
+		var d ctl.NoticeData
+		if ev.Decode(&d) == nil {
+			rows = append(rows, d.Key+"|"+d.Text)
+		}
 	}
+	return rows
+}
+
+// printsSeen lists printed markdown blocks.
+func (l *emitLog) printsSeen() []string {
+	var rows []string
+	for _, ev := range l.named(ctl.EventPrint) {
+		var d ctl.PrintData
+		if ev.Decode(&d) == nil {
+			rows = append(rows, d.Markdown)
+		}
+	}
+	return rows
+}
+
+// segsSeen lists status segment changes.
+func (l *emitLog) segsSeen() []tui.Segment {
+	var out []tui.Segment
+	for _, ev := range l.named(ctl.EventStatus) {
+		var d ctl.StatusData
+		if ev.Decode(&d) == nil && d.Segment != nil {
+			out = append(out, tui.Segment{Key: d.Segment.Key, Text: d.Segment.Text,
+				Short: d.Segment.Short, Order: d.Segment.Order})
+		}
+	}
+	return out
+}
+
+// modelsSeen lists model label changes.
+func (l *emitLog) modelsSeen() []string {
+	var out []string
+	for _, ev := range l.named(ctl.EventStatus) {
+		var d ctl.StatusData
+		if ev.Decode(&d) == nil && d.Model != nil {
+			out = append(out, d.Model.Key)
+		}
+	}
+	return out
+}
+
+// actsSeen lists activity rows as key:text.
+func (l *emitLog) actsSeen() []string {
+	var out []string
+	for _, ev := range l.named(ctl.EventActivity) {
+		var d ctl.ActivityData
+		if ev.Decode(&d) == nil {
+			out = append(out, d.Key+":"+d.Text)
+		}
+	}
+	return out
+}
+
+// queuesSeen lists queued-row replacements.
+func (l *emitLog) queuesSeen() [][]string {
+	var out [][]string
+	for _, ev := range l.named(ctl.EventQueued) {
+		var d ctl.QueuedData
+		if ev.Decode(&d) == nil {
+			out = append(out, d.Texts)
+		}
+	}
+	return out
+}
+
+// draftsSeen lists coalesced editor drafts.
+func (l *emitLog) draftsSeen() []string {
+	var out []string
+	for _, ev := range l.named(ctl.EventEditor) {
+		var d ctl.EditorData
+		if ev.Decode(&d) == nil {
+			out = append(out, d.Text)
+		}
+	}
+	return out
 }
 
 // pipeUI opens a plain-mode TUI over pipes whose output drains to a buffer,
@@ -142,7 +182,8 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 
 	term, out := pipeUI(t)
 	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, active: llm.Model{}, acct: tokens.New(llm.Model{})}, log.emitters())
+	hub := newSessionHub(hubDeps{ui: term, active: llm.Model{}, acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 	ui := hub.ui
 
 	ui.Notify("plain notice", tui.LevelWarn)
@@ -154,7 +195,7 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	ui.SetActivityRanked("job:1", "reading", 1)
 	ui.SetActivity("misc", "note")
 	ui.SetQueued([]string{"waiting"})
-	ui.UserEcho("typed line")
+	ui.UserEcho("typed line") // local only: no echo event exists to observe
 
 	require.Eventually(t, func() bool { return strings.Contains(out(), "typed line") },
 		2*time.Second, 5*time.Millisecond)
@@ -176,13 +217,12 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 
 	assert.Equal(t, []string{"|plain notice", "subagent|keyed"}, log.noticesSeen())
 	assert.Equal(t, []string{"# printed"}, log.printsSeen())
-	assert.Equal(t, []string{"typed line"}, log.echoesSeen())
 	require.Len(t, log.segsSeen(), 1)
-	assert.Equal(t, segMCP, log.segs[0].Key)
-	assert.Equal(t, []string{"p/big"}, log.models)
-	assert.Equal(t, []string{"job:1:reading", "misc:note"}, log.acts)
-	require.Len(t, log.queues, 1)
-	assert.Equal(t, []string{"waiting"}, log.queues[0])
+	assert.Equal(t, segMCP, log.segsSeen()[0].Key)
+	assert.Equal(t, []string{"p/big"}, log.modelsSeen())
+	assert.Equal(t, []string{"job:1:reading", "misc:note"}, log.actsSeen())
+	require.Len(t, log.queuesSeen(), 1)
+	assert.Equal(t, []string{"waiting"}, log.queuesSeen()[0])
 }
 
 // TestHubUILabelSetKeepsCaps pins the two model setters: a label-only SetModel
@@ -191,7 +231,7 @@ func TestHubUILabelSetKeepsCaps(t *testing.T) {
 	t.Parallel()
 
 	term, _ := pipeUI(t)
-	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})}, hubEmitters{})
+	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
 	caps := llm.Capabilities{Images: true}
 
 	hub.ui.SetModelOf(llm.Model{Provider: "p", ID: "big", ContextWindow: 1000, Caps: caps})
@@ -211,7 +251,8 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	t.Parallel()
 
 	log := &emitLog{}
-	hub := newSessionHub(hubDeps{acct: tokens.New(llm.Model{})}, log.emitters())
+	hub := newSessionHub(hubDeps{acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 	ui := hub.ui
 
 	require.False(t, hub.Interactive())
@@ -223,18 +264,18 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	ui.SetActivity("job:1", "reading")
 	ui.SetQueued([]string{"waiting"})
 	ui.SetIdle(false)
-	ui.UserEcho("typed line")
+	ui.UserEcho("typed line") // local only: no echo event exists to observe
 	ui.SetInput("filled")
 	ui.PrependInput("recovered")
 
 	assert.Equal(t, []string{"|plain", "subagent|keyed"}, log.noticesSeen())
 	assert.Equal(t, []string{"# printed"}, log.printsSeen())
-	assert.Equal(t, []string{"typed line"}, log.echoesSeen())
 	require.Len(t, log.segsSeen(), 1)
-	require.Len(t, log.models, 1)
-	require.Len(t, log.acts, 1)
-	require.Len(t, log.queues, 1)
-	require.Equal(t, []bool{false}, log.idles)
+	require.Len(t, log.modelsSeen(), 1)
+	require.Len(t, log.actsSeen(), 1)
+	require.Len(t, log.queuesSeen(), 1)
+	require.Eventually(t, func() bool { return len(log.draftsSeen()) == 1 },
+		2*time.Second, 5*time.Millisecond) // the two edits debounce into one emission
 }
 
 func TestHubUISegmentRemoval(t *testing.T) {
@@ -242,7 +283,8 @@ func TestHubUISegmentRemoval(t *testing.T) {
 
 	term, _ := pipeUI(t)
 	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})}, log.emitters())
+	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 	ui := hub.ui
 
 	ui.SetStatusSegment(segment(segPlan, "implementing", "impl"))
@@ -263,7 +305,8 @@ func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
 
 	term, _ := pipeUI(t)
 	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})}, log.emitters())
+	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 
 	hub.draft("typ")
 	hub.draft("typing")
@@ -271,9 +314,7 @@ func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
 	hub.draft("") // cleared before the debounce fires
 
 	require.Eventually(t, func() bool {
-		log.mu.Lock()
-		defer log.mu.Unlock()
-		return len(log.drafts) == 1
+		return len(log.draftsSeen()) == 1
 	}, 2*time.Second, 5*time.Millisecond)
 
 	assert.Equal(t, []string{""}, log.draftsSeen())
@@ -284,17 +325,24 @@ func TestHubUIIdleAndSpinTrack(t *testing.T) {
 
 	term, _ := pipeUI(t)
 	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})}, log.emitters())
+	hub := newSessionHub(hubDeps{ui: term, acct: tokens.New(llm.Model{})})
+	log.attach(hub)
 	ui := hub.ui
 
-	ui.SetIdle(false)
+	ui.SetIdle(false) // snapshot-only: idle has no event of its own
 	hub.sink().TurnStart(agent.TurnInfo{})
 	hub.sink().TurnEnd(agent.TurnResult{})
 	hub.sink().TurnEnd(agent.TurnResult{}) // idempotent: no second emission
 
-	log.mu.Lock()
-	idles := log.idles
-	log.mu.Unlock()
-	assert.Equal(t, []bool{false}, idles)
-	assert.Equal(t, []bool{true, false}, log.spins)
+	spins := make([]bool, 0, 2)
+	for _, ev := range log.named(ctl.EventStatus) {
+		var d ctl.StatusData
+		if ev.Decode(&d) == nil && d.Spinning != nil {
+			spins = append(spins, *d.Spinning)
+		}
+	}
+	assert.Equal(t, []bool{true, false}, spins)
+	hub.mu.Lock()
+	assert.False(t, hub.idle)
+	hub.mu.Unlock()
 }

@@ -17,8 +17,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -134,6 +137,93 @@ func TestRewindStateRebuild(t *testing.T) {
 	}))
 }
 
+func TestRewindClosesOpenPicker(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "m"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-pick.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/m"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	u1, err := w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, err)
+
+	// nothing armed: a rewind closes nothing and posts no notice
+	assert.False(t, r.closePick())
+
+	ag := agent.New(&agent.State{Model: llm.Model{ID: "p/m"}, Tokens: tokens.New(llm.Model{ID: "p/m"})}, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &llm.ScriptedProvider{}, nil
+		},
+		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+
+	var opened atomic.Bool
+	b := newInteractionBroker(nil, func(interactionInfo) { opened.Store(true) }, nil)
+	ui := newSessionHub(hubDeps{dialogs: b}).ui
+	var log emitLog
+	log.attach(ui.hub)
+	// the driver wires branch.changed onto the switch callback; mirror that here
+	r.onSwitch = func(_ []llm.Message, cause string) { ui.hub.setHead(w.Head(), cause) }
+
+	var ok, returned atomic.Bool
+	go func() {
+		_, got := r.pickRewind(ui)
+		ok.Store(got)
+		returned.Store(true)
+	}()
+	require.Eventually(t, opened.Load, ctlWait, 5*time.Millisecond)
+
+	// a rewind from the other surface: one transaction closes the armed picker
+	head, err := r.rewindTo(ui, ag, reg, u1.ID, rewindCauseRewind)
+	require.NoError(t, err)
+	assert.Equal(t, readEntriesRewind(t, p)[0].ID, head) // rewound onto the prompt's parent
+	require.Eventually(t, returned.Load, ctlWait, 5*time.Millisecond)
+	assert.False(t, ok.Load()) // the closed picker answers its surface as a cancellation
+
+	// the closing notice rides the transient family, beside the branch change
+	require.Len(t, log.noticesSeen(), 1) // and it is the only notice this rewind posts
+	assert.Contains(t, log.noticesSeen(),
+		"|rewind picker closed: the session moved under it")
+	branches := log.named(ctl.EventBranchChanged)
+	require.Len(t, branches, 1)
+
+	// disarmed once returned: the next rewind closes nothing
+	assert.False(t, r.closePick())
+}
+
+func TestPickRewindDisarmsOnAnswer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-pick.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, err)
+
+	local := &scriptedLocal{picks: []int{0}}
+	b := newInteractionBroker(local, nil, nil)
+	ui := newSessionHub(hubDeps{dialogs: b}).ui
+
+	id, ok := r.pickRewind(ui)
+	require.True(t, ok)
+	assert.NotEmpty(t, id)
+	assert.False(t, r.closePick()) // the answer disarmed the cancel
+}
+
 func TestInitialRow(t *testing.T) {
 	t.Parallel()
 
@@ -231,7 +321,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	// rewind onto the first user message and restore the fork model: it must stay b
 	save, ok := r.liveModel(a)
 	require.True(t, ok)
-	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
+	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, rewindCauseRewind, "rewind: "))
 	require.NoError(t, r.restoreForkModel(nil, a, reg, save))
 
 	var got llm.Model
@@ -1068,7 +1158,7 @@ func TestSwitchStateSeedsBase(t *testing.T) {
 
 	// an empty head starts a new root: no messages, but the next request still
 	// carries the system prompt and the committed tool block
-	require.NoError(t, r.switchState(nil, ag, reg, "", "rewind: "))
+	require.NoError(t, r.switchState(nil, ag, reg, "", rewindCauseRewind, "rewind: "))
 	cs := st.Tokens.Context()
 	assert.Equal(t, wantBase, cs.Used)
 	assert.True(t, cs.Estimated) // a base is an estimate, so the bar says so
@@ -1103,7 +1193,7 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
 
 	entries := readEntriesRewind(t, p)
-	require.NoError(t, r.switchState(nil, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	require.NoError(t, r.switchState(nil, ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: "))
 
 	cs := st.Tokens.Context()
 	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
@@ -1185,14 +1275,14 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	var resumed bool
 	r := &sessRec{
 		w: w, rec: session.NewRecorder(w),
-		onSwitch:   func([]llm.Message) { switched = true },
+		onSwitch:   func([]llm.Message, string) { switched = true },
 		resumeAuto: func() { resumed = true },
 	}
 
 	entries := readEntriesRewind(t, p)
 	ag, st, release := holdTurn(t)
 
-	err = r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, "rewind: ")
+	err = r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: ")
 
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head()) // the head never moved
@@ -1206,7 +1296,7 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 
 	release()
-	require.NoError(t, r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	require.NoError(t, r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: "))
 	assert.True(t, switched) // the retry fires what the refusal held back
 	assert.True(t, resumed)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head())
@@ -1365,7 +1455,7 @@ func rewindPicked(t *testing.T, r *sessRec, ui *hubUI, ag *agent.Agent, reg *llm
 	if !ok {
 		return
 	}
-	_, _ = r.rewindTo(ui, ag, reg, head)
+	_, _ = r.rewindTo(ui, ag, reg, head, rewindCauseRewind)
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.
@@ -1696,4 +1786,141 @@ func mustEntries(t *testing.T, w *session.Writer) []session.Entry {
 	entries, _, err := session.Read(w.Path())
 	require.NoError(t, err)
 	return entries
+}
+
+// TestRenameRaceLoser pins the create-race rule: the older session id keeps the
+// name, the younger suffix-renames with a recorded session_name entry, and a
+// younger rival never displaces this run's name.
+func TestRenameRaceLoser(t *testing.T) {
+	t.Setenv("AJENT_HOME", t.TempDir())
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	ws := t.TempDir()
+
+	older, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = older.Close() })
+	olderID := older.Head() // the root entry id sorts by creation time
+	// the younger racer mints after the older one, so its root id sorts higher
+	younger, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = younger.Close() })
+	require.Greater(t, younger.Head(), olderID)
+
+	note := renameRaceLoser(store, ws, "shared", younger)
+	assert.Contains(t, note, "shared-2")
+
+	entries, _, err := session.Read(younger.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared-2", session.NameOf(entries)) // the rename entry records it
+
+	// the older session's own data is untouched and still answers to the name
+	entries, _, err = session.Read(older.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared", session.NameOf(entries))
+
+	// a younger rival: this run keeps the name, no rename happens
+	note = renameRaceLoser(store, ws, "shared", older)
+	assert.Empty(t, note)
+}
+
+// TestRewindClearsQueuedWithNotice pins the transaction tail: a rewind clears
+// the queue instead of re-targeting, records a notice entry naming the cleared
+// prompts so resume replays it, and fires the ephemeral drop event beside the
+// queue update.
+func TestRewindClearsQueuedWithNotice(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+	})
+	wireAttachRewind(t, rig)
+	c := dialControl(t, rig.path)
+	c.hello()
+	attachControl(t, c, "rewinder")
+
+	// the rig wires no pump, so the queue stands alone with the hub's drop seam
+	// and the transaction's clear seam, exactly what the driver installs
+	rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {}, func() {},
+		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDropped)
+	rig.rec.clearQueued = func() []string {
+		labels := rig.hub.q.clearForRewind()
+		if len(labels) > 0 {
+			rig.hub.queueDropped(labels)
+		}
+		return labels
+	}
+
+	// park two prompts as rows, the way a gate hold leaves them
+	rig.hub.q.hold(agent.Input{Text: "queued one"}, "queued one", 0)
+	rig.hub.q.hold(agent.Input{Text: "queued two"}, "queued two", 0)
+	require.Equal(t, 2, rig.hub.q.pending())
+
+	// rewind onto the first user message: the session entry itself is not a
+	// valid target, the branch's first message is
+	branch := rigBranch(t, rig.rec)
+	rp := c.call("rw", ctl.MethodRewind, map[string]any{"head": branch[1].ID})
+	require.Nil(t, rp.Error)
+
+	require.Eventually(t, func() bool { return rig.hub.q.pending() == 0 },
+		ctlWait, 5*time.Millisecond)
+
+	// the notice entry naming them is on the transcript, so resume replays it
+	entries, _, err := session.Read(rig.rec.w.Path())
+	require.NoError(t, err)
+	notices := bulk.SliceFilter(func(e session.Entry) bool {
+		return e.Type == session.TypeNotice
+	}, entries)
+	require.NotEmpty(t, notices)
+	var nd session.NoticeData
+	require.NoError(t, notices[len(notices)-1].Decode(&nd))
+	assert.Contains(t, nd.Message, "queued one")
+	assert.Contains(t, nd.Message, "queued two")
+
+	// the ephemeral drop event rode the same transaction
+	dropped := c.collect(ctl.EventQueueDropped, 1)
+	var qd ctl.QueueDroppedData
+	require.NoError(t, dropped[0].Decode(&qd))
+	assert.ElementsMatch(t, []string{"queued one", "queued two"}, qd.Texts)
+}
+
+// TestRenameSettleYieldsToOlderRival pins the rename race settlement: a rename
+// landing beside an older session holding the same name suffix-renames this one
+// with a notice, while a younger rival leaves the name here and says so.
+func TestRenameSettleYieldsToOlderRival(t *testing.T) {
+	t.Setenv("AJENT_HOME", t.TempDir())
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	ws := t.TempDir()
+
+	older, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = older.Close() })
+
+	mine, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mine.Close() })
+	rec := session.NewRecorder(mine)
+	require.NoError(t, rec.Rename("shared")) // the rename that raced the older holder
+
+	eff, note := renameSettle(store, ws, "shared", mine.Path(), rec)
+	assert.Equal(t, "shared-2", eff)
+	assert.Contains(t, note, "shared-2")
+
+	entries, _, err := session.Read(mine.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared-2", session.NameOf(entries))
+
+	// a younger rival leaves the name here and reports the ambiguity instead
+	mine2, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mine2.Close() })
+	rec2 := session.NewRecorder(mine2)
+	require.NoError(t, rec2.Rename("contested"))
+	younger, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "contested"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = younger.Close() })
+	require.Greater(t, younger.Head(), mine2.Head())
+
+	eff, note = renameSettle(store, ws, "contested", mine2.Path(), rec2)
+	assert.Equal(t, "contested", eff)
+	assert.Contains(t, note, "ambiguous")
 }

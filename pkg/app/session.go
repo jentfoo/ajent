@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-analyze/bulk"
@@ -46,8 +47,9 @@ type sessRec struct {
 	// process lifetime.
 	hint string
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
-	// and @ reference ids stop describing what it replaced. Nil until main wires it.
-	onSwitch func([]llm.Message)
+	// and @ reference ids stop describing what it replaced. cause names why the
+	// head moved, for the branch.changed event. Nil until main wires it.
+	onSwitch func(msgs []llm.Message, cause string)
 	// onAppend observes each successfully appended transcript entry, for the
 	// control server's entry.append events. Nil drops.
 	onAppend func(session.Entry)
@@ -57,9 +59,19 @@ type sessRec struct {
 	// discardStaged drops shell results staged against the branch a rewind leaves,
 	// so they never ride the new branch's first prompt. Nil until main wires it.
 	discardStaged func()
+	// clearQueued drops prompts queued for the branch just left, returning the
+	// labels it cleared; the rewind records the notice naming them. Nil until
+	// main wires it.
+	clearQueued func() []string
 	// resumeAuto re-arms automatic compaction: a shorter branch may reduce where
 	// the one it left could not. Nil until main wires it.
 	resumeAuto func()
+
+	// pickMu guards pickStop, the cancel of the rewind picker the keyboard
+	// holds open: a rewind from the other surface fires it, so a tree-dependent
+	// picker never outlives the head it was drawn from.
+	pickMu   sync.Mutex
+	pickStop func()
 }
 
 func sessionHint(r *sessRec) string {
@@ -95,21 +107,27 @@ func rootID(entries []session.Entry) string {
 
 // exitLabel ends the run's recording, reporting "" so no resume hint names a
 // dropped transcript. Any other transcript returns the label a `--resume`
-// command takes.
+// command takes. Closing the writer first marks the slot inactive, so this exit
+// never blocks a concurrent --delete, and the empty-session cleanup only fires
+// when no peer still holds the file live.
 func (r *sessRec) exitLabel() string {
 	if r == nil || r.w == nil {
 		return ""
 	}
+	_ = r.w.Close()
 	entries, ok := sessionEntries(r)
 	if !ok {
 		return "" // unreadable: neither dropped nor advertised
 	}
 	if r.store != nil && session.NameOf(entries) == "" &&
 		!slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage }) {
-		// unnamed and holding no message: removed with its head cursor so it never
-		// becomes a dead picker row or steals "most recent"
-		_ = r.store.Remove(r.w.Path())
-		return ""
+		// unnamed and holding no message: removed with its sidecars so it never
+		// becomes a dead picker row or steals "most recent" -- but a live peer's
+		// open beats this exit's cleanup
+		if r.w.LivePeers() == 0 {
+			_ = r.store.Remove(r.w.Path())
+			return ""
+		}
 	}
 	return labelOf(entries)
 }
@@ -223,8 +241,7 @@ func newSession(ui *tui.UI, dialogs *interactionBroker, mode ResumeMode, target,
 		return nil, err
 	}
 	// startup caveats join into the one line sessRec.note carries
-	note = strings.Join(bulk.SliceFilter(func(s string) bool { return s != "" },
-		[]string{store.Note(), note}), "; ")
+	note = joinNotes(store.Note(), note)
 	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note, snapshot: snap}
 	r.hint = rootID(snap.entries)
 	return r, nil
@@ -246,6 +263,19 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		}
 		w, err := store.Create(cwd, sd)
 		return w, snapshot{}, "", err
+	}
+	// freshNamed is fresh plus the create-race check: a second --session <name>
+	// losing the race suffix-renames itself before its first prompt, so exactly
+	// one session carries the name (the older session id, ULIDs sort by time).
+	freshNamed := func(name string) (*session.Writer, snapshot, string, error) {
+		w, snap, note, err := fresh(name)
+		if err != nil || w == nil {
+			return w, snap, note, err
+		}
+		if renamed := renameRaceLoser(store, cwd, name, w); renamed != "" {
+			note = joinNotes(note, renamed)
+		}
+		return w, snap, note, err
 	}
 
 	switch mode {
@@ -271,7 +301,9 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 			w, _, _, ferr := fresh("")
 			return w, snapshot{}, skipNewerNote(len(list), list[0]), ferr
 		}
-		w, snap, err := openSnapshot(list[i].Path)
+		// implicit resume: a live peer's slot head is adopted, so a second
+		// --continue forks from the running tip and diverges independently
+		w, snap, err := openSnapshotMode(list[i].Path, session.OpenEntriesImplicit)
 		var note string
 		if err == nil && i > 0 {
 			note = skipNewerNote(i, list[0]) // rows sorting above the resumed one are all blocked
@@ -306,7 +338,7 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		if ferr != nil {
 			return nil, snapshot{}, "", ferr
 		} else if !found {
-			return fresh(target) // first run under this name
+			return freshNamed(target) // first run under this name
 		} else if info.Blocked { // the held name is refused, never re-minted as a fresh transcript
 			return nil, snapshot{}, "", refuseNewer(info)
 		}
@@ -342,17 +374,117 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 
 // openSnapshot opens a transcript for append and returns its open-time parse
 // with the size and mtime stamped before the read, so a later rebuild can
-// detect concurrent appends.
+// detect concurrent appends. The open counts as explicit: a named target never
+// adopts a live peer's head.
 func openSnapshot(path string) (*session.Writer, snapshot, error) {
+	return openSnapshotMode(path, session.OpenEntries)
+}
+
+func openSnapshotMode(path string, open func(string) (*session.Writer, []session.Entry, []string, error)) (*session.Writer, snapshot, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, snapshot{}, err
 	}
-	w, entries, warns, oerr := session.OpenEntries(path)
+	w, entries, warns, oerr := open(path)
 	if oerr != nil {
 		return nil, snapshot{}, oerr
 	}
 	return w, snapshot{entries: entries, warns: warns, size: fi.Size(), mod: fi.ModTime()}, nil
+}
+
+// joinNotes merges note strings into the one line callers render, dropping
+// empties.
+func joinNotes(notes ...string) string {
+	return strings.Join(bulk.SliceFilter(func(s string) bool { return s != "" }, notes), "; ")
+}
+
+// nameRivals lists other recorded sessions answering to the same name,
+// case insensitive, beside the one at selfPath.
+func nameRivals(listed []session.Info, name, selfPath string) []session.Info {
+	return bulk.SliceFilter(func(in session.Info) bool {
+		return strings.EqualFold(in.Name, name) && in.Path != selfPath
+	}, listed)
+}
+
+// renameRaceLoser settles a --session <name> create race: the older session id
+// (ULIDs sort by time) keeps the name, the younger suffix-renames to name-2,
+// -3, ... until nothing matches, recorded as a session_name entry so
+// SessionData stays untouched. Deterministic, so both racers cannot rename.
+// It returns the notice naming the rename, empty when this run won or raced
+// nobody.
+func renameRaceLoser(store *session.Store, cwd, name string, w *session.Writer) string {
+	// the root entry id is the head right after Create, and it sorts by creation
+	mine := w.Head()
+	listed, err := store.List(cwd)
+	if err != nil {
+		return "" // unreadable listing: keep the created name rather than guess
+	}
+	rivals := nameRivals(listed, name, w.Path())
+	if len(rivals) == 0 {
+		return "" // the name reaches nothing but this session
+	}
+	oldest := slices.MinFunc(rivals, func(a, b session.Info) int { return strings.Compare(a.ID, b.ID) })
+	if oldest.ID < mine {
+		// a rival is older: it keeps the name, this one suffix-renames
+		if candidate, ok := freeNameSuffix(name, listed); ok {
+			if _, aerr := w.Append(session.TypeSessionName, session.NameData{Name: candidate}); aerr != nil {
+				return "" // the rename could not be recorded; SessionData still carries the name
+			}
+			return fmt.Sprintf("another session claimed the name %s; this one is %s", name, candidate)
+		}
+	}
+	return "" // every rival is younger: they rename, this session keeps the name
+}
+
+// renameSettle settles a rename that raced another claimant, the same rule the
+// create race uses: an older rival keeps the name and this session
+// suffix-renames with a notice. A younger rival leaves the name here and says
+// so, since no process may reach into the rival's transcript to fix it. It
+// returns the effective name (the rename target unless it moved) and the
+// notice to render, empty when nobody raced.
+func renameSettle(store *session.Store, cwd, name, selfPath string, rec *session.Recorder) (string, string) {
+	listed, err := store.List(cwd)
+	if err != nil {
+		return name, "" // unreadable listing: keep the rename rather than guess
+	}
+	rivals := nameRivals(listed, name, selfPath)
+	if len(rivals) == 0 {
+		return name, "" // the rename landed uncontested
+	}
+	mine := slices.IndexFunc(listed, func(in session.Info) bool { return in.Path == selfPath })
+	if mine < 0 {
+		return name, "" // this session did not list: nothing to order against
+	}
+	oldest := slices.MinFunc(rivals, func(a, b session.Info) int { return strings.Compare(a.ID, b.ID) })
+	if oldest.ID > listed[mine].ID {
+		return name, fmt.Sprintf(
+			"another new session also claimed the name %s; rename it, or the name stays ambiguous", name)
+	}
+	if candidate, ok := freeNameSuffix(name, listed); ok {
+		if err := rec.Rename(candidate); err == nil {
+			return candidate, fmt.Sprintf("another session claimed the name %s; this one is %s", name, candidate)
+		}
+	}
+	return name, "" // the suffix rename could not be recorded: the rename stands
+}
+
+// freeNameSuffix returns name-2, -3, ... past the first suffix no listed row
+// reaches, by its name or its id.
+func freeNameSuffix(name string, listed []session.Info) (string, bool) {
+	taken := func(candidate string) bool {
+		return slices.ContainsFunc(listed, func(in session.Info) bool {
+			return strings.EqualFold(in.Name, candidate) || in.ID == candidate
+		})
+	}
+	for i := 2; ; i++ {
+		candidate, err := session.ValidateName(fmt.Sprintf("%s-%d", name, i))
+		if err != nil {
+			return "", false // cannot form a legal suffix; better a duplicate than a broken name
+		}
+		if !taken(candidate) {
+			return candidate, true
+		}
+	}
 }
 
 // preAdoptable reports whether pre may serve as the open's locator: resolved,
@@ -445,7 +577,7 @@ func pickSessionRoot(dialogs *interactionBroker, list []session.Info) (int, erro
 		}
 	}
 	return dialogs.Pick(context.Background(), "Resume session", items,
-		tui.PickOptions{Placeholder: "filter"})
+		tui.PickOptions{Placeholder: pickFilterPlaceholder})
 }
 
 // restoreState rebuilds resumed state into st from the transcript's branch,
@@ -547,9 +679,10 @@ func (r *sessRec) appendEntry(typ session.Type, data any) (session.Entry, error)
 var errTurnRunning = errors.New("a turn is running")
 
 // switchState points the writer and live agent state at head's branch, an empty
-// head starting a new root, firing the switch callbacks once both moved. It
-// reports errTurnRunning when a turn claims the loop first, with nothing moved.
-func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
+// head starting a new root, firing the switch callbacks once both moved. cause
+// names the move for the branch.changed event. It reports errTurnRunning when a
+// turn claims the loop first, with nothing moved.
+func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause, prefix string) error {
 	var rebuilt agent.State
 	if head != "" {
 		// rebuild before moving HEAD, so a failed read leaves writer and state in step
@@ -588,7 +721,7 @@ func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, hea
 	}
 	r.w.SetHead(head)
 	if r.onSwitch != nil {
-		r.onSwitch(rebuilt.Messages)
+		r.onSwitch(rebuilt.Messages, cause)
 	}
 	if r.resumeAuto != nil {
 		r.resumeAuto()
@@ -751,17 +884,51 @@ func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
 		ui.SetDeferHistory(true)
 		defer ui.SetDeferHistory(false)
 	}
-	picked, err := ui.dialogs.Pick(context.Background(), "Rewind to", items,
-		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})
+	// the picker arms its cancel for the rewind transaction: a rewind from the
+	// other surface closes it, so it never shows a tree the head has left
+	pickCtx, stop := context.WithCancel(context.Background())
+	r.pickMu.Lock()
+	r.pickStop = stop
+	r.pickMu.Unlock()
+	picked, err := ui.dialogs.Pick(pickCtx, "Rewind to", items,
+		tui.PickOptions{Placeholder: pickFilterPlaceholder, Initial: initialRow(tree, head)})
+	r.pickMu.Lock()
+	r.pickStop = nil
+	r.pickMu.Unlock()
+	stop() // release either way; a raced close already ran this cancel
 	if err != nil {
 		return "", false // cancelled
 	}
 	return tree[picked].ID, true
 }
 
+// closePick cancels the rewind picker another surface still holds open,
+// reporting whether there was one. The caller owns the closing notice.
+func (r *sessRec) closePick() bool {
+	r.pickMu.Lock()
+	stop := r.pickStop
+	r.pickStop = nil
+	r.pickMu.Unlock()
+	if stop == nil {
+		return false
+	}
+	stop()
+	return true
+}
+
 // errUnknownHead names a rewind target absent from the transcript, so callers
 // can answer it as not-found rather than a generic failure.
 var errUnknownHead = errors.New("unknown head")
+
+// pickFilterPlaceholder is the one filter placeholder every session picker uses.
+const pickFilterPlaceholder = "filter"
+
+// Causes a head move carries on branch.changed. No other event may move a head.
+const (
+	rewindCauseRewind  = "rewind"
+	rewindCauseFork    = "fork"
+	rewindCauseCompact = "compact"
+)
 
 // rewindTo switches onto head's branch, the double-Esc operation minus its
 // picker: rebuild state, move the writer, keep the live model, discard staged
@@ -770,7 +937,7 @@ var errUnknownHead = errors.New("unknown head")
 // entry id. Notifications for mid-operation failures stay inside (they render
 // locally and reach observers as notice events); the returned error is the
 // caller's machine-readable copy.
-func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head string) (string, error) {
+func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause string) (string, error) {
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
 		return "", err
@@ -791,8 +958,13 @@ func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head s
 		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
 		return "", errTurnRunning
 	}
-	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
+	if err := r.switchState(ui, ag, reg, newHead, cause, "rewind: "); err != nil {
 		return "", err
+	}
+	if r.closePick() {
+		// a failed switch left the head alone, so the picker only closes once
+		// the session really moved under it
+		ui.Notify("rewind picker closed: the session moved under it", tui.LevelWarn)
 	}
 	if r.discardStaged != nil {
 		r.discardStaged() // staged against the branch just left, not this one's to carry
@@ -805,6 +977,22 @@ func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head s
 			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
 			saveModel.Key()), tui.LevelWarn)
 		return newHead, err
+	}
+
+	// queued prompts clear with a recorded notice naming them, so resume
+	// replays the loss and editor history still recalls the texts. The local
+	// line rides NotifyLocal: controllers render the committed entry, so the
+	// same news must not also ride the ephemeral notice family
+	if r.clearQueued != nil {
+		if labels := r.clearQueued(); len(labels) > 0 {
+			if _, err := r.appendEntry(session.TypeNotice, session.NoticeData{
+				Message: "queued prompts cleared by rewind: " + strings.Join(labels, "; "),
+				Level:   agent.LevelWarn,
+			}); err != nil {
+				ui.Notify("could not record the queue-clear notice: "+err.Error(), tui.LevelWarn)
+			}
+			ui.NotifyLocal("queued prompts cleared by the rewind; up-arrow recalls them", tui.LevelWarn)
+		}
 	}
 
 	// redraw to just the restored context, then drop the picked text into the

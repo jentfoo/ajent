@@ -26,8 +26,8 @@ Goals, in priority order:
 2. A session can fork: rewinding onto an earlier message starts a new branch
    while keeping every prior one reachable.
 
-Goal 2 is what drove most of the shape below: branches, the branch cursor, and
-the rewind picker all exist for it.
+Goal 2 is what drove most of the shape below: branches, the per-writer head
+slots, and the rewind picker all exist for it.
 
 ## The transcript format
 
@@ -88,23 +88,30 @@ The writer owns the transcript file, its path and the current head id, under a
 mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
-one line under the mutex, so concurrent appends form one linear chain. The
-entry timestamp shares the id's monotonic millisecond: ts-derived ordering
-(`Store.List`, `Stale`) always agrees with append order even when the wall
-clock steps back. The new id becomes the head only *after* a successful write;
-an append that fails to hit disk never advances the cursor.
+one line under the mutex. That write is fenced by an exclusive lock on the
+transcript (see writer slots below), so concurrent *processes* interleave whole
+lines rather than bytes. The entry timestamp shares the id's monotonic
+millisecond: ts-derived ordering (`Store.List`, `Stale`) always agrees with append
+order even when the wall clock steps back. The new id becomes the head only
+*after* a successful write, so an append that fails to hit disk never advances it.
 
-- **Create** makes a fresh file and writes its `session` entry first.
-- **Open** reopens an existing file for append and recovers the head from the
-  persisted cursor or the tail (see the branch cursor below). **OpenEntries**
-  additionally returns what it parsed, so a resume can rebuild state without
-  reading the file a second time.
-- **Sync** flushes at a turn boundary *and* persists the current head, data
-  before cursor, and it is never called by `Append`. A cursor that could not be
-  written surfaces as an error rather than silently continuing.
+- **Create** makes a fresh file, registers the writer's slot (see below), then
+  writes its `session` entry first.
+- **Open** reopens an existing file for append and recovers the head through the
+  slot order (see writer slots below). **OpenEntries** additionally returns what it
+  parsed, so a resume can rebuild state without reading the file a second time. The
+  implicit form behind `--continue` is the one shape allowed to adopt a live peer's
+  head.
+- **Sync** flushes at a turn boundary *and* rewrites the writer's head slot, data
+  before slot, and it is never called by `Append`. A slot that could not be written
+  surfaces as an error rather than silently continuing. The turn boundary is also
+  where a writer notices peers arriving and leaving.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
-  the head.
+  this writer's head. An empty id starts a new root, which names no branch at all
+  until its first entry.
+- **Close** retires the slot immediately, so a clean exit never blocks `--delete`
+  for the freshness window.
 
 ## Durability
 
@@ -114,40 +121,64 @@ Two boundaries matter, and they are deliberately different:
    `message` entry as soon as the loop produces it (`Recorder.Message`), so every
    completed step is already on disk before the next begins. Durability here is
    crash-consistent, not fsync-strong: the writes land in the file, but a crash
-   before the turn's `Sync` leaves the cursor behind, and reopen recovers the
+   before the turn's `Sync` leaves the slot behind, and reopen recovers the
    appended entries from the file tail instead.
-2. **Per turn.** Each `TurnEnd` fsyncs and records the head cursor, so resume
+2. **Per turn.** Each `TurnEnd` fsyncs and rewrites the head slot, so resume
    continues from exactly where work left off.
 
 Write failures never end a conversation: persistence errors surface as an
 error-level notice through the sink rather than failing the turn. A broken disk
 should degrade to "not recorded", not kill the agent.
 
-## The branch cursor
+## Writer slots
 
-The one mutable piece of an otherwise append-only design is the branch cursor:
-the entry id where work continues after a fork, which is what a rewind updates.
-It is persisted beside its transcript at `<transcript>.head`, written atomically
-(with the containing directory fsynced) on every `SetHead` and at turn
-boundaries, together with the transcript's entry count at write time.
+The one mutable piece of an otherwise append-only design is the branch head: the
+entry id where work continues after a fork, which is what a rewind updates. It is
+persisted beside its transcript as one **head slot per writer**, keyed by a *slot
+token* minted when the file opens for append and rewritten atomically on every
+`SetHead`, at turn boundaries, and on a periodic touch.
 
-**One cursor per transcript, never per directory.** A directory holds every
-session for a workspace, so a shared cursor can only remember one of them.
-Two ajent instances in one workspace overwrite each other's. A sidecar cannot be
-claimed by a sibling, so no session and no concurrent process can steer another.
+**Per-writer, never shared.** A slot exists before this writer's first entry can land,
+so a peer is visible from its earliest possible write, which is what closes the deletion
+races. Two ajent processes on one session each own a slot, so neither can overwrite or
+steer the other. A slot counts as live while its writer claims it and keeps touching it,
+and a clean exit retires it at once. A writer suspended past the freshness window reads
+as stale until its next touch brings it back.
 
-Forking onto a new root removes the cursor rather than writing one, so it can
-never point back at the branch just abandoned. `headFor` falls back to tail
-recovery when a cursor is missing, corrupt (including an out-of-bounds count),
-or names an id the file no longer holds, so a lost cursor degrades to "continue
-from the end" instead of losing the branch.
+**Head resolution on open** is a total order:
 
-**Stale cursors lose to the tail.** The count in the cursor tells a crash apart
-from a fork: a file that grew past the counted length in one unbroken parent
-chain holds appends that landed after the last `Sync`, so the tail resumes and
-no unsynced turn is lost. Growth that breaks the chain is a rewind or fork, and
-the cursor wins. Sync flushes transcript data before persisting the cursor, so
-a trusted cursor never names an entry that is not durable.
+1. An explicit target (`--resume <id|name>`, rewind, plan fork) wins.
+2. The newest live slot head. A second `--continue` beside a running session resumes
+   from that writer's tip and then diverges on its own branch, which is the collaborative
+   behavior rather than an error. A peer with no head yet names nothing to adopt, so
+   adoption falls to the next live writer.
+3. The newest retired slot head, extended to the file tail when that writer's own
+   unsynced appends still form one unbroken chain from its head. Crash recovery is
+   per writer: entries interleaved from a peer break the chain and are skipped rather
+   than adopted.
+4. The file tail.
+
+Ordering is by the head entry's time with slot write time as tie-breaker, so a writer
+mid new-root fork still sorts. Tails that older writers left unsynced do not
+auto-continue, they stay reachable from the rewind picker. Slots are sidecars rather
+than entries, so the frozen corpus and its payload rules are untouched. A session
+recorded before slots existed resumes where it left off by seeding one retired slot
+from the legacy cursor on first open.
+
+**Byte-level safety stays inside the append.** Complete-line appends plus an exclusive
+lock on the transcript make concurrent processes interleave entries instead of corrupting
+each other, and a torn tail is quarantined under that same lock before anything else can
+append to it. Readers neither lock nor truncate: they tolerate a partial last line the way
+they always have. The design assumes a local filesystem, which is also what the control
+surface assumes.
+
+**Deletion meets liveness.** `--delete` and `--delete-old` consult live slots first.
+Deleting a session another writer holds refuses with the number of active instances,
+`--force` overrides that for one named target but never for the sweep, and the sweep lists
+live sessions as skipped. Exit-time empty-session cleanup fires only when no peer holds
+the file. A writer whose transcript is deleted under it anyway notices at its next append
+and stops recording with a persistence error rather than writing where nothing could read
+it back.
 
 ## Concurrent access
 
@@ -155,20 +186,25 @@ Nothing in the design locks a transcript to one process. Two ajent instances
 may share a workspace directory or even one session, kept safe without
 coordination by four rules:
 
-1. **Appends interleave whole lines, never bytes.** Each append is one write
-   of a complete line, so concurrent writers land interleaved entries in one
-   tree and nothing is lost or corrupt.
-2. **The cursor is atomic, last writer wins.** A reader sees the old or new
-   cursor, never a torn one. The last cursor to land names the branch a resume
-   continues, and the other instance's entries stay intact in the tree, one
-   rewind away.
-3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a
-   consistent prefix or freshly landed lines, exactly as a serial scan would,
-   and torn tails quarantine themselves on open.
-4. **A parsed snapshot is trusted only while the file is unchanged.** A
-   process holding one (an open's parse, a cached prompt scan) re-reads before
-   building on it whenever the file has grown, so a concurrent writer's
-   entries never land unseen.
+1. **Appends interleave whole lines, never bytes.** Each append is one fenced write
+   of a complete line, so concurrent writers land interleaved entries in one tree and
+   nothing is lost or corrupt.
+2. **Heads are per writer.** Each instance's slot carries its own branch, and resume
+   resolves through the slot order above. The other instance's entries stay intact in
+   the tree, one rewind away, whichever branch wins the resume.
+3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a consistent
+   prefix or freshly landed lines, exactly as a serial scan would, and a torn tail
+   quarantines itself on the next open.
+4. **A parsed snapshot is trusted only while the file is unchanged.** A process holding
+   one (an open's parse, a cached prompt scan) re-reads before building on it whenever
+   the file has grown, so a concurrent writer's entries never land unseen.
+
+**Peer visibility** rides the turn boundary: a writer diffs the slot directory against
+what it saw last time and surfaces joins and leaves as transient notices rather than
+entries, published through the ephemeral notice family so attached terminals see them too
+(see `control-design.md`). **Name races** between two `--session <name>` creators settle
+deterministically: the older session id keeps the name and the younger takes a numeric
+suffix through a recorded `session_name` entry before its first prompt.
 
 ## The store
 
@@ -212,7 +248,8 @@ The store:
   never swept: this build cannot read what it would be deleting.
 - **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
   28 days), most recently used first. Its order and selection key are `List`'s
-  already. Removing a session drops its sidecars too (the head cursor and any
+  already. Sessions another writer holds live list as skipped and are re-checked at
+  removal time. Removing a session drops its sidecars too (the slot directory and any
   `.torn` quarantine), leaving siblings and editor history alone.
 
 **Scans are concurrent and deterministic.** Each transcript parses
@@ -384,9 +421,9 @@ so an extra one stays visible in the rewind picker. A new root must lead with a
 **Rewinding** is how you start a new branch: picking an earlier message moves
 the writer's `SetHead` to that message's *parent* (so the picked text becomes
 the start of the new branch), rebuilds agent state from that head, redraws the
-UI, replays the restored context, and pre-fills the editor with the full
-original prompt, ready to edit or re-send. The cursor now points at the fork's
-tip, and both it and every earlier branch remain in the file.
+UI, replays the restored context, and pre-fills the editor with the full original
+prompt, ready to edit or re-send. The writer's slot now names the fork's tip, and both
+it and every earlier branch remain in the file.
 
 Every branch switch, rewind and the plan workflow's forks alike, goes through
 one guarded state swap (`WithState`). The swap is refused while a turn owns the
@@ -466,8 +503,8 @@ An **empty session** (abandoned before its first prompt) is deleted on exit: it
 has nothing to resume and would only be a dead picker row. A **named** session
 is exempt, since `--session` resumes by name. Deleting it would make the same
 command start over instead of returning to the work, and the picker labels it
-rather than showing an empty row. The deletion drops its head cursor too;
-siblings are left untouched.
+rather than showing an empty row. The cleanup fires only when no live peer still holds
+the file, and it drops the slot directory with it. Siblings are left untouched.
 
 ## Deleting sessions
 
@@ -495,13 +532,14 @@ declines rather than deleting blind.
 These are load bearing. Each exists because breaking it produced a real bug.
 
 **1. The transcript is append-only: nothing is ever deleted.** Forks, rewinds
-and compaction only add entries and move the cursor. Deleting would orphan
+and compaction only add entries and move the head. Deleting would orphan
 branches that other tips still point at.
 
 This governs entries *within* a transcript. Retiring a whole session
 (empty-session cleanup, `--delete`, `--delete-old`) is a separate lifecycle
-operation: `Remove` takes the file with its sidecars (the head cursor and any
-torn-tail quarantine) so nothing of it lingers behind.
+operation, gated on live writer slots: `Remove` takes the file with its
+sidecars (the slot directory and any torn-tail quarantine) so nothing of it
+lingers behind.
 
 **2. Reads go through the branch, never raw file order.** Every consumer (state
 rebuild, replay, info counts) walks from a head id along `ParentID`.
@@ -520,17 +558,18 @@ its entry stays on disk, freeing the old name to create a duplicate.
 
 **3. The live head wins over the file tail, except after a crash between
 Syncs.** They agree only until the first fork. After a rewind, or a plan
-workflow that leaves the cursor on the review branch while the tail is an
-implementation entry, the tail belongs to a different branch. Resume and
-rebuild prefer the writer's head and fall back to the tail only when it no
-longer resolves. One exception: a file that grew past the cursor's recorded
-count in one unbroken parent chain holds appends made after the last `Sync`, so
-the tail wins and no unsynced turn is skipped. The cursor is per transcript, so
-a sibling session can never answer this question for another.
+workflow that leaves the head on the review branch while the tail is an
+implementation entry, the tail belongs to a different branch. Resume and rebuild
+follow the slot order (live writer, newest retired slot, tail), and an explicit
+target always wins. One exception: a file holding one unbroken chain of appends past
+a retired writer's last sync point was written after that sync, so the tail wins and
+no unsynced turn is skipped. Slots are per writer, so a sibling session can never
+answer this question for another.
 
-**4. The head advances only on success.** An append updates the cursor after a
-successful write, and an fsync records it at turn boundaries. A lost or corrupt
-cursor falls back to tail recovery rather than losing the branch entirely.
+**4. The head advances only on success.** An append updates the head after a
+successful write, and an fsync rewrites the slot at turn boundaries. A lost or stale
+slot falls back through the slot order to tail recovery rather than losing the branch
+entirely.
 
 **5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
 `ToolResultBlock`, exactly as in the agent loop, or the next request would be

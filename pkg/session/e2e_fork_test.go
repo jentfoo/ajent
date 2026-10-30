@@ -61,7 +61,7 @@ func TestForkResumeAcrossBranches(t *testing.T) {
 	resolve := func(key string) (llm.Model, error) { return llm.Model{ID: "test"}, nil }
 
 	// resume reads the persisted HEAD: the new fork tip, not the file tail
-	st, warns := State(Branch(entries, headFor(p, entries)), resolve)
+	st, warns := State(Branch(entries, headForEntries(p, entries, true)), resolve)
 	assert.Empty(t, warns)
 	require.Len(t, st.Messages, 2) // "first" + "fork prompt", no old reply
 	assert.Equal(t, llm.Text(llm.RoleUser, "first"), st.Messages[0])

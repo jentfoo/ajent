@@ -2,6 +2,8 @@ package app
 
 import (
 	"cmp"
+	"encoding/json"
+	"errors"
 	"math"
 	"slices"
 	"sync"
@@ -23,13 +25,15 @@ import (
 // draftDebounce coalesces editor drafts: one emission per pause in typing.
 const draftDebounce = 100 * time.Millisecond
 
+// submit refusals the wire maps to distinct codes.
+var (
+	errSubmitStarting  = errors.New("the run is still starting")
+	errPromptQueueFull = errors.New("prompt queue full")
+)
+
 // activityUnranked mirrors the TUI's rank for rows whose producer keeps no
 // order of its own: after every ranked row, ties in arrival order.
 const activityUnranked = math.MaxInt
-
-// eventRingSize bounds the retained event history an events.replay request
-// reads. Anything older answers "too old" and the client re-snapshots.
-const eventRingSize = 512
 
 // hubModel is the model label copy the status line renders, with the
 // capabilities a control client polls.
@@ -88,24 +92,6 @@ type hubSnapshot struct {
 	Status      tui.Status // the status row the local terminal renders
 }
 
-// hubEmitters are the per-surface observer hooks a control client attaches.
-// Every field is optional, nil drops that surface, and each fires in the order
-// the local surface committed the change.
-type hubEmitters struct {
-	Echo       func(text string)
-	EchoImages func(imgs []tui.Image)
-	Notice     func(key, msg string, level tui.Level) // key "" when unkeyed
-	Print      func(markdown string)
-	Segment    func(seg tui.Segment) // an empty Text reports a removal
-	Model      func(key, short string, window int)
-	Idle       func(idle bool)
-	Spinning   func(on bool)
-	Activity   func(key, text string, rank int)
-	Queued     func(texts []string)
-	Draft      func(text string)
-	Head       func(id string) // the session head moved (rewind or fork)
-}
-
 // hubDeps is what the driver can supply at hub construction. Objects built
 // later (tool registry, agent, barrier, steer queue, stager, /init controller,
 // line router) are assigned onto the hub as they appear, always on the driver
@@ -127,13 +113,13 @@ type hubDeps struct {
 type sessionHub struct {
 	ui *hubUI
 
-	submitLine func(line, origin string) // router entry: routes one line naming its submitter
+	submitLine func(line, origin string) error // router entry: routes one line naming its submitter
 	ag         *agent.Agent
 	q          *steerQueue
 	stager     *command.Stager
 	barrier    barrierModeCycler // permission gate, a cycler when wired
 	initCtl    *initController
-	rewindTo   func(head string) (string, error) // rewind/fork to an entry; ends a plan first
+	rewindTo   func(head, cause string) (string, error) // rewind/fork to an entry; ends a plan first
 	tools      *tools.Registry
 	workspace  string
 	cwd        string
@@ -141,6 +127,9 @@ type sessionHub struct {
 	sessionID   string // stable once the transcript opens
 	sessionName string
 	headID      string // last head seen, so a rewind event fires only on a real move
+	// renameObs observes session renames (the control registry rewrite); nil
+	// drops. Installed before any loop starts, like every other seam.
+	renameObs func()
 	// headFn reads the recorded transcript's live head. Installed at bind,
 	// before any loop starts; nil when recording is off.
 	headFn func() string
@@ -157,12 +146,11 @@ type sessionHub struct {
 	actSeq    int // arrival order for activity rows tying on rank
 	draftText string
 	draftDue  *time.Timer
-	emit      hubEmitters
 
-	// control-plane event log: seq assigned once per observable change, the
-	// ring feeding events.replay, and one delivery listener per connection
+	// control-plane event log: one seq space, one delivery listener per
+	// connection. Committed content reconciles by entry id, so nothing needs
+	// retained events past the live fanout.
 	evSeq  uint64
-	evRing []ctl.Event
 	evSubs []*evListener
 }
 
@@ -170,9 +158,9 @@ type sessionHub struct {
 // can be dropped by handle.
 type evListener struct{ deliver func(ctl.Event) }
 
-// newSessionHub builds the control plane. emit is the driver-time observer set;
-// attach before any loop starts.
-func newSessionHub(deps hubDeps, emit hubEmitters) *sessionHub {
+// newSessionHub builds the control plane. Construction is initial state, not a
+// change, so nothing publishes here.
+func newSessionHub(deps hubDeps) *sessionHub {
 	h := &sessionHub{
 		workspace: deps.workspace,
 		cwd:       deps.cwd,
@@ -180,7 +168,6 @@ func newSessionHub(deps hubDeps, emit hubEmitters) *sessionHub {
 		idle:      true, // the prompt is at rest until a turn starts
 		segments:  make(map[string]tui.Segment),
 		activity:  make(map[string]hubActivity),
-		emit:      emit,
 	}
 	if deps.active.ID != "" {
 		// field set, not setModel: construction is initial state, not a change
@@ -208,28 +195,52 @@ func (h *sessionHub) bindSession(rec *sessRec) {
 	h.mu.Unlock()
 }
 
-// setSessionName records a rename for snapshots.
+// setSessionName records a rename, publishing it so controllers and pickers
+// learn renames without polling, and running the rename observer (the control
+// registry rewrite) outside the lock.
 func (h *sessionHub) setSessionName(name string) {
 	h.mu.Lock()
+	changed := h.sessionName != name
 	h.sessionName = name
+	var obs func()
+	if changed {
+		raw := ctl.EncodeData(ctl.SessionRenamedData{Name: name})
+		h.publishLocked(ctl.EventSessionRenamed, raw)
+		obs = h.renameObs
+	}
 	h.mu.Unlock()
+	if obs != nil {
+		obs()
+	}
 }
 
-// setHead records the transcript head after a rewind or fork moved it, emitting
-// only on a real move so observers re-read the branch.
-func (h *sessionHub) setHead(id string) {
+// setHead records the transcript head after a rewind or fork moved it,
+// publishing branch.changed with the mutation under one critical section. It
+// fires only on a real move: branch.changed plus entry.append together define
+// committed state, and no other event may move a head.
+func (h *sessionHub) setHead(id, cause string) {
 	h.mu.Lock()
 	if h.headID == id {
 		h.mu.Unlock()
 		return
 	}
+	from := h.headID
 	h.headID = id
-	f := h.emit.Head
+	raw := ctl.EncodeData(ctl.BranchChangedData{From: from, Head: id, Cause: cause})
+	h.publishLocked(ctl.EventBranchChanged, raw)
 	h.mu.Unlock()
+}
 
-	if f != nil {
-		f(id)
+// noteAppend records the head an appended entry moved the branch to, so a later
+// rewind publishes branch.changed against the writer's real head instead of the
+// last switch's. Appends chain from the head, so the newest entry id is it.
+func (h *sessionHub) noteAppend(id string) {
+	if id == "" {
+		return
 	}
+	h.mu.Lock()
+	h.headID = id
+	h.mu.Unlock()
 }
 
 // Interactive reports whether a local terminal renders the session. Serve mode
@@ -259,45 +270,32 @@ func (h *sessionHub) observers() []agent.Sink {
 	return h.sinks
 }
 
-// emitting snapshots the observer hooks, so each fires without the hub lock.
-func (h *sessionHub) emitting() hubEmitters {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.emit
-}
-
-// setEmitters replaces the observer hooks. Chaining an existing set onto the
-// new one is the caller's choice; the driver-time set is empty today.
-func (h *sessionHub) setEmitters(emit hubEmitters) {
-	h.mu.Lock()
-	h.emit = emit
-	h.mu.Unlock()
-}
-
-// publish records one observable change as a control event: seq assigned
-// here, ring appended, then every attached connection's delivery func runs,
-// still under the lock, so a connection's lines can never arrive out of seq
-// order. Delivery is non-blocking by contract: a stage append or an
-// asynchronous drop, so a slow or gone consumer never stalls the caller.
+// publish records one observable change as a control event. Seq assignment and
+// delivery share one critical section, so a connection's lines can never arrive
+// out of seq order and commit order equals seq order by construction. Delivery
+// is non-blocking by contract: a stage append or an asynchronous drop, so a
+// slow or gone consumer never stalls the caller.
 func (h *sessionHub) publish(name string, data any) {
 	// encoded before the lock: stream deltas ride this path per sink call and
 	// must not serialize behind every other hub surface
 	raw := ctl.EncodeData(data)
 	h.mu.Lock()
-	h.evSeq++
-	ev := ctl.Event{Name: name, Seq: h.evSeq, Data: raw}
-	h.evRing = append(h.evRing, ev)
-	if n := len(h.evRing) - eventRingSize; n > 0 {
-		h.evRing = h.evRing[n:] // reslice off the front: no per-publish memmove
-	}
-	for _, l := range h.evSubs {
-		l.deliver(ev)
-	}
+	h.publishLocked(name, raw)
 	h.mu.Unlock()
 }
 
-// evWatermark returns the last assigned seq. Request handlers read it before
-// gathering their result, so events racing the read stay above the reply.
+// publishLocked stamps and delivers one encoded event. Caller holds h.mu; a
+// mutation and its publish must share the caller's one critical section so the
+// snapshot can never name a state that never existed.
+func (h *sessionHub) publishLocked(name string, raw json.RawMessage) {
+	h.evSeq++
+	ev := ctl.Event{Name: name, Seq: h.evSeq, Data: raw}
+	for _, l := range h.evSubs {
+		l.deliver(ev)
+	}
+}
+
+// evWatermark returns the last assigned seq.
 func (h *sessionHub) evWatermark() uint64 {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -321,51 +319,21 @@ func (h *sessionHub) evUnlisten(l *evListener) {
 	h.evSubs = slices.DeleteFunc(h.evSubs, func(x *evListener) bool { return x == l })
 }
 
-// eventsSince returns the retained events past since, false when since predates
-// the ring and the client must re-snapshot instead.
-func (h *sessionHub) eventsSince(since uint64) ([]ctl.Event, bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if len(h.evRing) > 0 && since+1 < h.evRing[0].Seq {
-		return nil, false
-	}
-	i, _ := slices.BinarySearchFunc(h.evRing, since+1,
-		func(e ctl.Event, seq uint64) int { return cmp.Compare(e.Seq, seq) })
-	return slices.Clone(h.evRing[i:]), true
-}
-
-// notice re-emits one notice line. key "" marks an unkeyed notice.
+// notice publishes one transient notice line, key "" marking an unkeyed one.
+// Recorded notices ride entry.append instead, so there is no duplicate to
+// dedupe; this family is never reconciled against the file.
 func (h *sessionHub) notice(key, msg string, level tui.Level) {
-	if f := h.emitting().Notice; f != nil {
-		f(key, msg, level)
-	}
+	h.publish(ctl.EventNotice, ctl.NoticeData{Text: msg,
+		Level: levelName(agent.Level(level)), Key: key})
 }
 
-// print re-emits one markdown block, the form /help and /usage use.
+// print publishes one markdown block, the form /help and /usage use.
 func (h *sessionHub) print(markdown string) {
-	if f := h.emitting().Print; f != nil {
-		f(markdown)
-	}
+	h.publish(ctl.EventPrint, ctl.PrintData{Markdown: markdown})
 }
 
-// echo re-emits one committed user message.
-func (h *sessionHub) echo(text string) {
-	if f := h.emitting().Echo; f != nil {
-		f(text)
-	}
-}
-
-// echoImages re-emits the images committed beside a prompt.
-func (h *sessionHub) echoImages(imgs []tui.Image) {
-	if len(imgs) == 0 {
-		return
-	}
-	if f := h.emitting().EchoImages; f != nil {
-		f(imgs)
-	}
-}
-
-// setSegment remembers one keyed status segment, an empty Text removing it.
+// setSegment remembers one keyed status segment, an empty Text removing it,
+// publishing the change in the same critical section.
 func (h *sessionHub) setSegment(seg tui.Segment) {
 	h.mu.Lock()
 	if seg.Text == "" {
@@ -373,23 +341,20 @@ func (h *sessionHub) setSegment(seg tui.Segment) {
 	} else {
 		h.segments[seg.Key] = seg
 	}
+	h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Segment: &ctl.Segment{
+		Key: seg.Key, Text: seg.Text, Short: seg.Short, Order: seg.Order,
+	}}))
 	h.mu.Unlock()
-
-	if f := h.emitting().Segment; f != nil {
-		f(seg)
-	}
 }
 
-// setModel remembers the full model copy, capabilities included.
+// setModel remembers the full model copy, capabilities included, and publishes
+// the label change in the same critical section.
 func (h *sessionHub) setModel(m llm.Model) {
 	h.mu.Lock()
 	h.model = hubModel{Key: m.Key(), Short: m.ShortName(),
 		Window: m.ContextWindow, Caps: m.Caps}
+	h.publishModelLocked(h.model.Key, h.model.Short, h.model.Window)
 	h.mu.Unlock()
-
-	if f := h.emitting().Model; f != nil {
-		f(m.Key(), m.ShortName(), m.ContextWindow)
-	}
 }
 
 // setModelLabel remembers a label-only change, the shape a raw SetModel call
@@ -397,36 +362,51 @@ func (h *sessionHub) setModel(m llm.Model) {
 func (h *sessionHub) setModelLabel(key, short string, window int) {
 	h.mu.Lock()
 	h.model.Key, h.model.Short, h.model.Window = key, short, window
+	h.publishModelLocked(key, short, window)
 	h.mu.Unlock()
-
-	if f := h.emitting().Model; f != nil {
-		f(key, short, window)
-	}
 }
 
-// setQueued remembers the pending-prompt rows, oldest first.
+// publishModelLocked stamps one model label change. Caller holds h.mu.
+func (h *sessionHub) publishModelLocked(key, short string, window int) {
+	h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Model: &ctl.ModelState{
+		Key: key, Short: short, Window: window,
+	}}))
+}
+
+// setQueued remembers the pending-prompt rows, oldest first. Secret-prefixed
+// rows are redacted on the wire to match drafts; the local surface already
+// rendered the real texts before this ran.
 func (h *sessionHub) setQueued(texts []string) {
 	h.mu.Lock()
 	h.queued = slices.Clone(texts)
+	h.publishLocked(ctl.EventQueued, ctl.EncodeData(ctl.QueuedData{
+		Texts: redactQueueTexts(texts),
+	}))
 	h.mu.Unlock()
-
-	if f := h.emitting().Queued; f != nil {
-		f(slices.Clone(texts))
-	}
 }
 
-// setIdle remembers the prompt's rest state.
+// queueDropped announces the queued prompts an interrupt cleared, so their
+// pending rows resolve instead of vanishing.
+func (h *sessionHub) queueDropped(texts []string) {
+	h.queueDroppedCause("interrupt", texts)
+}
+
+// queueDroppedCause is queueDropped naming its cause: an interrupt recovery or
+// a rewind clear.
+func (h *sessionHub) queueDroppedCause(cause string, texts []string) {
+	h.publish(ctl.EventQueueDropped, ctl.QueueDroppedData{Texts: redactQueueTexts(texts), Cause: cause})
+}
+
+// setIdle remembers the prompt's rest state. Snapshot-only: idle shapes what
+// keys mean locally, and a snapshot's Running answers it for controllers.
 func (h *sessionHub) setIdle(idle bool) {
 	h.mu.Lock()
 	h.idle = idle
 	h.mu.Unlock()
-
-	if f := h.emitting().Idle; f != nil {
-		f(idle)
-	}
 }
 
-// setActivity remembers one keyed activity row, an empty text removing it.
+// setActivity remembers one keyed activity row, an empty text removing it,
+// publishing in the same critical section.
 func (h *sessionHub) setActivity(key, text string, rank int) {
 	h.mu.Lock()
 	if text == "" {
@@ -435,15 +415,13 @@ func (h *sessionHub) setActivity(key, text string, rank int) {
 		h.actSeq++
 		h.activity[key] = hubActivity{Key: key, Text: text, Rank: rank, seq: h.actSeq}
 	}
+	h.publishLocked(ctl.EventActivity, ctl.EncodeData(ctl.ActivityData{Key: key, Text: text, Rank: rank}))
 	h.mu.Unlock()
-
-	if f := h.emitting().Activity; f != nil {
-		f(key, text, rank)
-	}
 }
 
 // draft records the editor's live text, coalesced: rapid edits collapse to
-// the latest. A secret-prefixed draft never emits, matching history exclusion.
+// the latest. Read and arm share one section with the eventual emit, so a
+// paused draft can never publish over a newer one.
 func (h *sessionHub) draft(text string) {
 	h.mu.Lock()
 	h.draftText = text
@@ -455,55 +433,57 @@ func (h *sessionHub) draft(text string) {
 	h.mu.Unlock()
 }
 
-// emitDraft publishes the coalesced draft once typing pauses.
+// emitDraft publishes the coalesced draft once typing pauses. A secret-
+// prefixed draft never emits, matching history exclusion.
 func (h *sessionHub) emitDraft() {
 	h.mu.Lock()
 	h.draftDue = nil
 	text := h.draftText
+	if !session.HasSecretPrefix(secretPrefix, text) {
+		h.publishLocked(ctl.EventEditor, ctl.EncodeData(ctl.EditorData{Text: text}))
+	}
 	h.mu.Unlock()
-
-	if session.HasSecretPrefix(secretPrefix, text) {
-		return
-	}
-	if f := h.emitting().Draft; f != nil {
-		f(text)
-	}
 }
 
 // prependDraft mirrors the editor's prepend onto the remembered draft, which
-// host fills reach without a keystroke.
+// host fills reach without a keystroke. Read and write share one section, so a
+// racing keystroke can never lose its text.
 func (h *sessionHub) prependDraft(text string) {
 	h.mu.Lock()
-	cur := h.draftText
-	h.mu.Unlock()
-
-	if cur == "" {
-		h.draft(text)
-		return
+	if cur := h.draftText; cur == "" {
+		h.draftText = text
+	} else {
+		h.draftText = text + "\n" + cur
 	}
-	h.draft(text + "\n" + cur)
+	if h.draftDue == nil {
+		h.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
+	} else {
+		h.draftDue.Reset(draftDebounce)
+	}
+	h.mu.Unlock()
 }
 
 // Submit routes one line into the session through the same router the editor
 // uses: prompts, /commands, !shell and !! all behave exactly as typed, minus
 // editor-coupled side effects. origin names the submitter ("controller") for
-// transcript provenance; empty means the local editor. It reports whether the
-// run had a router installed yet. Safe from any goroutine.
-func (h *sessionHub) Submit(line, origin string) bool {
+// transcript provenance; empty means the local editor. It reports errSubmitStarting
+// before the router is wired and the router's own error otherwise, which is
+// errPromptQueueFull when the pump queue is full: a remote submit never blocks
+// the caller. Safe from any goroutine.
+func (h *sessionHub) Submit(line, origin string) error {
 	h.mu.Lock()
 	f := h.submitLine
 	h.mu.Unlock()
 	if f == nil {
-		return false
+		return errSubmitStarting
 	}
-	f(line, origin)
-	return true
+	return f(line, origin)
 }
 
 // setSubmitLine installs the router entry Submit routes through. Runs once on
 // the driver goroutine; control requests racing the wiring read the field
 // under mu, never a torn write.
-func (h *sessionHub) setSubmitLine(f func(line, origin string)) {
+func (h *sessionHub) setSubmitLine(f func(line, origin string) error) {
 	h.mu.Lock()
 	h.submitLine = f
 	h.mu.Unlock()
@@ -511,7 +491,7 @@ func (h *sessionHub) setSubmitLine(f func(line, origin string)) {
 
 // rewindEntry returns the installed rewind entry, nil while the run is still
 // wiring one.
-func (h *sessionHub) rewindEntry() func(head string) (string, error) {
+func (h *sessionHub) rewindEntry() func(head, cause string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.rewindTo
@@ -519,7 +499,7 @@ func (h *sessionHub) rewindEntry() func(head string) (string, error) {
 
 // setRewindTo installs the rewind entry, which ends an active plan workflow
 // before switching branches. Same startup discipline as setSubmitLine.
-func (h *sessionHub) setRewindTo(f func(head string) (string, error)) {
+func (h *sessionHub) setRewindTo(f func(head, cause string) (string, error)) {
 	h.mu.Lock()
 	h.rewindTo = f
 	h.mu.Unlock()
@@ -596,7 +576,18 @@ func (h *sessionHub) ModeCycle(back bool) permit.Mode {
 // Snapshot reads every polled field at one moment. Safe from any goroutine:
 // hub-held copies plus each source's own lock.
 func (h *sessionHub) Snapshot() hubSnapshot {
+	snap, _ := h.SnapshotAt()
+	return snap
+}
+
+// SnapshotAt is Snapshot also returning the event watermark the read was taken
+// at, captured under the same critical section as the head and the ephemeral
+// fields. The reply's watermark is that seq, which is what closes the
+// watermark-versus-head window: an entry.append naming this head can never sit
+// below the seq a client already reconciled.
+func (h *sessionHub) SnapshotAt() (hubSnapshot, uint64) {
 	h.mu.Lock()
+	seq := h.evSeq
 	snap := hubSnapshot{
 		SessionID:   h.sessionID,
 		SessionName: h.sessionName,
@@ -605,7 +596,7 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 		Model:       h.model,
 		Idle:        h.idle,
 		Spinning:    h.spinning,
-		QueuedTexts: slices.Clone(h.queued),
+		QueuedTexts: redactQueueTexts(h.queued),
 		Activity:    activityRows(h.activity),
 	}
 	if h.headFn != nil {
@@ -655,7 +646,7 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 	if snap.Spinning {
 		snap.Status.Spinner = tui.SpinnerFrame(true)
 	}
-	return snap
+	return snap, seq
 }
 
 // ledger returns the accounting to read numbers from. While the agent is idle
@@ -699,6 +690,15 @@ func toolSnapshot(reg *tools.Registry) []hubTool {
 // allReadOnly reports whether every name is marked read-only.
 func allReadOnly(reg *tools.Registry, names []string) bool {
 	return !slices.ContainsFunc(names, func(n string) bool { return !reg.ReadOnly(n) })
+}
+
+// redactQueueTexts drops secret-prefixed rows from a wire copy of the queue,
+// matching the draft rule: the value never leaves the process. The local
+// surface and the transcript keep the real text.
+func redactQueueTexts(texts []string) []string {
+	return bulk.SliceFilter(func(text string) bool {
+		return !session.HasSecretPrefix(secretPrefix, text)
+	}, texts)
 }
 
 // activityRows renders the remembered activity rows in display order.
@@ -827,16 +827,13 @@ func (s hubSink) Notice(msg string, level agent.Level) {
 	}
 }
 
-// setSpinning tracks the working glyph from turn boundaries and re-emits it.
+// setSpinning tracks the working glyph from turn boundaries, publishing the
+// change in the same critical section.
 func (h *sessionHub) setSpinning(on bool) {
 	h.mu.Lock()
-	changed := h.spinning != on
-	h.spinning = on
-	h.mu.Unlock()
-
-	if changed {
-		if f := h.emitting().Spinning; f != nil {
-			f(on)
-		}
+	if h.spinning != on {
+		h.spinning = on
+		h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Spinning: &on}))
 	}
+	h.mu.Unlock()
 }

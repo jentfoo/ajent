@@ -12,26 +12,67 @@ import (
 // carries onto the transcript's message entries.
 const submitOriginController = "controller"
 
-// controlMethod routes one controller method: its handler and, beside it,
-// whether the call mutates and so requires the control seat.
+// controlMethod routes one controller method. lane marks a mutating verb: its
+// handler runs on the control executor, where guards revalidate at execution
+// time and replies follow the effects they acknowledge. priority jumps the
+// lane's queue (interrupt). seat marks a call that needs the control seat.
+// Off-lane seat calls check at dispatch.
 type controlMethod struct {
-	handle func(c *controlConn, params []byte) (any, *ctl.Error)
-	seat   bool
+	handle   func(c *controlConn, params []byte) (any, uint64, *ctl.Error)
+	seat     bool
+	lane     bool
+	priority bool
+}
+
+// seqResult wraps a handler result whose reply must carry the seq the result
+// was taken at, not the watermark at reply time.
+type seqResult struct {
+	val any
+	seq uint64
 }
 
 // controlMethods is every method a controller may call. Adding one means adding
-// its entry here; the seat requirement sits beside the handler that obeys it.
+// its entry here; the seat and lane flags sit beside the handler that obeys
+// them.
 var controlMethods = map[string]controlMethod{
 	ctl.MethodState:  {handle: (*controlConn).stateGet},
-	ctl.MethodReplay: {handle: (*controlConn).replay},
 	ctl.MethodAttach: {handle: (*controlConn).attachCall}, // callable before any seat exists
 
-	ctl.MethodSubmit:    {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.submit(p) }},
-	ctl.MethodInterrupt: {seat: true, handle: func(c *controlConn, _ []byte) (any, *ctl.Error) { return c.srv.interrupt() }},
-	ctl.MethodModeCycle: {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.modeCycle(p) }},
-	ctl.MethodInputSet:  {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.inputSet(p) }},
-	ctl.MethodRewind:    {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.rewind(p) }},
-	ctl.MethodResolve:   {seat: true, handle: func(c *controlConn, p []byte) (any, *ctl.Error) { return c.srv.resolve(p) }},
+	ctl.MethodSubmit: {seat: true, lane: true, handle: func(c *controlConn, p []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.submit(p)
+		return res, 0, rerr
+	}},
+	ctl.MethodInterrupt: {seat: true, lane: true, priority: true, handle: func(c *controlConn, _ []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.interrupt()
+		return res, 0, rerr
+	}},
+	ctl.MethodModeCycle: {seat: true, lane: true, handle: func(c *controlConn, p []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.modeCycle(p)
+		return res, 0, rerr
+	}},
+	ctl.MethodInputSet: {seat: true, lane: true, handle: func(c *controlConn, p []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.inputSet(p)
+		return res, 0, rerr
+	}},
+	ctl.MethodRewind: {seat: true, lane: true, handle: func(c *controlConn, p []byte) (any, uint64, *ctl.Error) {
+		res, rerr := c.srv.rewind(p)
+		return res, 0, rerr
+	}},
+	ctl.MethodResolve: {seat: true, handle: (*controlConn).resolveCall}, // answers stay off the lane
+	ctl.MethodSeatYield: {seat: true, handle: func(c *controlConn, _ []byte) (any, uint64, *ctl.Error) {
+		c.srv.yield(c)
+		return nil, 0, nil
+	}},
+}
+
+// stateGet answers one snapshot read with the seat section from this
+// connection's view. The reply's seq is the snapshot's own: head and ephemera
+// were read under it.
+func (c *controlConn) stateGet([]byte) (any, uint64, *ctl.Error) {
+	snap, seq := c.srv.hub.SnapshotAt()
+	st := ctlStateFrom(snap)
+	st.Seat = c.srv.seatState(c)
+	return seqResult{val: st, seq: seq}, seq, nil
 }
 
 // attach claims or declines the control seat for c. The seat is single: a
@@ -57,8 +98,7 @@ func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult,
 	case s.seat == c:
 		s.seatHolder = holder
 	case s.seat != nil && !p.Force:
-		refusal = ctl.Errf(ctl.CodeSeatHeld,
-			"control seat held by %s; attach again with force to take it", seatLabel(s.seatHolder))
+		refusal = seatHeldError(s.seatHolder)
 	default:
 		if s.seat != nil {
 			displaced = s.seatHolder
@@ -74,7 +114,35 @@ func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult,
 		// hold both at once
 		s.hub.publish(ctl.EventSeatLost, ctl.SeatLostData{From: displaced, To: holder})
 	}
+	s.writeRegistry()
 	return ctl.AttachResult{Control: true}, nil
+}
+
+// yield releases the control seat this connection holds, so a script can hand
+// the session back without dropping its socket. Releasing a seat it does not
+// hold is a benign no-op.
+func (s *controlServer) yield(c *controlConn) {
+	s.mu.Lock()
+	if s.seat != c {
+		s.mu.Unlock()
+		return
+	}
+	holder := s.seatHolder
+	s.seat = nil
+	s.seatHolder = ""
+	s.mu.Unlock()
+	s.hub.publish(ctl.EventSeatLost, ctl.SeatLostData{From: holder})
+	s.writeRegistry()
+}
+
+// seatHeldError builds the takeover-capable refusal: the code is dedicated and
+// the holder rides its own field, so a script can decide between force
+// reattach, waiting and exiting without parsing prose.
+func seatHeldError(holder string) *ctl.Error {
+	e := ctl.Errf(ctl.CodeSeatHeld,
+		"control seat held by %s; attach again with force to take it", seatLabel(holder))
+	e.Holder = holder
+	return e
 }
 
 // seatLabel renders a holder's name for refusal errors.
@@ -97,8 +165,10 @@ func (s *controlServer) seatRefusal(c *controlConn) *ctl.Error {
 		return nil
 	}
 	if held {
-		return ctl.Errf(ctl.CodeObserver,
+		e := ctl.Errf(ctl.CodeObserver,
 			"observer connection: the control seat is held by %s", seatLabel(name))
+		e.Holder = name
+		return e
 	}
 	return ctl.Errf(ctl.CodeObserver,
 		"observer connection: nobody holds the control seat; attach with control first")
@@ -111,37 +181,21 @@ func (s *controlServer) seatState(c *controlConn) ctl.SeatState {
 	return ctl.SeatState{Held: s.seat != nil, Holder: s.seatHolder, Yours: s.seat == c}
 }
 
-// stateGet answers one snapshot read with the seat section from this
-// connection's view.
-func (c *controlConn) stateGet([]byte) (any, *ctl.Error) {
-	st := ctlStateFrom(c.srv.hub.Snapshot())
-	st.Seat = c.srv.seatState(c)
-	return st, nil
-}
-
-// replay answers one events.replay read over the retained ring.
-func (c *controlConn) replay(params []byte) (any, *ctl.Error) {
-	var p ctl.ReplayParams
-	if rerr := decodeParams(params, &p); rerr != nil {
-		return nil, rerr
-	}
-	evs, ok := c.srv.hub.eventsSince(p.Since)
-	if !ok {
-		return nil, ctl.Errf(ctl.CodeTooOld,
-			"seq %d predates the retained event history; re-snapshot with state.get", p.Since)
-	}
-	return ctl.ReplayResult{Events: evs}, nil
-}
-
 // attachCall adapts the attach method onto the registry shape.
-func (c *controlConn) attachCall(params []byte) (any, *ctl.Error) {
+func (c *controlConn) attachCall(params []byte) (any, uint64, *ctl.Error) {
 	res, rerr := c.srv.attach(c, params)
-	return res, rerr
+	return res, 0, rerr
+}
+
+// resolveCall adapts the resolve method onto the registry shape.
+func (c *controlConn) resolveCall(params []byte) (any, uint64, *ctl.Error) {
+	return nil, 0, c.srv.resolve(params)
 }
 
 // submit routes one line exactly as typed in the editor: prompts, /commands,
 // !shell and !! all keep their existing behavior, and a turn already running
-// steers or queues per the pump's rules.
+// steers or queues per the pump's rules. A dialog holding the editor refuses,
+// the same rule input.set applies.
 func (s *controlServer) submit(params []byte) (any, *ctl.Error) {
 	var p ctl.SubmitParams
 	if rerr := decodeParams(params, &p); rerr != nil {
@@ -150,8 +204,16 @@ func (s *controlServer) submit(params []byte) (any, *ctl.Error) {
 	if strings.TrimSpace(p.Line) == "" {
 		return nil, ctl.Errf(ctl.CodeBadRequest, "submit needs a non-empty line")
 	}
-	if !s.hub.Submit(p.Line, submitOriginController) {
-		return nil, ctl.Errf(ctl.CodeUnavailable, "submit unavailable: the run is still starting")
+	if held, ok := s.hub.ui.dialogs.holding(); ok {
+		return nil, ctl.Errf(ctl.CodeUnavailable,
+			"input held by an open %s dialog; resolve it first", held.Kind)
+	}
+	if err := s.hub.Submit(p.Line, submitOriginController); err != nil {
+		if errors.Is(err, errPromptQueueFull) {
+			return nil, ctl.Errf(ctl.CodeBusy,
+				"prompt queue full; retry once the running command or turn finishes")
+		}
+		return nil, ctl.Errf(ctl.CodeUnavailable, "submit unavailable: %s", err)
 	}
 	return nil, nil
 }
@@ -195,9 +257,9 @@ func (s *controlServer) inputSet(params []byte) (any, *ctl.Error) {
 	return nil, nil
 }
 
-// rewind forks onto an earlier transcript entry, the double-Esc operation. An
-// active plan workflow ends first, the local editor redraws when one exists,
-// and every rewind raises the head event.
+// rewind forks onto an earlier transcript entry through the same transaction
+// the keyboard's double-Esc runs, so live state and the writer head cannot
+// diverge and the last rewind wins. An active plan workflow ends first.
 func (s *controlServer) rewind(params []byte) (any, *ctl.Error) {
 	var p ctl.RewindParams
 	if rerr := decodeParams(params, &p); rerr != nil {
@@ -210,7 +272,7 @@ func (s *controlServer) rewind(params []byte) (any, *ctl.Error) {
 	if rewindTo == nil {
 		return nil, ctl.Errf(ctl.CodeUnavailable, "rewind unavailable: the run is still starting")
 	}
-	head, err := rewindTo(p.Head)
+	head, err := rewindTo(p.Head, rewindCauseRewind)
 	if err != nil {
 		return nil, ctl.Errf(rewindCode(err), "rewind: %v", err)
 	}
@@ -230,30 +292,30 @@ func rewindCode(err error) string {
 // {indexes} for multi pick, {text} for input, {cancel} for Esc everywhere.
 // First resolution wins against the local surface, and a stale id errors
 // legibly after End.
-func (s *controlServer) resolve(params []byte) (any, *ctl.Error) {
+func (s *controlServer) resolve(params []byte) *ctl.Error {
 	var p ctl.ResolveParams
 	if rerr := decodeParams(params, &p); rerr != nil {
-		return nil, rerr
+		return rerr
 	}
 	if p.ID == 0 {
-		return nil, ctl.Errf(ctl.CodeBadRequest, "interaction.resolve needs an id")
+		return ctl.Errf(ctl.CodeBadRequest, "interaction.resolve needs an id")
 	}
 	info, open, ended := s.dialogs.lookup(p.ID)
 	if open {
 		ans, rerr := s.resolveAnswer(p, info)
 		if rerr != nil {
-			return nil, rerr
+			return rerr
 		}
 		if err := s.dialogs.Resolve(p.ID, ans); err != nil {
-			return nil, resolveErr(p.ID, err)
+			return resolveErr(p.ID, err)
 		}
-		return nil, nil
+		return nil
 	}
 	if ended {
-		return nil, ctl.Errf(ctl.CodeSettled,
+		return ctl.Errf(ctl.CodeSettled,
 			"interaction %d already settled; a first answer won the race", p.ID)
 	}
-	return nil, ctl.Errf(ctl.CodeNotFound, "no such interaction %d", p.ID)
+	return ctl.Errf(ctl.CodeNotFound, "no such interaction %d", p.ID)
 }
 
 // resolveErr maps a broker refusal onto its reply error.

@@ -34,10 +34,12 @@ type cliFlags struct {
 	sessionName  string // --session <name>: resume that name, creating it when new
 	sessionGiven bool   // --session was given, so an empty name is a usage error
 	serve        bool   // --serve: run with the control socket as the only front end
-	attach       string // --attach <socket>: mirror a running session over its control socket
+	attachGiven  bool   // --attach was given, bare or with a target
+	attach       string // --attach [name|id|socket]: mirror that session's control socket
 
 	deleteTarget  string // --delete <name|id>: the session to remove from disk
 	deleteGiven   bool   // --delete was given, so an empty target is a usage error
+	deleteForce   bool   // --force: delete a live session's transcript anyway
 	deleteOld     bool   // --delete-old: sweep unnamed sessions unused past the cutoff
 	deleteOldDays int    // days from --delete-old <days>, 0 when the default applies
 
@@ -72,9 +74,10 @@ func countTrue(flags ...bool) int {
 // reports pflag.ErrHelp when usage was requested and printed.
 func parseFlags(argv []string) (cliFlags, error) {
 	var f cliFlags
-	// --resume and --delete-old take an optional value, which no flag package can
-	// express, so they are lifted out of argv before parsing.
+	// --resume, --delete-old and --attach take an optional value, which no flag
+	// package can express, so they are lifted out of argv before parsing.
 	f.resume, f.resumeID, argv = extractResume(argv)
+	f.attachGiven, f.attach, argv = extractAttach(argv)
 	var days string
 	f.deleteOld, days, argv = extractDeleteOld(argv)
 	if f.deleteOld {
@@ -96,10 +99,10 @@ func parseFlags(argv []string) (cliFlags, error) {
 	fs.BoolVar(&f.cont, "continue", false, "resume the most recent session automatically")
 	fs.StringVar(&f.sessionName, "session", "", "resume the session with this name, creating it if it does not exist")
 	fs.BoolVar(&f.serve, "serve", false,
-		"run with no terminal, serving the session over the local control socket (needs control.enabled)")
-	fs.StringVar(&f.attach, "attach", "",
-		"attach this terminal to a running session's control socket and mirror it live")
+		"run with no terminal, serving the session over the local control socket")
 	fs.StringVar(&f.deleteTarget, "delete", "", "delete the saved session with this name or id, then exit")
+	fs.BoolVar(&f.deleteForce, "force", false,
+		"with --delete: remove the session even while another ajent instance holds it live")
 	fs.BoolVarP(&f.version, "version", "v", false, "print version and exit")
 	fs.BoolVar(&f.update, "update", false, "reinstall ajent from @latest then exit")
 	fs.StringVarP(&f.prompt, "prompt", "p", "",
@@ -152,6 +155,8 @@ func writeUsage(out io.Writer, flagUsages string) {
 	_, _ = fmt.Fprint(out, flagUsages)
 	_, _ = fmt.Fprintln(out, "      --resume [id|name]      "+
 		"list saved sessions and resume one; with an id or name, resume that session directly")
+	_, _ = fmt.Fprintln(out, "      --attach [name|id]      "+
+		"attach this terminal to a running session and mirror it live; bare opens a picker")
 	_, _ = fmt.Fprintf(out, "      --delete-old [days]     "+
 		"delete unnamed sessions unused for %d days, or the given number of days\n", defaultStaleDays)
 }
@@ -169,11 +174,14 @@ func (f cliFlags) validate() error {
 		case f.deleteOld && f.deleteOldDays < 1:
 			// a cutoff at or past now would sweep every unnamed session
 			return errors.New("--delete-old needs a positive number of days")
+		case f.deleteOld && f.deleteForce:
+			// the sweep skips live rows rather than forcing over them
+			return errors.New("--force only applies to --delete; --delete-old never deletes a live session")
 		case f.deleteOld && len(f.args) > 0:
 			// only a day count follows --delete-old, so a leftover positional is one
 			// that did not parse as digits
 			return fmt.Errorf("--delete-old takes a number of days, not %q", f.args[0])
-		case f.resume || f.cont || f.sessionGiven || f.promptGiven || f.serve || f.attach != "" || len(f.args) > 0:
+		case f.resume || f.cont || f.sessionGiven || f.promptGiven || f.serve || f.attachGiven || len(f.args) > 0:
 			return errors.New("--delete and --delete-old cannot be combined with a session or prompt flag")
 		}
 		return nil
@@ -186,14 +194,14 @@ func (f cliFlags) validate() error {
 			return err
 		}
 	}
-	if f.attach != "" {
+	if f.attachGiven {
 		switch {
 		case f.serve:
 			return errors.New("--attach and --serve are mutually exclusive")
 		case f.promptGiven || f.prompt != "":
 			return errors.New("--attach takes no prompt; submit prompts in the attached session")
 		case len(f.args) > 0:
-			return errors.New("--attach takes a socket path only; positional arguments are a --prompt form")
+			return errors.New("--attach takes a session name, id or socket path only; positional arguments are a --prompt form")
 		case f.resume || f.cont || f.sessionGiven:
 			return errors.New("--attach follows the running session; it does not open a local one")
 		case countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 0:
@@ -216,6 +224,9 @@ func (f cliFlags) validate() error {
 	// the permission-mode flags conflict in every mode, interactive and one-shot
 	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 1 {
 		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
+	}
+	if f.deleteForce && !f.deleteGiven {
+		return errors.New("--force only applies to --delete")
 	}
 	if f.serve {
 		switch {
@@ -283,10 +294,20 @@ func extractOptional(argv []string, name string, takes func(string) bool) (given
 	return given, val, rest
 }
 
+// opaqueTarget accepts any non-flag token as an optional value.
+func opaqueTarget(s string) bool { return !strings.HasPrefix(s, "-") }
+
 // extractResume lifts --resume and its optional session id out of argv.
 func extractResume(argv []string) (given bool, id string, rest []string) {
 	// an id or name is opaque, so any non-flag token is it
-	return extractOptional(argv, "resume", func(s string) bool { return !strings.HasPrefix(s, "-") })
+	return extractOptional(argv, "resume", opaqueTarget)
+}
+
+// extractAttach lifts --attach and its optional target out of argv: a session
+// name, id or socket path. A bare --attach means pick among live sessions.
+func extractAttach(argv []string) (given bool, target string, rest []string) {
+	// the target is opaque, so any non-flag token is it
+	return extractOptional(argv, "attach", opaqueTarget)
 }
 
 // extractDeleteOld lifts --delete-old and its optional trailing day count out

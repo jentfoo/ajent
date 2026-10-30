@@ -14,23 +14,25 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // fakeSession is a minimal control-socket server: hello, then canned replies
-// keyed by method, with queued events preceding them like a retained ring.
+// keyed by method. Its registry file sits where a real instance writes one, so
+// discovery resolves it by file like any live instance.
 type fakeSession struct {
 	ln     net.Listener
 	home   string
 	mu     sync.Mutex
-	replay []ctl.Event // events staged for the next connection's stream
+	staged []ctl.Event // events staged for the next connection's stream
 
 	transcriptPath string // hello names this file when set; state.get reports head
 	head           string
-	log            []ctl.Event   // answered for events.replay, filtered by since
-	hangReplay     bool          // never answer replay: the close-wakeup test hangs on it
-	hung           chan struct{} // closed once a hangReplay request reaches serveConn
+	sessionID      string
+	hangState      bool          // never answer state.get: the close-wakeup test hangs on it
+	hung           chan struct{} // closed once a hangState request reaches serveConn
 }
 
 // newFakeSession binds a socket in a short temp dir and starts accepting. It
@@ -41,15 +43,28 @@ func newFakeSession(t *testing.T) *fakeSession {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(home) })
 
-	dir := filepath.Join(home, paths.ControlDirName)
+	const id = "01JFAKESESSIONID000000"
+	dir := filepath.Join(home, paths.ControlDirName, id)
 	require.NoError(t, os.MkdirAll(dir, 0o700))
-	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "01JFAKESESSIONID000000.sock"))
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", filepath.Join(dir, "deadbeef.sock"))
 	require.NoError(t, err)
 
-	f := &fakeSession{ln: ln, home: home, hung: make(chan struct{})}
+	f := &fakeSession{ln: ln, home: home, sessionID: id, hung: make(chan struct{})}
 	t.Cleanup(func() { _ = ln.Close() })
 	go f.acceptLoop()
 	return f
+}
+
+// writeRegistry publishes the fake's discovery record, the file a real
+// instance writes after listen.
+func (f *fakeSession) writeRegistry(t *testing.T) {
+	t.Helper()
+	b, err := json.Marshal(Instance{
+		SessionID: f.sessionID, Token: "deadbeef0000000000000000000",
+		Socket: f.Path(), PID: os.Getpid(), StartedAt: time.Now().UnixMilli(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(f.Path()), "deadbeef.json"), b, 0o600))
 }
 
 // dial attaches a client to the fake session, feeding events into a channel.
@@ -107,8 +122,8 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 	}
 
 	f.mu.Lock()
-	events := append([]ctl.Event(nil), f.replay...)
-	f.replay = nil // one replay per connection, like a session's retained ring
+	events := append([]ctl.Event(nil), f.staged...)
+	f.staged = nil // staged events precede the request loop, like live fanout
 	f.mu.Unlock()
 
 	var seq uint64
@@ -128,6 +143,13 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 		}
 		switch req.Method {
 		case ctl.MethodState:
+			f.mu.Lock()
+			hang := f.hangState
+			f.mu.Unlock()
+			if hang {
+				close(f.hung) // the request arrived: any waiting caller may rely on it
+				return        // never answered: the close-wakeup test hangs on this
+			}
 			seq++
 			_ = enc.Encode(ctl.NewEvent(ctl.EventTurnStart, seq, ctl.TurnStartData{Model: "p/m"}))
 			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq,
@@ -135,31 +157,17 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 		case ctl.MethodSubmit:
 			var p ctl.SubmitParams
 			_ = json.Unmarshal(req.Params, &p)
+			// the committed rendering rides entry.append; there is no echo
 			seq++
-			_ = enc.Encode(ctl.NewEvent(ctl.EventEcho, seq, ctl.EchoData{Text: p.Line}))
+			_ = enc.Encode(ctl.NewEvent(ctl.EventEntryAppend, seq, ctl.EntryData{
+				Entry: ctl.Entry{ID: "01COMMITTED0000000000000000",
+					Type: string(session.TypeMessage),
+					Data: mustJSON(session.MessageData{Message: llm.Text(llm.RoleUser, p.Line)})},
+			}))
 			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq})
 		case ctl.MethodInterrupt:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Result: mustJSON(ctl.InterruptResult{Stopped: "turn"})})
-		case ctl.MethodReplay:
-			f.mu.Lock()
-			hang, log := f.hangReplay, append([]ctl.Event(nil), f.log...)
-			f.mu.Unlock()
-			if hang {
-				close(f.hung) // the request arrived: any waiting caller may rely on it
-				return        // never answered: the close-wakeup test hangs on this
-			}
-			var p ctl.ReplayParams
-			_ = json.Unmarshal(req.Params, &p)
-			var past []ctl.Event
-			for _, ev := range log {
-				if ev.Seq > p.Since {
-					past = append(past, ev)
-				}
-			}
-			seq++
-			_ = enc.Encode(ctl.Reply{ID: req.ID, Seq: seq,
-				Result: mustJSON(ctl.ReplayResult{Events: past})})
 		default:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Error: ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)})
@@ -239,7 +247,7 @@ func TestServeOrdersEventsBeforeReplies(t *testing.T) {
 }
 
 // TestSubmitCarriesLine pins the typed helper: submit round trips its line and
-// the session-side echo event comes back through Serve.
+// the committed rendering arrives as its entry, never an echo.
 func TestSubmitCarriesLine(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
@@ -248,10 +256,12 @@ func TestSubmitCarriesLine(t *testing.T) {
 	require.NoError(t, conn.Submit(t.Context(), "hello session"))
 
 	ev := waitEvent(t, events)
-	assert.Equal(t, ctl.EventEcho, ev.Name)
-	var d ctl.EchoData
+	assert.Equal(t, ctl.EventEntryAppend, ev.Name)
+	var d ctl.EntryData
 	require.NoError(t, ev.Decode(&d))
-	assert.Equal(t, "hello session", d.Text)
+	var md session.MessageData
+	require.NoError(t, json.Unmarshal(d.Entry.Data, &md))
+	assert.Equal(t, "hello session", llm.FirstBlockText(md.Message.Content))
 }
 
 // TestCloseWakesCallers pins teardown: a closed connection fails an in-flight
@@ -259,14 +269,16 @@ func TestSubmitCarriesLine(t *testing.T) {
 func TestCloseWakesCallers(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
-	f.hangReplay = true // the replay request this test sends is never answered
+	f.mu.Lock()
+	f.hangState = true // the state.get this test sends is never answered
+	f.mu.Unlock()
 	conn, _, _ := f.dial(t)
 
 	errCh := make(chan error, 1)
 	go func() {
-		// events.replay is the fake's never-answered method; no call budget means
+		// state.get is the fake's never-answered method; no call budget means
 		// the wait can only end through Close
-		_, err := conn.Call(t.Context(), ctl.MethodReplay, nil, nil)
+		_, err := conn.Call(t.Context(), ctl.MethodState, nil, nil)
 		errCh <- err
 	}()
 	<-f.hung // the request reached the server: the call is registered in flight
@@ -280,22 +292,26 @@ func TestCloseWakesCallers(t *testing.T) {
 	}
 }
 
-// TestDiscoverFindsLiveSockets pins discovery over a real control dir: the
-// fake session's socket is found with its hello identity.
-func TestDiscoverFindsLiveSockets(t *testing.T) {
+// TestDiscoverReadsRegistry pins discovery over a real control dir: the fake
+// instance's registry record is found without dialing.
+func TestDiscoverReadsRegistry(t *testing.T) {
 	f := newFakeSession(t)
+	f.writeRegistry(t)
 	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
 
 	live, err := Discover()
 	require.NoError(t, err)
 	require.Len(t, live, 1)
-	assert.Equal(t, f.Path(), live[0].Path)
+	assert.Equal(t, f.Path(), live[0].Socket)
+	assert.Equal(t, f.sessionID, live[0].SessionID)
+	assert.False(t, live[0].Started().IsZero()) // the server's startedAt decodes
 }
 
-// TestResolveTargetForms pins the three target forms: an exact path, a session
-// id in the control dir, and a unique prefix.
+// TestResolveTargetForms pins the target forms: an exact socket path, a
+// session id in the registry, its name, and a unique id prefix.
 func TestResolveTargetForms(t *testing.T) {
 	f := newFakeSession(t)
+	f.writeRegistry(t)
 	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
 
 	live, err := Discover()
@@ -303,21 +319,24 @@ func TestResolveTargetForms(t *testing.T) {
 	require.Len(t, live, 1)
 
 	t.Run("exact_path", func(t *testing.T) {
-		path, _, rerr := Resolve(f.Path())
+		match, _, rerr := Resolve(f.Path())
 		require.NoError(t, rerr)
-		assert.Equal(t, f.Path(), path)
+		require.Len(t, match, 1)
+		assert.Equal(t, f.Path(), match[0].Socket)
 	})
 
 	t.Run("session_id", func(t *testing.T) {
-		byID, _, rerr := Resolve(live[0].ID)
+		match, _, rerr := Resolve(live[0].SessionID)
 		require.NoError(t, rerr)
-		assert.Equal(t, f.Path(), byID)
+		require.Len(t, match, 1)
+		assert.Equal(t, f.Path(), match[0].Socket)
 	})
 
 	t.Run("unique_prefix", func(t *testing.T) {
-		byPrefix, _, rerr := Resolve(live[0].ID[:8])
+		match, _, rerr := Resolve(live[0].SessionID[:8])
 		require.NoError(t, rerr)
-		assert.Equal(t, f.Path(), byPrefix)
+		require.Len(t, match, 1)
+		assert.Equal(t, f.Path(), match[0].Socket)
 	})
 
 	t.Run("unknown_refused", func(t *testing.T) {
@@ -326,26 +345,26 @@ func TestResolveTargetForms(t *testing.T) {
 	})
 }
 
-// TestReplayReturnsEventsPastSince pins the reconnect helper: retained events
-// past a watermark arrive in order.
-func TestReplayReturnsEventsPastSince(t *testing.T) {
+// TestFollowablePrefersSameInstance pins the reconnect rule: the same token
+// wins, a single survivor is followed, several answer nil for the picker.
+func TestFollowablePrefersSameInstance(t *testing.T) {
 	t.Parallel()
-	f := newFakeSession(t)
-	f.log = []ctl.Event{
-		{Name: ctl.EventEcho, Seq: 3, Data: mustJSON(ctl.EchoData{Text: "old"})},
-		{Name: ctl.EventEcho, Seq: 7, Data: mustJSON(ctl.EchoData{Text: "new"})},
-	}
-	conn, _, _ := f.dial(t)
 
-	evs, err := conn.Replay(t.Context(), 5)
-	require.NoError(t, err)
-	require.Len(t, evs, 1)
-	assert.Equal(t, uint64(7), evs[0].Seq)
+	same := Instance{SessionID: "01A", Token: "tokA", Socket: "/a"}
+	other := Instance{SessionID: "01A", Token: "tokB", Socket: "/b"}
+	foreign := Instance{SessionID: "01B", Token: "tokC", Socket: "/c"}
 
-	// everything is past zero: the full retained history answers
-	evs, err = conn.Replay(t.Context(), 0)
-	require.NoError(t, err)
-	require.Len(t, evs, 2)
+	got := Followable([]Instance{same, other, foreign}, "01A", "tokA")
+	require.Len(t, got, 1)
+	assert.Equal(t, "tokA", got[0].Token)
+
+	// one survivor of the session: follow it even under a different token
+	got = Followable([]Instance{other, foreign}, "01A", "tokA")
+	require.Len(t, got, 1)
+	assert.Equal(t, "tokB", got[0].Token)
+
+	// several remain: never a silent swap, the picker decides
+	assert.Nil(t, Followable([]Instance{same, other}, "01A", "tokGone"))
 }
 
 // recordTo writes one JSONL transcript of two chained entries and names it in

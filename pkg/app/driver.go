@@ -65,7 +65,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	hub := newSessionHub(hubDeps{
 		ui: term, dialogs: dialogs, active: active,
 		workspace: config.Cwd(), cwd: env.Cwd, acct: st.Tokens,
-	}, hubEmitters{}) // a control server attaches its own observers later
+	})
 
 	// every turn is recorded into the workspace transcript so double-Esc while idle
 	// can open the context-tree picker and rewind onto an earlier point.
@@ -97,6 +97,19 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		ui.Notify(msg, tui.LevelWarn)
 	} else if rec.note != "" {
 		ui.Notify(rec.note, tui.LevelWarn) // e.g. --continue skipped newer-format sessions
+	}
+	if rec != nil && rec.w != nil {
+		// peer visibility: joins and leaves of other writers on this transcript
+		// surface as transient notices at turn boundaries, never recorded, so
+		// attached terminals see them through the ephemeral notice family too
+		rec.w.WatchPeers(func(joined, left []int) {
+			for _, pid := range joined {
+				ui.NotifyKeyed(peerNoticeKey, fmt.Sprintf("another ajent opened this session (pid %d)", pid), tui.LevelInfo)
+			}
+			for _, pid := range left {
+				ui.NotifyKeyed(peerNoticeKey, fmt.Sprintf("another ajent left this session (pid %d)", pid), tui.LevelInfo)
+			}
+		})
 	}
 
 	// one app-lifetime root ties every derived operation (the prompt pump, staged
@@ -156,7 +169,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// interactive run needs the deliberate config opt-in.
 	var ctlSrv *controlServer
 	if serve || set.Settings().Control.Enabled {
-		srv, warns, cerr := startControl(hub, dialogs, rec, serve)
+		srv, warns, cerr := startControl(appRoot, hub, dialogs, rec, serve)
 		for _, warn := range warns {
 			// serve mode has no terminal: the supervisor's stderr is the surface
 			if serve {
@@ -282,6 +295,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		settled,
 		stager.WaitReady,
 		stager.TakeReady,
+		hub.queueDropped,
 	)
 	hub.q = q
 	// /copy reads the transcript as of the last turn end while a turn streams,
@@ -619,9 +633,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
 	if rec != nil {
 		rec.starts = starts
-		rec.onSwitch = func(msgs []llm.Message) {
+		rec.onSwitch = func(msgs []llm.Message, cause string) {
 			hub.syncLedger() // a switch replaced the ledger snapshots read
-			hub.setHead(rec.w.Head())
+			hub.setHead(rec.w.Head(), cause)
 			if t := toolsReg.Tracker(); t != nil {
 				t.Reset() // reads the new context lacks must re-inject, not dedupe
 			}
@@ -657,29 +671,52 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 
 	// shared dispatch for every submitted line, so a second source routes unchanged.
 	// Wired before the control loop starts, so every hub entry is live from the
-	// first keypress.
-	router := &lineRouter{ui: ui, send: send, stager: stager, gate: gate, hist: hist}
+	// first keypress. trySend backs remote submissions: the control lane refuses
+	// a full queue instead of parking on it.
+	trySend := func(line pumpLine) bool {
+		select {
+		case pump <- line:
+			return true
+		default:
+			return false
+		}
+	}
+	router := &lineRouter{ui: ui, send: send, trySend: trySend, stager: stager, gate: gate, hist: hist}
 	hub.setSubmitLine(router.submit)
 	if term != nil {
 		go controlLoop(appRoot, ui.Controls(), hints, hub, quitNow)
 	}
 
 	// the rewind entry both fronts share: a manual double-Esc and a remote
-	// session.rewind end an active plan workflow first, then switch branches.
-	// Wired after the plan controller exists; a control request that races the
-	// wiring sees the unavailable error, never a partial rewind.
+	// session.rewind run one transaction, state swap then head move then
+	// publish, so live state and the writer head cannot diverge and the last
+	// rewind wins whichever surface sent it. Wired after the plan controller
+	// exists; a control request that races the wiring sees the unavailable
+	// error, never a partial rewind.
 	if rec != nil {
-		rewindTo := func(head string) (string, error) {
+		// queued prompts clear inside the rewind transaction, the drop event
+		// riding beside the queue update so pending rows resolve
+		rec.clearQueued = func() []string {
+			labels := q.clearForRewind()
+			if len(labels) > 0 {
+				hub.queueDroppedCause("rewind", labels)
+			}
+			return labels
+		}
+		var rewindMu sync.Mutex
+		rewindTo := func(head, cause string) (string, error) {
+			rewindMu.Lock()
+			defer rewindMu.Unlock()
 			if ctl != nil && ctl.Active() {
 				ctl.Stop()
 			}
-			return rec.rewindTo(ui, ag, reg, head)
+			return rec.rewindTo(ui, ag, reg, head, cause)
 		}
 		hub.setRewindTo(rewindTo)
 		if term != nil {
 			ui.SetOnRewind(func() {
 				if head, ok := rec.pickRewind(ui); ok {
-					_, _ = rewindTo(head)
+					_, _ = rewindTo(head, rewindCauseRewind)
 				}
 			})
 		}
@@ -751,7 +788,11 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		shutdownOnce.Do(func() {
 			stopApp()
 			ag.Interrupt()
-			drain.wait(shutdownDrainWait)
+			if drain.wait(shutdownDrainWait) {
+				// the quiesce bound is explicit: a wedged tool cannot hang exit,
+				// and hitting it is worth saying before the exit stamps
+				_, _ = fmt.Fprintln(os.Stderr, "ajent: shutdown drain bound hit; exiting with the turn unsettled")
+			}
 
 			var wg sync.WaitGroup
 			if sag != nil {
@@ -822,28 +863,30 @@ func appendHistory(hist *session.EditorHistory, prefix string, msg string, line 
 // commands and prompts queue for the pump. Editor-coupled side effects (recall
 // history, clipboard image tokens) stay behind fromEditor.
 type lineRouter struct {
-	ui     *hubUI
-	send   func(pumpLine)
-	stager *command.Stager
-	gate   *typingGate
-	hist   *session.EditorHistory // nil when no recall store exists
+	ui      *hubUI
+	send    func(pumpLine)
+	trySend func(pumpLine) bool // non-blocking variant, remote submissions only
+	stager  *command.Stager
+	gate    *typingGate
+	hist    *session.EditorHistory // nil when no recall store exists
 }
 
 // route parses one submitted editor line and hands it to its dispatcher.
 // fromEditor marks a line that left the prompt editor. Other sources pass
 // false and carry no origin.
 func (r *lineRouter) route(msg string, fromEditor bool) {
-	r.dispatch(msg, fromEditor, "")
+	// the editor path never errors: deliver only reports a full remote queue
+	_ = r.dispatch(msg, fromEditor, "")
 }
 
-// submit routes one line from a non-editor source: identical classification,
-// editor-coupled side effects excluded, origin recorded where the line lands
-// on the transcript.
-func (r *lineRouter) submit(line, origin string) {
-	r.dispatch(line, false, origin)
+// submit routes one line from a non-editor source, reporting a full prompt
+// queue rather than blocking: the control lane must never park behind a wedged
+// pump, or its priority interrupts would queue behind it.
+func (r *lineRouter) submit(line, origin string) error {
+	return r.dispatch(line, false, origin)
 }
 
-func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) {
+func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) error {
 	line := command.ParseLine(msg)
 	if line.Multiline {
 		r.ui.Notify("multiline input sent as a prompt; /commands must be one line", tui.LevelWarn)
@@ -865,14 +908,31 @@ func (r *lineRouter) dispatch(msg string, fromEditor bool, origin string) {
 	switch line.Kind {
 	case command.KindShell:
 		r.stager.Run(line.Rest, line.Excluded)
+		return nil
 	case command.KindCommand:
-		r.send(pumpLine{kind: command.KindCommand, rest: line.Rest})
+		return r.deliver(pumpLine{kind: command.KindCommand, rest: line.Rest}, origin)
 	default:
 		// arm the handoff at submit time. A remote prompt arms too so a held
 		// boundary treats it like a just-typed line
 		r.gate.submitted()
-		r.send(pumpLine{kind: command.KindPrompt, rest: line.Rest, origin: origin, blocks: blocks})
+		return r.deliver(pumpLine{kind: command.KindPrompt, rest: line.Rest, origin: origin, blocks: blocks}, origin)
 	}
+}
+
+// deliver hands one pump line to the queue. The editor path blocks on send,
+// riding its own goroutine; a remote submission tries once and reports a full
+// queue so its reply fails legibly instead of wedging the control lane. A
+// trySend the constructor left nil falls back to send: only the driver wires
+// the non-blocking variant, and its send never blocks in test harnesses.
+func (r *lineRouter) deliver(line pumpLine, origin string) error {
+	if origin == "" || r.trySend == nil {
+		r.send(line)
+		return nil
+	}
+	if !r.trySend(line) {
+		return errPromptQueueFull
+	}
+	return nil
 }
 
 type subagentSink struct {

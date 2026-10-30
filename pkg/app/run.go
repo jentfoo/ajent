@@ -72,8 +72,9 @@ func Run(o RunOptions) int {
 	// attach mode mirrors a running session over its control socket: it opens no
 	// local transcript and needs no models file, so it branches before either loads.
 	// The remote run decides model, tools and permission mode; only the paint
-	// settings above are this process's own.
-	if o.Attach != "" {
+	// settings above are this process's own. A bare --attach resolves to the
+	// live-session picker inside RunAttach.
+	if o.AttachGiven {
 		return RunAttach(AttachOptions{
 			Socket: o.Attach, Mode: mode, Color: color,
 			Palette: pal, Images: imagesName, Warnings: warnings,
@@ -97,13 +98,10 @@ func Run(o RunOptions) int {
 	active := reg.Active()
 
 	// serve mode replaces the terminal entirely: the control socket is the only
-	// front end, so it is decided before any stream classification
+	// front end, so it is decided before any stream classification. It implies
+	// control whatever control.enabled says: a serve run without a socket has
+	// no prompt source at all, which is useless rather than safer.
 	if o.Serve {
-		if !set.Settings().Control.Enabled {
-			_, _ = fmt.Fprintln(os.Stderr,
-				"ajent: --serve needs control.enabled set in config.json")
-			return ExitUsage
-		}
 		return RunServe(ServeOptions{
 			Set: set, Reg: reg, Active: active,
 			SessMode:     o.SessMode,

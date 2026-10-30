@@ -227,20 +227,23 @@ func (d *drainWaiter) launch(fn func()) {
 	}()
 }
 
-// wait blocks until the drain goroutine exits or timeout passes. Returns at
-// once when none ran, so an idle exit costs nothing.
-func (d *drainWaiter) wait(timeout time.Duration) {
+// wait blocks until the drain goroutine exits or timeout passes, reporting
+// whether the bound was hit. Returns false at once when none ran, so an idle
+// exit costs nothing.
+func (d *drainWaiter) wait(timeout time.Duration) bool {
 	d.mu.Lock()
 	ch := d.done
 	d.mu.Unlock()
 	if ch == nil {
-		return
+		return false
 	}
 	t := time.NewTimer(timeout)
 	defer t.Stop()
 	select {
 	case <-ch:
+		return false
 	case <-t.C:
+		return true
 	}
 }
 

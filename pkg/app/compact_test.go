@@ -167,7 +167,7 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 	c, st, w := testCompactor(t, model, sp)
 
 	var switched [][]llm.Message
-	c.rec.onSwitch = func(msgs []llm.Message) { switched = append(switched, msgs) }
+	c.rec.onSwitch = func(msgs []llm.Message, cause string) { switched = append(switched, msgs) }
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
 	appendSteps(t, w, 6)

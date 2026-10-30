@@ -76,7 +76,7 @@ func TestRunPump(t *testing.T) {
 		go func() {
 			runPump(ctx, pump, nil, console, stager, nil,
 				false, wrapUI(t, ui), starts, func() {},
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady),
+				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil),
 				nil, &agent.State{Tokens: tokens.New(llm.Model{})}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
 		}()
@@ -180,7 +180,7 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 		},
 	})
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"}, Tokens: tokens.New(llm.Model{ID: "m", Provider: "p"})}
 	console := &uiConsole{ui: wrapUI(t, ui), commands: cmds, st: st, q: q}
 	applied := make(chan struct{})
@@ -228,7 +228,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		ag, _ := scriptedAgent(p)
 
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		starts := newStartState(false)
@@ -257,7 +257,7 @@ func TestStartDrainParkedGate(t *testing.T) {
 		ag, _ := scriptedAgent(p)
 
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // marks draining, like the pump
 		require.True(t, q.offer(agent.Input{Text: "steering"}, "steering", 0))
 		starts := newStartState(false)
@@ -281,7 +281,7 @@ func TestStartDrainIdle(t *testing.T) {
 		ag, _ := scriptedAgent(p)
 
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		starts := newStartState(false)
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -300,7 +300,7 @@ func TestStartDrainIdle(t *testing.T) {
 		ag, _ := scriptedAgent(p)
 
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		starts := newStartState(false)
 		ctx, cancel := context.WithCancel(t.Context())
 		t.Cleanup(cancel)
@@ -323,7 +323,7 @@ func TestRunPumpParkedHold(t *testing.T) {
 	ag, st := scriptedAgent(p)
 	console := &uiConsole{ui: wrapUI(t, ui), commands: command.NewRegistry()}
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 	var captured bool
 	hooks := planHooks{
@@ -377,7 +377,7 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 	var mu sync.Mutex
 	var barEst int
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
 	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
 
 	var captured bool
@@ -446,7 +446,7 @@ func TestStartDrainInterruptLandsFill(t *testing.T) {
 	})
 
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
 	starts := newStartState(false)
 	ctx, cancel := context.WithCancel(t.Context())

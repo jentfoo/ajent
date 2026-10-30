@@ -75,11 +75,11 @@ func TestDecodeIncomingSplitsRepliesFromEvents(t *testing.T) {
 	assert.Equal(t, "a1", in.Reply.ID)
 	assert.Equal(t, uint64(4), in.Reply.Seq)
 
-	in, err = DecodeIncoming([]byte(`{"event":"head","seq":5,"data":{"id":"01K"}}`))
+	in, err = DecodeIncoming([]byte(`{"event":"branch.changed","seq":5,"data":{"head":"01K"}}`))
 	require.NoError(t, err)
 	require.NotNil(t, in.Event)
 	assert.Nil(t, in.Reply)
-	assert.Equal(t, EventHead, in.Event.Name)
+	assert.Equal(t, EventBranchChanged, in.Event.Name)
 }
 
 func TestNewEventDropsUnencodableData(t *testing.T) {

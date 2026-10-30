@@ -196,6 +196,13 @@ func (c *uiConsole) SetSessionName(name string) error {
 	if err := c.rec.Rename(canonical); err != nil {
 		return err
 	}
+	// a --session create or another rename may have claimed the name between
+	// the conflict check and the entry landing. Settle it like a create race.
+	effective, note := renameSettle(c.sess.store, config.Cwd(), canonical, c.sess.w.Path(), c.rec)
+	if note != "" {
+		c.ui.Notify(note, tui.LevelWarn)
+	}
+	canonical = effective
 	if c.hub != nil {
 		c.hub.setSessionName(canonical) // snapshots report the live name
 	}

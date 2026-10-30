@@ -287,14 +287,6 @@ func (c *Conn) ModeCycle(ctx context.Context, back bool) (string, error) {
 	return res.Mode, err
 }
 
-// Replay requests the retained events past since, in seq order. A since that
-// predates the ring answers *ctl.Error with CodeTooOld: re-snapshot instead.
-func (c *Conn) Replay(ctx context.Context, since uint64) ([]ctl.Event, error) {
-	var res ctl.ReplayResult
-	_, err := c.Call(ctx, ctl.MethodReplay, ctl.ReplayParams{Since: since}, &res)
-	return res.Events, err
-}
-
 // Rewind forks onto an earlier transcript entry and reports the new head.
 func (c *Conn) Rewind(ctx context.Context, head string) (string, error) {
 	var res ctl.RewindResult

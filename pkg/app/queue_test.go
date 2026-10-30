@@ -59,7 +59,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("drain_live", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		assert.False(t, q.drainLive())
 		q.offer(agent.Input{Text: "a"}, "a", 0) // marks draining, like the pump
@@ -78,7 +78,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("idle_restored_when_current", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		var writes []bool
 		q.settleIdle(q.nextGen(), func(idle bool) { writes = append(writes, idle) })
@@ -88,7 +88,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("idle_skipped_after_newer", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		stale := q.nextGen()
 		q.nextGen() // a newer dispatch stamps before its own SetIdle(false)
@@ -101,7 +101,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("restore_holds_queue_lock", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		gen := q.nextGen()
 		entered := make(chan struct{})
@@ -122,7 +122,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var subs []int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady, nil)
 
 		assert.False(t, q.offer(agent.Input{Text: "a"}, "alpha", 5))
 		require.Empty(t, fake.queued)
@@ -135,7 +135,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("pending_counts", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		assert.Equal(t, 0, q.pending())
 		q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain, not queued
@@ -154,7 +154,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady, nil)
 
 		inA := agent.Input{Text: "first", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleUser}}}}
 		inB := agent.Input{Text: "second", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleAssistant}}}}
@@ -177,7 +177,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var subs []int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady, nil)
 
 		// the pump offers before it knows the input is held, so hold must undo that
 		// drain mark: a queued row with no drain running, tokens still reserved
@@ -203,7 +203,7 @@ func TestSteerQueue(t *testing.T) {
 
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		in := agent.Input{
 			Text:   "look",
@@ -224,7 +224,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("image_only_row_placeholder", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		// an image-only submission has no typed line: the placeholder names it in rows
 		png, wide := slotPNG(t), slotSizedPNG(t, 8, 2)
@@ -242,7 +242,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("delivered_image_only_visible", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		in := agent.Input{
 			Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}},
@@ -263,7 +263,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("join_splits_provenance", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "user text"}, "typed", 1))
@@ -290,7 +290,7 @@ func TestSteerQueue(t *testing.T) {
 		// and recall stay truthful
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "typed"}, "typed", 1))
@@ -307,7 +307,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("join_chains_afters_per_run", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		after := func(text string) func(context.Context) []llm.Message {
 			return func(context.Context) []llm.Message {
 				return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}
@@ -330,7 +330,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("join_preserves_prepared", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		// every queued item is pump-expanded (Prepared), and the runs must stay so the
 		// append seam never re-expands an annotate-only reference at delivery
@@ -346,7 +346,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("join_mixed_prepared", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		// a run is prepared only when every item in it is, so raw text still expands
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
@@ -361,7 +361,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("take_joins_batch", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		require.True(t, q.draining)
@@ -381,7 +381,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("stop_drain_keeps_items", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain
 		require.True(t, q.draining)
@@ -398,7 +398,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var refreshes int // submit-bucket updates on each pop
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) { refreshes++ }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) { refreshes++ }, func() {}, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 5))
@@ -420,7 +420,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady, nil)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
@@ -437,7 +437,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady, nil)
 
 		// a direct dispatch: offer only marked the drain, nothing queued, and the
 		// pump reserved the estimate itself before the turn parked in the hold
@@ -455,7 +455,7 @@ func TestSteerQueue(t *testing.T) {
 		// the queued prompts instead of pretending a recall happened
 		waitReady, takeReady := stagePair(t)
 		fake := &fakeQueueUI{headless: true}
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
 		q.draining = true
 		q.offer(agent.Input{Text: "held work"}, "held work", 0)
 		require.Equal(t, 1, q.pending())
@@ -475,7 +475,7 @@ func TestSteerQueue(t *testing.T) {
 			func() []agent.MessageInfo {
 				consumed++
 				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			})
+			}, nil)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "why did it fail"}, "why did it fail", 1))
@@ -494,7 +494,7 @@ func TestSteerQueue(t *testing.T) {
 		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady,
 			func() []agent.MessageInfo {
 				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			})
+			}, nil)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "and then?"}, "and then?", 1))
@@ -513,7 +513,7 @@ func TestSteerQueue(t *testing.T) {
 			func() []agent.MessageInfo {
 				consumed = true
 				return nil
-			})
+			}, nil)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "late"}, "late", 1))
@@ -552,7 +552,7 @@ func TestSteerQueue(t *testing.T) {
 			func() []agent.MessageInfo {
 				consumed = true
 				return nil
-			})
+			}, nil)
 
 		// a queued /init survey carries its own Before; abort recovers the label only
 		in := agent.Input{Text: "", Before: []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "survey pair")}}}
@@ -574,7 +574,7 @@ func TestJoinAfter(t *testing.T) {
 
 	t.Run("chains_in_submit_order", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
 		after := func(text string) func(context.Context) []llm.Message {
 			return func(context.Context) []llm.Message {
 				return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}

@@ -554,6 +554,14 @@ func (u *UI) SetInput(text string) {
 	u.repaint()
 }
 
+// Queued returns the pending-prompt rows shown above the input, oldest first.
+func (u *UI) Queued() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return slices.Clone(u.queued)
+}
+
 // SetQueued replaces the dimmed pending-prompt rows shown above the input,
 // oldest first. The driver (steer queue) owns the list, and empty clears.
 func (u *UI) SetQueued(texts []string) {

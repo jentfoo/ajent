@@ -27,10 +27,6 @@ func (s *ctlStreamSink) TurnStart(i agent.TurnInfo) {
 	s.hub.publish(ctl.EventTurnStart, ctl.TurnStartData{Model: i.Model.Key()})
 }
 
-func (s *ctlStreamSink) UserPrompt(text string) {
-	s.hub.publish(ctl.EventUserPrompt, ctl.UserPromptData{Text: text})
-}
-
 func (s *ctlStreamSink) Thinking(d string) {
 	s.hub.publish(ctl.EventThinkingDelta, ctl.TextData{Delta: d})
 }
@@ -115,61 +111,15 @@ func (s *ctlStreamSink) Context(c tokens.ContextState) {
 	})
 }
 
-func (s *ctlStreamSink) Notice(msg string, level agent.Level) {
-	s.hub.publish(ctl.EventNotice, ctl.NoticeData{Text: msg, Level: levelName(level)})
-}
-
+// Notice publishes nothing: recorded notices reach clients as their transcript
+// entry via entry.append, so the ephemeral notice family carries only
+// transient lines and there is no duplicate to dedupe.
 func (s *ctlStreamSink) TurnEnd(r agent.TurnResult) {
 	d := ctl.TurnEndData{Stop: r.Stop.String(), Steps: r.Steps, Usage: ctlUsage(r.Usage)}
 	if r.Err != nil {
 		d.Err = r.Err.Error()
 	}
 	s.hub.publish(ctl.EventTurnEnd, d)
-}
-
-// controlEmitters builds the hub observer hooks republishing each rendered
-// surface as its control event. One emitter per TUI surface, not a second
-// status implementation.
-func controlEmitters(hub *sessionHub) hubEmitters {
-	return hubEmitters{
-		Echo: func(text string) {
-			hub.publish(ctl.EventEcho, ctl.EchoData{Text: text})
-		},
-		EchoImages: func(imgs []tui.Image) {
-			hub.publish(ctl.EventEchoImages, ctl.EchoImagesData{Images: ctlImages(imgs)})
-		},
-		Notice: func(key, msg string, level tui.Level) {
-			hub.publish(ctl.EventNotice, ctl.NoticeData{Text: msg, Level: levelName(agent.Level(level)), Key: key})
-		},
-		Print: func(markdown string) {
-			hub.publish(ctl.EventPrint, ctl.PrintData{Markdown: markdown})
-		},
-		Segment: func(seg tui.Segment) {
-			hub.publish(ctl.EventStatus, ctl.StatusData{Segment: &ctl.Segment{
-				Key: seg.Key, Text: seg.Text, Short: seg.Short, Order: seg.Order,
-			}})
-		},
-		Model: func(key, short string, window int) {
-			hub.publish(ctl.EventStatus, ctl.StatusData{Model: &ctl.ModelState{
-				Key: key, Short: short, Window: window,
-			}})
-		},
-		Spinning: func(on bool) {
-			hub.publish(ctl.EventStatus, ctl.StatusData{Spinning: &on})
-		},
-		Activity: func(key, text string, rank int) {
-			hub.publish(ctl.EventActivity, ctl.ActivityData{Key: key, Text: text, Rank: rank})
-		},
-		Queued: func(texts []string) {
-			hub.publish(ctl.EventQueued, ctl.QueuedData{Texts: texts})
-		},
-		Draft: func(text string) {
-			hub.publish(ctl.EventEditor, ctl.EditorData{Text: text})
-		},
-		Head: func(id string) {
-			hub.publish(ctl.EventHead, ctl.HeadData{ID: id})
-		},
-	}
 }
 
 // controlDialogHooks republishes broker announcements: pending on Begin,
@@ -258,14 +208,6 @@ func ctlSegments(segs []tui.Segment) []ctl.Segment {
 	out := make([]ctl.Segment, len(segs))
 	for i, s := range segs {
 		out[i] = ctl.Segment{Key: s.Key, Text: s.Text, Short: s.Short, Order: s.Order}
-	}
-	return out
-}
-
-func ctlImages(imgs []tui.Image) []ctl.ImageData {
-	out := make([]ctl.ImageData, len(imgs))
-	for i, im := range imgs {
-		out[i] = ctl.ImageData{Data: im.Data, MediaType: im.MediaType, Label: im.Label, W: im.W, H: im.H}
 	}
 	return out
 }

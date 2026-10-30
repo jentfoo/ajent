@@ -25,6 +25,15 @@ func (u *hubUI) Notify(msg string, level tui.Level) {
 	u.hub.notice("", msg, level)
 }
 
+// NotifyLocal commits a marked line without reporting it: for notices whose
+// committed entry already carries the text to controllers, so the wire never
+// renders the same news twice.
+func (u *hubUI) NotifyLocal(msg string, level tui.Level) {
+	if u.UI != nil {
+		u.UI.Notify(msg, level)
+	}
+}
+
 // NotifyKeyed commits a keyed notice and reports it with its key.
 func (u *hubUI) NotifyKeyed(key, msg string, level tui.Level) {
 	if u.UI != nil {
@@ -100,20 +109,20 @@ func (u *hubUI) SetIdle(idle bool) {
 	u.hub.setIdle(idle)
 }
 
-// UserEcho commits a submitted message and reports it.
+// UserEcho commits a submitted message. Local-only: the committed prompt
+// reaches controllers as its transcript entry, never as an echo event.
 func (u *hubUI) UserEcho(text string) {
 	if u.UI != nil {
 		u.UI.UserEcho(text)
 	}
-	u.hub.echo(text)
 }
 
-// UserImages commits submitted images and reports them.
+// UserImages commits submitted images beside a prompt. Local-only, like
+// UserEcho: the entry.append carries them.
 func (u *hubUI) UserImages(imgs []tui.Image) {
 	if u.UI != nil {
 		u.UI.UserImages(imgs)
 	}
-	u.hub.echoImages(imgs)
 }
 
 // SetTheme swaps the palette. Chrome only: nothing here is a control event.

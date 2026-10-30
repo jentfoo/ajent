@@ -136,12 +136,13 @@ type localDialogs interface {
 type interactionBroker struct {
 	ui localDialogs
 
-	mu      sync.Mutex
-	nextID  uint64
-	open    map[uint64]*brokerDialog
-	ended   map[uint64]struct{} // settled ids, so a late resolve reports settled
-	onBegin func(interactionInfo)
-	onEnd   func(id uint64, o interactionOutcome)
+	mu         sync.Mutex
+	nextID     uint64
+	open       map[uint64]*brokerDialog
+	ended      map[uint64]struct{} // settled ids, so a late resolve reports settled
+	endedOrder []uint64            // settled ids oldest first, bounding the map
+	onBegin    func(interactionInfo)
+	onEnd      func(id uint64, o interactionOutcome)
 }
 
 // newInteractionBroker builds the broker over the local surface, which may be
@@ -171,6 +172,11 @@ func (b *interactionBroker) observe(onBegin func(interactionInfo), onEnd func(ui
 	}
 }
 
+// endedCap bounds the settled-id memory: past it the oldest id drops, which
+// only downgrades a late resolve's answer from "settled" to "unknown", both
+// legible errors a resolver already handles.
+const endedCap = 512
+
 // brokerDialog is one brokered interaction: its announcement, the answer slot
 // the local human and any remote answerer race for, and its end. First
 // resolution wins, every path settles exactly once.
@@ -186,46 +192,58 @@ type brokerDialog struct {
 	resolved bool
 	answer   interactionAnswer
 	done     chan struct{}
-	abandon  func() // cancels the local racer, run by the first settle
+	raceCtx  context.Context // the racer's context, cancelled by the first settle
+	abandon  func()          // cancels the local racer, run by the first settle
 }
 
 // begin announces and registers one dialog. The announced options are cloned
-// once, so the dialog and its observers share a slice no caller can reach.
-func (b *interactionBroker) begin(kind dialogKind, prompt, subject string, shapes answerShapes) *brokerDialog {
+// once, so the dialog and its observers share a slice no caller can reach. The
+// abandon cancel is created here under the dialog lock, so a settle racing the
+// registration can always reach it and the orphan window cannot exist. The
+// pending announcement fires under the same lock, so settled can never
+// overtake pending on the wire.
+func (b *interactionBroker) begin(parent context.Context, kind dialogKind, prompt, subject string, shapes answerShapes) *brokerDialog {
 	shapes.options = slices.Clone(shapes.options)
 	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.nextID++
+	raceCtx, cancel := context.WithCancel(parent)
 	d := &brokerDialog{
 		b: b, id: b.nextID, kind: kind,
 		prompt: prompt, subject: subject, shapes: shapes,
+		raceCtx: raceCtx, abandon: cancel,
 		done: make(chan struct{}),
 	}
 	if b.open == nil {
 		b.open = make(map[uint64]*brokerDialog)
 		b.ended = make(map[uint64]struct{})
+		b.endedOrder = nil
 	}
 	b.open[d.id] = d
-	onBegin := b.onBegin
-	b.mu.Unlock()
-
-	if onBegin != nil {
-		onBegin(interactionInfo{ID: d.id, Kind: kind, Prompt: prompt,
+	if b.onBegin != nil {
+		b.onBegin(interactionInfo{ID: d.id, Kind: kind, Prompt: prompt,
 			Subject: subject, Shapes: shapes})
 	}
 	return d
 }
 
-// end unregisters d and reports its outcome. Runs exactly once per dialog.
+// end unregisters d and reports its outcome. The settled announcement fires
+// under the broker lock, so a client can never see settled before pending.
 func (b *interactionBroker) end(d *brokerDialog, a interactionAnswer) {
 	b.mu.Lock()
 	delete(b.open, d.id)
-	b.ended[d.id] = struct{}{}
-	onEnd := b.onEnd
-	b.mu.Unlock()
-
-	if onEnd != nil {
-		onEnd(d.id, a.outcome(d.kind, d.shapes))
+	if _, dup := b.ended[d.id]; !dup {
+		b.ended[d.id] = struct{}{}
+		b.endedOrder = append(b.endedOrder, d.id)
+		if len(b.endedOrder) > endedCap { // bound the growth; oldest forgets first
+			delete(b.ended, b.endedOrder[0])
+			b.endedOrder = b.endedOrder[1:]
+		}
 	}
+	if b.onEnd != nil {
+		b.onEnd(d.id, a.outcome(d.kind, d.shapes))
+	}
+	b.mu.Unlock()
 }
 
 // settle records the winning answer, firing End exactly once. It reports
@@ -249,14 +267,6 @@ func (d *brokerDialog) settle(a interactionAnswer) bool {
 	return true
 }
 
-// setAbandon installs the local racer's cancellation. The first settle runs it,
-// so a dialog answered elsewhere closes its local interaction.
-func (d *brokerDialog) setAbandon(fn func()) {
-	d.mu.Lock()
-	d.abandon = fn
-	d.mu.Unlock()
-}
-
 // winner returns the settled answer. Call only after done closes.
 func (d *brokerDialog) winner() interactionAnswer {
 	d.mu.Lock()
@@ -276,22 +286,23 @@ func (d *brokerDialog) wait(ctx context.Context) interactionAnswer {
 }
 
 // race settles d from whichever arrives first: the local surface, a remote
-// resolve, or ctx ending. A local racer that cannot ask at all (ErrNoUI) leaves
-// the dialog open for a remote answer. It returns the winning answer.
+// resolve, or ctx ending. The abandon cancel was installed at begin from this
+// same parent, so a settle racing this call still cancels the local racer. A
+// local racer that cannot ask at all (ErrNoUI) leaves the dialog open for a
+// remote answer. It returns the winning answer.
 func (b *interactionBroker) race(ctx context.Context, d *brokerDialog, local func(context.Context) interactionAnswer) interactionAnswer {
-	raceCtx, cancel := context.WithCancel(ctx)
-	d.setAbandon(cancel)
-
 	if local != nil {
 		go func() {
-			a := local(raceCtx)
+			a := local(ctx)
 			if errors.Is(a.Err, tui.ErrNoUI) {
 				return // nobody local to ask: the dialog stays open for a remote answer
 			}
 			d.settle(a)
 		}()
 	}
-	return d.wait(raceCtx)
+	// the dialog's own context, not the caller's: the first settle cancels it,
+	// so wait's cancel-settle path and the racers share one lifetime
+	return d.wait(d.raceCtx) //nolint:contextcheck // rooted at begin, cancelled by the first settle
 }
 
 // Resolve answers an open dialog remotely. It reports an unknown id, or
@@ -351,7 +362,7 @@ func (b *interactionBroker) Pick(ctx context.Context, prompt string, items []tui
 	if b.ui != nil {
 		local = func(ctx context.Context) (int, error) { return b.ui.PickContext(ctx, prompt, items, opts) }
 	}
-	d := b.begin(dialogPick, prompt, "", answerShapes{options: pickLabels(items)})
+	d := b.begin(ctx, dialogPick, prompt, "", answerShapes{options: pickLabels(items)})
 	return choiceResult(b.race(ctx, d, indexRacer(local)))
 }
 
@@ -361,7 +372,7 @@ func (b *interactionBroker) MultiPick(ctx context.Context, prompt string, items 
 	if b.ui != nil {
 		local = func(ctx context.Context) ([]int, error) { return b.ui.MultiPickContext(ctx, prompt, items, opts) }
 	}
-	d := b.begin(dialogMultiPick, prompt, "",
+	d := b.begin(ctx, dialogMultiPick, prompt, "",
 		answerShapes{options: pickLabels(items), multi: true})
 	a := b.race(ctx, d, multiRacer(local))
 	return multiResult(a)
@@ -373,7 +384,7 @@ func (b *interactionBroker) Select(ctx context.Context, prompt string, options [
 	if b.ui != nil {
 		local = func(ctx context.Context) (int, error) { return b.ui.SelectContext(ctx, prompt, options) }
 	}
-	d := b.begin(dialogSelect, prompt, "", answerShapes{options: optionLabels(options)})
+	d := b.begin(ctx, dialogSelect, prompt, "", answerShapes{options: optionLabels(options)})
 	return choiceResult(b.race(ctx, d, indexRacer(local)))
 }
 
@@ -383,7 +394,7 @@ func (b *interactionBroker) Confirm(ctx context.Context, prompt string) (bool, e
 	if b.ui != nil {
 		local = func(ctx context.Context) (bool, error) { return b.ui.ConfirmContext(ctx, prompt) }
 	}
-	d := b.begin(dialogConfirm, prompt, "", answerShapes{options: []string{"Yes", "No"}})
+	d := b.begin(ctx, dialogConfirm, prompt, "", answerShapes{options: []string{"Yes", "No"}})
 	a := b.race(ctx, d, boolRacer(local))
 	if a.Err != nil || a.Declined {
 		_, err := choiceResult(a)
@@ -412,7 +423,7 @@ func (b *interactionBroker) text(ctx context.Context, kind dialogKind, label, pl
 			local = func(ctx context.Context) (string, error) { return b.ui.InputContext(ctx, label, placeholder) }
 		}
 	}
-	d := b.begin(kind, label, "", answerShapes{text: true, secret: secret})
+	d := b.begin(ctx, kind, label, "", answerShapes{text: true, secret: secret})
 	a := b.race(ctx, d, textRacer(local))
 	return textResult(a)
 }
@@ -426,7 +437,7 @@ func (b *interactionBroker) Ask(ctx context.Context, q tui.Question) (tui.Answer
 			return askAnswer(ans, err)
 		}
 	}
-	d := b.begin(dialogAsk, q.Text, "",
+	d := b.begin(ctx, dialogAsk, q.Text, "",
 		answerShapes{options: optionLabels(q.Options), text: true, chat: true})
 	return askResult(b.race(ctx, d, racer))
 }
@@ -441,13 +452,17 @@ func (b *interactionBroker) OpenDecision(req tui.DecisionRequest) (permit.Dialog
 	if b.ui != nil && b.ui.Mode() == tui.ModePlain {
 		return nil, tui.ErrNoUI
 	}
-	d := b.begin(dialogDecision, req.Prompt, req.Context, answerShapes{options: optionLabels(req.Options)})
+	// no caller context exists on this seam (permit.Dialog carries none), so the
+	// dialog roots its own cancelable one: begin mints the race context under the
+	// dialog lock and stores its cancel as the abandon the first settle runs
+	d := b.begin(context.Background(), dialogDecision, req.Prompt, req.Context,
+		answerShapes{options: optionLabels(req.Options)})
 	if b.ui != nil {
-		raceCtx, cancel := context.WithCancel(context.Background())
-		d.setAbandon(cancel)
+		// the abandon cancel exists from begin, so a mode-cycle resolve racing
+		// this racer still cancels it
 		go func() {
 			td := b.ui.OpenDecision(req)
-			r, err := td.Wait(raceCtx)
+			r, err := td.Wait(d.raceCtx)
 			if errors.Is(err, tui.ErrNoUI) {
 				return // no dialog could be shown: it stays open for a remote answer
 			}

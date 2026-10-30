@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -109,15 +111,15 @@ func TestAttachViewStreams(t *testing.T) {
 		rig := newControlRig(t, nil)
 		a := newAttachRig(t, rig)
 
-		rig.hub.ui.UserEcho("typed on host")
-		rig.hub.ui.NotifyKeyed("subagent", "one job", tui.LevelInfo) // parked until the next commit flushes it
+		// no echo exists: a host-side echo stays local, so only transient
+		// notices and prints reach this surface
+		rig.hub.ui.NotifyKeyed("subagent", "one job", tui.LevelInfo)
 		rig.hub.ui.Print("## printed block")
 		rig.hub.ui.Notify("plain notice", tui.LevelWarn)
 
 		require.Eventually(t, func() bool {
 			out := a.out()
-			return strings.Contains(out, "typed on host") &&
-				strings.Contains(out, "one job") &&
+			return strings.Contains(out, "one job") &&
 				strings.Contains(out, "printed block") &&
 				strings.Contains(out, "plain notice")
 		}, ctlWait, 5*time.Millisecond)
@@ -193,17 +195,46 @@ func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
 	t.Cleanup(stopRoot)
 	view := newAttachView(term, nil, root, "")
 
-	stale := ctl.NewEvent(ctl.EventEcho, 5, ctl.EchoData{Text: "stale echo"})
-	fresh := ctl.NewEvent(ctl.EventEcho, 15, ctl.EchoData{Text: "fresh echo"})
+	stale := ctl.NewEvent(ctl.EventNotice, 5, ctl.NoticeData{Text: "stale echo"})
+	fresh := ctl.NewEvent(ctl.EventNotice, 15, ctl.NoticeData{Text: "fresh echo"})
 	view.handle(stale)
-	view.handle(fresh) // buffered too; the watermark decides which one applies
-	view.applyBackfill(ctl.State{}, nil, 10)
+	view.handle(fresh) // buffered on the actor; the watermark decides which applies
+	view.send(func() { assert.NoError(t, view.applyBackfill(ctl.State{}, nil, 10)) })
+	view.waitIdle() // queued behind the backfill: proof it finished
 
 	require.Eventually(t, func() bool { return strings.Contains(out(), "fresh echo") },
-		2*time.Second, 5*time.Millisecond)
-	// both echoes would flush through the same paint path: if fresh landed, a
+		ctlWait, 5*time.Millisecond)
+	// both notices flush through the same paint path: if fresh landed, a
 	// wrongly-applied stale would have landed beside it
 	assert.NotContains(t, out(), "stale echo")
+}
+
+// TestAttachRedrawKeepsLiveAppends pins the repaint rule: the redraw a head
+// move triggers reads the file on the actor, after every append queued ahead of
+// it applied, so those entries stay rendered and shown, never wiped by the
+// repaint's Reset.
+func TestAttachRedrawKeepsLiveAppends(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "recorded prompt")
+	})
+	a := newAttachRig(t, rig)
+
+	writeMessage(t, rig.rec, "live prompt") // the file write lands before the append event
+	require.Eventually(t, func() bool { return strings.Contains(a.out(), "live prompt") },
+		ctlWait, 5*time.Millisecond)
+
+	a.view.requestRedraw()
+	a.view.waitIdle()
+
+	branch := rigBranch(t, rig.rec)
+	require.Len(t, branch, 3) // the session root plus both prompts
+	a.view.send(func() {
+		for _, e := range branch {
+			assert.Contains(t, a.view.rendered, e.ID)
+		}
+	})
+	a.view.waitIdle()
+	assert.Contains(t, a.out(), "live prompt")
 }
 
 // blockingPick is a local surface whose dialogs return only when their ctx
@@ -340,7 +371,8 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	a.view.registerDialog(7, cancel)
+	a.view.send(func() { a.view.beginInteraction(ctl.InteractionPendingData{ID: 7}) })
+	a.view.send(func() { a.view.dialogs[7] = cancel }) // swap the racer for a controlled one
 
 	done := make(chan struct{})
 	go func() {
@@ -348,11 +380,148 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 		a.view.raceDialog(ctx, ctl.InteractionPendingData{ID: 7, Kind: "pick",
 			Prompt: "choose", Options: []string{"a"}})
 	}()
-	a.view.settleInteraction(7) // the remote side answered first
+	a.view.send(func() { a.view.settleInteraction(7) }) // the remote side answered first
 
 	select {
 	case <-done:
 	case <-time.After(ctlWait):
 		t.Fatal("settled did not cancel the local racer")
 	}
+}
+
+// TestAttachPendingRowsPromptOnly pins the pending-row rule: a prompt paints
+// its row at submit and keeps it until the entry commits, while slash and
+// shell lines never paint one, they surface through their effects.
+func TestAttachPendingRowsPromptOnly(t *testing.T) {
+	rig := newControlRig(t, nil)
+	rig.hub.setSubmitLine(func(string, string) error { return nil }) // accepted silently, no entry follows
+	a := newAttachRig(t, rig)
+	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
+	require.NoError(t, err)
+
+	lines := make(chan string, 4)
+	var pumped atomic.Bool
+	go func() {
+		pumpSubmissions(a.view, lines)
+		pumped.Store(true)
+	}()
+	lines <- "/help"
+	lines <- "!ls"
+	lines <- "a real prompt"
+	close(lines)
+	require.Eventually(t, pumped.Load, ctlWait, 5*time.Millisecond)
+
+	a.view.send(func() {
+		assert.Equal(t, []string{"a real prompt"}, a.view.pending)
+	})
+	a.view.waitIdle()
+}
+
+// mustEncode marshals v, failing the test when it cannot.
+func mustEncode(t *testing.T, v any) json.RawMessage {
+	t.Helper()
+	b, err := json.Marshal(v)
+	require.NoError(t, err)
+	return b
+}
+
+// TestAttachCommitResolvesQueuedRow pins the row lifecycle: a submitted
+// prompt's dimmed row clears from the terminal when its entry commits, whether
+// it landed alone or joined with other prompts into one newline-joined message.
+func TestAttachCommitResolvesQueuedRow(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	committed := func(id, text string) ctl.Event {
+		return ctl.NewEvent(ctl.EventEntryAppend, 1, ctl.EntryData{Entry: ctl.Entry{
+			ID: id, Type: string(session.TypeMessage),
+			Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, text)}),
+		}})
+	}
+
+	t.Run("single_prompt", func(t *testing.T) {
+		a.view.submitPending("sent prompt")
+		a.view.waitIdle()
+		assert.Equal(t, []string{"sent prompt"}, a.view.ui.Queued())
+
+		a.view.handle(committed("01RESOLVE1", "sent prompt"))
+		a.view.waitIdle()
+		assert.Empty(t, a.view.pending)
+		assert.Empty(t, a.view.ui.Queued()) // the committed entry took the row's place
+	})
+
+	t.Run("joined_run", func(t *testing.T) {
+		// queued prompts land as one newline-joined message: both rows resolve
+		a.view.submitPending("first line")
+		a.view.submitPending("second line")
+		a.view.waitIdle()
+		assert.Equal(t, []string{"first line", "second line"}, a.view.ui.Queued())
+
+		a.view.handle(committed("01RESOLVE2", "first line\nsecond line"))
+		a.view.waitIdle()
+		assert.Empty(t, a.view.pending)
+		assert.Empty(t, a.view.ui.Queued())
+	})
+}
+
+// TestAttachReconnectResolvesPending pins the resnapshot rule: prompts that
+// committed while this terminal was away resolve their pending rows during
+// backfill, so a later queued event cannot resurrect them as rows.
+func TestAttachReconnectResolvesPending(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	a.view.submitPending("offline prompt")
+	a.view.waitIdle()
+
+	entry := ctl.Entry{ID: "01OFFLINE1", Type: string(session.TypeMessage),
+		Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, "offline prompt")})}
+	snap := ctl.State{Head: entry.ID} // the resnapshot's branch carries the commit
+	a.view.send(func() {
+		assert.NoError(t, a.view.applyBackfill(snap, []session.Entry{
+			{ID: entry.ID, Type: session.TypeMessage, Data: entry.Data}}, 0))
+	})
+	a.view.waitIdle()
+	assert.Empty(t, a.view.pending)
+
+	a.view.handle(ctl.NewEvent(ctl.EventQueued, 5, ctl.QueuedData{Texts: []string{"other"}}))
+	a.view.waitIdle()
+	assert.Equal(t, []string{"other"}, a.view.ui.Queued()) // no resurrected row
+}
+
+// TestAttachAppendDedupeById pins the reconciliation rule: entry.append is
+// idempotent by id, a prompt's committed entry resolves this terminal's pending
+// row and paints it once, and stream-painted entries mark rendered silently.
+func TestAttachAppendDedupeById(t *testing.T) {
+	rig := newControlRig(t, nil)
+	a := newAttachRig(t, rig)
+	a.view.submitPending("queued prompt")
+
+	entry := ctl.Entry{ID: "01ENTRY01", Type: string(session.TypeMessage),
+		Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleUser, "queued prompt")})}
+	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 1, ctl.EntryData{Entry: entry}))
+	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 2, ctl.EntryData{Entry: entry})) // same id again
+	a.view.waitIdle()
+
+	// the committed text painted exactly once and the pending row resolved
+	require.Eventually(t, func() bool { return strings.Count(a.out(), "queued prompt") == 1 },
+		ctlWait, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		done := make(chan struct{})
+		empty := false
+		a.view.send(func() { empty = len(a.view.pending) == 0; close(done) })
+		<-done
+		return empty
+	}, ctlWait, 5*time.Millisecond)
+	a.view.send(func() { assert.Contains(t, a.view.rendered, entry.ID) })
+	a.view.waitIdle()
+
+	// an assistant entry while a turn streams paints nothing: the stream owns it
+	assistant := ctl.Entry{ID: "01ENTRY02", Type: string(session.TypeMessage),
+		Data: mustEncode(t, session.MessageData{Message: llm.Text(llm.RoleAssistant, "streamed reply")})}
+	a.view.handle(ctl.NewEvent(ctl.EventTurnStart, 3, ctl.TurnStartData{Model: "p/m"}))
+	a.view.handle(ctl.NewEvent(ctl.EventEntryAppend, 4, ctl.EntryData{Entry: assistant}))
+	a.view.waitIdle()
+	require.Eventually(t, func() bool { return len(a.view.rendered) >= 3 }, ctlWait, 5*time.Millisecond)
+	assert.NotContains(t, a.out(), "streamed reply")
+	a.view.send(func() { assert.Contains(t, a.view.rendered, assistant.ID) })
+	a.view.waitIdle()
 }

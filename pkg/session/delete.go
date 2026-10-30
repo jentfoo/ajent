@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -17,11 +19,16 @@ import (
 // too: deletion needs no decode, and it is the escape hatch that frees a name a
 // blocked transcript would otherwise hold forever. The same path handle removes
 // a damaged transcript whose identity cannot decode, which resolution reaches
-// by nothing else.
-func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
+// by nothing else. A session another writer holds live refuses naming the
+// instance count unless force is set.
+func DeleteSession(out io.Writer, store *Store, cwd, target string, force bool) error {
 	info, err := store.Find(cwd, target)
 	if err != nil { // the not-found wording (with any damaged hint) passes through verbatim
 		return err
+	}
+	if live := LiveWriters(info.Path); live > 0 && !force {
+		return fmt.Errorf("session %s is live in %d running ajent instance(s); detach or pass --force",
+			info.Label(), live)
 	}
 	if err := store.Remove(info.Path); err != nil {
 		return err
@@ -41,6 +48,9 @@ func DeleteSession(out io.Writer, store *Store, cwd, target string) error {
 
 // DeleteOldSessions removes every unnamed session last used before cutoff, after
 // listing them and reading a confirmation from in. An unreadable answer declines.
+// Sessions a writer holds live are listed as skipped rather than deleted, and
+// re-checked at Remove time so a session that went live while the user read the
+// list never loses its file.
 func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cutoff time.Time) error {
 	stale, err := store.Stale(cwd, cutoff)
 	if err != nil {
@@ -50,10 +60,29 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 		_, _ = fmt.Fprintln(out, "No unnamed sessions are old enough to delete.")
 		return nil
 	}
-	for _, info := range stale {
-		_, _ = fmt.Fprintf(out, "  %s  %s\n", info.Label(), describeInfo(info))
+	// liveness is read once per row: a second pass could drop a session that
+	// went live between the reads from both lists
+	type oldRow struct {
+		info Info
+		live bool
 	}
-	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", strutil.Plural(len(stale), "session"))
+	rows := make([]oldRow, 0, len(stale))
+	for _, info := range stale {
+		rows = append(rows, oldRow{info: info, live: LiveWriters(info.Path) > 0})
+	}
+	live := bulk.SliceFilter(func(r oldRow) bool { return r.live }, rows)
+	removable := bulk.SliceFilter(func(r oldRow) bool { return !r.live }, rows)
+	for _, r := range live {
+		_, _ = fmt.Fprintf(out, "  %s  %s (live, skipped)\n", r.info.Label(), describeInfo(r.info))
+	}
+	if len(removable) == 0 {
+		_, _ = fmt.Fprintln(out, "Nothing to delete; every old session is live.")
+		return nil
+	}
+	for _, r := range removable {
+		_, _ = fmt.Fprintf(out, "  %s  %s\n", r.info.Label(), describeInfo(r.info))
+	}
+	_, _ = fmt.Fprintf(out, "Delete %s? [y/N] ", strutil.Plural(len(removable), "session"))
 	// EOF (no terminal, or stdin closed) declines rather than deleting blind
 	sc := bufio.NewScanner(in)
 	answer := ""
@@ -66,9 +95,13 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 	}
 	var errs []error
 	var removed int
-	for _, info := range stale {
+	for _, r := range removable {
+		if LiveWriters(r.info.Path) > 0 { // went live between the listing and here
+			_, _ = fmt.Fprintf(out, "Skipped %s (now live).\n", r.info.Label())
+			continue
+		}
 		// one bad file must not strand the rest of the sweep
-		if rerr := store.Remove(info.Path); rerr != nil {
+		if rerr := store.Remove(r.info.Path); rerr != nil {
 			errs = append(errs, rerr)
 		} else {
 			removed++
