@@ -56,6 +56,11 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   exposes `Close()` and `pkg/app` calls it on every run's exit paths. The owning
   decision: a tool that starts long-lived processes (background bash) owns their
   cleanup, so shutdown stays uniform no matter which tools are registered.
+- **One change observer** — `OnChanged(fn)` fires after any tool-set mutation
+  (registration, toggles, read-only marks, unregister), outside the registry lock.
+  The session hub is the intended listener: it republishes the /tools rows so
+  control surfaces track reshapes from any mutation site (MCP connect, plan
+  scopes, config reapply) without per-site wiring.
 
 ### Sub-agent tool set and preview seams
 

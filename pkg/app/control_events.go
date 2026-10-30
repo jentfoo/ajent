@@ -8,7 +8,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
-	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
@@ -105,11 +104,9 @@ func (s *ctlStreamSink) Usage(u llm.Usage) {
 	s.hub.publish(ctl.EventUsage, ctlUsage(u))
 }
 
-func (s *ctlStreamSink) Context(c tokens.ContextState) {
-	s.hub.publish(ctl.EventContext, ctl.ContextData{
-		Used: c.Used, Window: c.Window, Reserve: c.Reserve, Compact: c.Compact, Estimated: c.Estimated,
-	})
-}
+// Context publishes nothing here: the hub owns the context event (its view
+// model records the numbers where the sink call lands), so this observer stays
+// silent to keep one event per change.
 
 // Notice publishes nothing: recorded notices reach clients as their transcript
 // entry via entry.append, so the ephemeral notice family carries only
@@ -182,10 +179,7 @@ func ctlStateFrom(s hubSnapshot) ctl.State {
 		}
 	}
 	if s.Tools != nil {
-		st.Tools = make([]ctl.ToolState, len(s.Tools))
-		for i, t := range s.Tools {
-			st.Tools[i] = ctl.ToolState{Name: t.Name, Source: t.Source, Enabled: t.Enabled, ReadOnly: t.ReadOnly}
-		}
+		st.Tools = ctlTools(s.Tools)
 	}
 	if s.Activity != nil {
 		st.Activity = make([]ctl.ActivityRow, len(s.Activity))
@@ -202,6 +196,16 @@ func ctlStateModel(m hubModel) ctl.ModelState {
 		Caps: ctl.Caps{Reasoning: m.Caps.Reasoning, Images: m.Caps.Images,
 			ParallelToolCalls: m.Caps.ParallelTools},
 	}
+}
+
+// ctlTools maps the view model's tool rows onto the wire, the shape both the
+// snapshot and the tools event carry.
+func ctlTools(rows []hubTool) []ctl.ToolState {
+	out := make([]ctl.ToolState, len(rows))
+	for i, t := range rows {
+		out[i] = ctl.ToolState{Name: t.Name, Source: t.Source, Enabled: t.Enabled, ReadOnly: t.ReadOnly}
+	}
+	return out
 }
 
 func ctlUsage(u llm.Usage) ctl.UsageData {

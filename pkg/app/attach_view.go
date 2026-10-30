@@ -513,8 +513,14 @@ func (v *attachView) apply(ev ctl.Event) {
 			return // the compaction entry itself arrives via entry.append
 		}
 		v.requestRedraw()
-	case ctl.EventSessionRenamed:
-		// chrome the next snapshot carries; nothing to paint
+	case ctl.EventSessionRenamed, ctl.EventPermission, ctl.EventTools:
+		// chrome and session facts the next snapshot carries, so nothing paints
+		// from these alone (a mode change's segment arrives via its status event)
+	case ctl.EventIdle:
+		var d ctl.IdleData
+		if ev.Decode(&d) == nil {
+			v.ui.SetIdle(d.Idle) // the host's at-rest fact, drain window included
+		}
 	case ctl.EventInteractionPending:
 		var d ctl.InteractionPendingData
 		if ev.Decode(&d) == nil {

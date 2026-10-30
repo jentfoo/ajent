@@ -214,6 +214,25 @@ type ActivityData struct {
 	Rank int    `json:"rank"`
 }
 
+// PermissionData announces the mode now in effect, so a cycle or a settings
+// change reaches controllers without a resnapshot. The mode's status segment
+// rides EventStatus beside it.
+type PermissionData struct {
+	Mode string `json:"mode"`
+}
+
+// ToolsData replaces the toggleable /tools rows, so every reshape (a toggle,
+// an MCP connect, a plan scope) reaches controllers without polling.
+type ToolsData struct {
+	Rows []ToolState `json:"rows"`
+}
+
+// IdleData reports the prompt's rest state flipping: what local keys mean,
+// false from dispatch until the drain settles even between turns.
+type IdleData struct {
+	Idle bool `json:"idle"`
+}
+
 // QueueRow is one pending prompt as the wire sees it: the stable id its row
 // keeps while queued plus the typed line, redacted for secret rows where only
 // the id survives.

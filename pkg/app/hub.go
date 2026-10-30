@@ -44,6 +44,30 @@ type hubModel struct {
 	Caps   llm.Capabilities
 }
 
+// viewModel is the hub's authoritative copy of every ephemeral presentation
+// field: the status segments, activity rows, queue rows, idle/turn state, model
+// labels, context numbers, permission mode, tool rows and the editor draft.
+// Every mutation updates it and fans out its event in one critical section, so
+// a snapshot reads one internally consistent state under the same lock that
+// guards the event seq. Committed history, streaming buffers, editor internals
+// and dialog arbitration stay with their own owners, so only this surface lives
+// here. Callers outside the hub mutate it only through the hubUI shim.
+type viewModel struct {
+	segments   map[string]tui.Segment
+	activity   map[string]hubActivity
+	actSeq     int // arrival order for activity rows tying on rank
+	queued     []ctl.QueueRow
+	idle       bool
+	spinning   bool
+	running    bool // a turn is in flight, tracked from the turn boundary events
+	model      hubModel
+	context    tokens.ContextState
+	permission string // mode name, "" when no barrier exists
+	tools      []hubTool
+	draftText  string
+	draftDue   *time.Timer
+}
+
 // hubTool is one toggleable /tools row as a client polls it.
 type hubTool struct {
 	Name     string
@@ -70,8 +94,9 @@ type hubActivity struct {
 }
 
 // hubSnapshot is one consistent read of everything a control client polls.
-// Each field comes from hub-held copies or its source's own lock, never from
-// agent.State fields.
+// Every field but Head, Usage and Interactions is a view model copy read under
+// the hub lock. Head rides the writer's own head func in that same section,
+// and Usage and Interactions are the two documented read-after-unlock sources.
 type hubSnapshot struct {
 	SessionID   string
 	SessionName string
@@ -123,7 +148,7 @@ type sessionHub struct {
 	barrier    barrierModeCycler // permission gate, a cycler when wired
 	initCtl    *initController
 	rewindTo   func(head, cause string) (string, error) // rewind/fork to an entry; ends a plan first
-	tools      *tools.Registry
+	tools      *tools.Registry                          // the registry the view model's tool rows mirror
 	workspace  string
 	cwd        string
 
@@ -137,18 +162,10 @@ type sessionHub struct {
 	// before any loop starts; nil when recording is off.
 	headFn func() string
 
-	mu        sync.Mutex
-	sinks     []agent.Sink
-	acct      *tokens.Accounting // last ledger captured under the agent state lock
-	model     hubModel
-	segments  map[string]tui.Segment
-	queued    []ctl.QueueRow
-	idle      bool
-	spinning  bool
-	activity  map[string]hubActivity
-	actSeq    int // arrival order for activity rows tying on rank
-	draftText string
-	draftDue  *time.Timer
+	mu    sync.Mutex
+	sinks []agent.Sink
+	acct  *tokens.Accounting // last ledger captured under the agent state lock
+	vm    viewModel          // the ephemeral view model: mutated and read beside evSeq
 
 	// control-plane event log: one seq space, one delivery listener per
 	// connection. Committed content reconciles by entry id, so nothing needs
@@ -168,13 +185,13 @@ func newSessionHub(deps hubDeps) *sessionHub {
 		workspace: deps.workspace,
 		cwd:       deps.cwd,
 		acct:      deps.acct,
-		idle:      true, // the prompt is at rest until a turn starts
-		segments:  make(map[string]tui.Segment),
-		activity:  make(map[string]hubActivity),
 	}
+	h.vm.idle = true // the prompt is at rest until a turn starts
+	h.vm.segments = make(map[string]tui.Segment)
+	h.vm.activity = make(map[string]hubActivity)
 	if deps.active.ID != "" {
 		// field set, not setModel: construction is initial state, not a change
-		h.model = hubModel{Key: deps.active.Key(), Short: deps.active.ShortName(),
+		h.vm.model = hubModel{Key: deps.active.Key(), Short: deps.active.ShortName(),
 			Window: deps.active.ContextWindow, Caps: deps.active.Caps}
 	}
 	h.ui = &hubUI{UI: deps.ui, hub: h, dialogs: deps.dialogs}
@@ -335,14 +352,14 @@ func (h *sessionHub) print(markdown string) {
 	h.publish(ctl.EventPrint, ctl.PrintData{Markdown: markdown})
 }
 
-// setSegment remembers one keyed status segment, an empty Text removing it,
-// publishing the change in the same critical section.
+// setSegment remembers one keyed status segment in the view model, an empty
+// Text removing it, publishing the change in the same critical section.
 func (h *sessionHub) setSegment(seg tui.Segment) {
 	h.mu.Lock()
 	if seg.Text == "" {
-		delete(h.segments, seg.Key)
+		delete(h.vm.segments, seg.Key)
 	} else {
-		h.segments[seg.Key] = seg
+		h.vm.segments[seg.Key] = seg
 	}
 	h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Segment: &ctl.Segment{
 		Key: seg.Key, Text: seg.Text, Short: seg.Short, Order: seg.Order,
@@ -354,9 +371,9 @@ func (h *sessionHub) setSegment(seg tui.Segment) {
 // the label change in the same critical section.
 func (h *sessionHub) setModel(m llm.Model) {
 	h.mu.Lock()
-	h.model = hubModel{Key: m.Key(), Short: m.ShortName(),
+	h.vm.model = hubModel{Key: m.Key(), Short: m.ShortName(),
 		Window: m.ContextWindow, Caps: m.Caps}
-	h.publishModelLocked(h.model.Key, h.model.Short, h.model.Window)
+	h.publishModelLocked(h.vm.model.Key, h.vm.model.Short, h.vm.model.Window)
 	h.mu.Unlock()
 }
 
@@ -364,7 +381,7 @@ func (h *sessionHub) setModel(m llm.Model) {
 // carries: the capabilities copy stays whatever the last full model left.
 func (h *sessionHub) setModelLabel(key, short string, window int) {
 	h.mu.Lock()
-	h.model.Key, h.model.Short, h.model.Window = key, short, window
+	h.vm.model.Key, h.vm.model.Short, h.vm.model.Window = key, short, window
 	h.publishModelLocked(key, short, window)
 	h.mu.Unlock()
 }
@@ -376,12 +393,13 @@ func (h *sessionHub) publishModelLocked(key, short string, window int) {
 	}}))
 }
 
-// setQueued remembers the pending-prompt rows, oldest first. Secret-prefixed
-// rows lose their text on the wire but keep their id, matching the draft rule;
-// the local surface already rendered the real texts before this ran.
+// setQueued remembers the pending-prompt rows, oldest first, the view model's
+// queued count being their length. Secret-prefixed rows lose their text on the
+// wire but keep their id, matching the draft rule; the local surface already
+// rendered the real texts before this ran.
 func (h *sessionHub) setQueued(rows []ctl.QueueRow) {
 	h.mu.Lock()
-	h.queued = slices.Clone(rows)
+	h.vm.queued = slices.Clone(rows)
 	h.publishLocked(ctl.EventQueued, ctl.EncodeData(ctl.QueuedData{
 		Rows: redactQueueRows(rows),
 	}))
@@ -396,25 +414,80 @@ func (h *sessionHub) queueDroppedCause(cause string, rows []ctl.QueueRow) {
 		ctl.QueueDroppedData{Rows: redactQueueRows(rows), Cause: cause})
 }
 
-// setIdle remembers the prompt's rest state. Snapshot-only: idle shapes what
-// keys mean locally, and a snapshot's Running answers it for controllers.
+// setIdle remembers the prompt's rest state and publishes the flip, so
+// controllers learn the at-rest fact (what local keys mean) without polling.
 func (h *sessionHub) setIdle(idle bool) {
 	h.mu.Lock()
-	h.idle = idle
+	if h.vm.idle != idle {
+		h.vm.idle = idle
+		h.publishLocked(ctl.EventIdle, ctl.EncodeData(ctl.IdleData{Idle: idle}))
+	}
 	h.mu.Unlock()
 }
 
-// setActivity remembers one keyed activity row, an empty text removing it,
-// publishing in the same critical section.
+// setActivity remembers one keyed activity row in the view model, an empty text
+// removing it, publishing in the same critical section.
 func (h *sessionHub) setActivity(key, text string, rank int) {
 	h.mu.Lock()
 	if text == "" {
-		delete(h.activity, key)
+		delete(h.vm.activity, key)
 	} else {
-		h.actSeq++
-		h.activity[key] = hubActivity{Key: key, Text: text, Rank: rank, seq: h.actSeq}
+		h.vm.actSeq++
+		h.vm.activity[key] = hubActivity{Key: key, Text: text, Rank: rank, seq: h.vm.actSeq}
 	}
 	h.publishLocked(ctl.EventActivity, ctl.EncodeData(ctl.ActivityData{Key: key, Text: text, Rank: rank}))
+	h.mu.Unlock()
+}
+
+// setContext remembers the context bar's numbers and publishes them in the same
+// critical section: the hub is the event's publisher, the stream sink only
+// fans the call out to observers.
+func (h *sessionHub) setContext(c tokens.ContextState) {
+	h.mu.Lock()
+	h.vm.context = c
+	h.publishLocked(ctl.EventContext, ctl.EncodeData(ctl.ContextData{
+		Used: c.Used, Window: c.Window, Reserve: c.Reserve, Compact: c.Compact, Estimated: c.Estimated,
+	}))
+	h.mu.Unlock()
+}
+
+// setPermissionMode remembers the barrier's mode name and publishes it in the
+// same critical section. Only reached with a live barrier, so the name is
+// never empty here. No barrier at all leaves the zero value for snapshots.
+func (h *sessionHub) setPermissionMode(m permit.Mode) {
+	h.mu.Lock()
+	h.vm.permission = m.String()
+	h.publishLocked(ctl.EventPermission, ctl.EncodeData(ctl.PermissionData{Mode: m.String()}))
+	h.mu.Unlock()
+}
+
+// setToolsRegistry installs the registry the tool rows mirror. Its change hook
+// republishes the rows on every reshape, so toggles, MCP connects and plan
+// scopes all reach the view model from their own mutation sites.
+func (h *sessionHub) setToolsRegistry(reg *tools.Registry) {
+	h.mu.Lock()
+	h.tools = reg
+	h.mu.Unlock()
+	if reg == nil {
+		return
+	}
+	reg.OnChanged(h.refreshTools)
+	h.refreshTools()
+}
+
+// refreshTools re-reads the registry into the view model and publishes the
+// rows. Runs on the registry's change hook, so never under the registry lock.
+func (h *sessionHub) refreshTools() {
+	h.mu.Lock()
+	reg := h.tools
+	h.mu.Unlock()
+	if reg == nil {
+		return
+	}
+	rows := toolSnapshot(reg)
+	h.mu.Lock()
+	h.vm.tools = rows
+	h.publishLocked(ctl.EventTools, ctl.EncodeData(ctl.ToolsData{Rows: ctlTools(rows)}))
 	h.mu.Unlock()
 }
 
@@ -423,11 +496,11 @@ func (h *sessionHub) setActivity(key, text string, rank int) {
 // paused draft can never publish over a newer one.
 func (h *sessionHub) draft(text string) {
 	h.mu.Lock()
-	h.draftText = text
-	if h.draftDue == nil {
-		h.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
+	h.vm.draftText = text
+	if h.vm.draftDue == nil {
+		h.vm.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
 	} else {
-		h.draftDue.Reset(draftDebounce)
+		h.vm.draftDue.Reset(draftDebounce)
 	}
 	h.mu.Unlock()
 }
@@ -436,8 +509,8 @@ func (h *sessionHub) draft(text string) {
 // prefixed draft never emits, matching history exclusion.
 func (h *sessionHub) emitDraft() {
 	h.mu.Lock()
-	h.draftDue = nil
-	text := h.draftText
+	h.vm.draftDue = nil
+	text := h.vm.draftText
 	if !session.HasSecretPrefix(secretPrefix, text) {
 		h.publishLocked(ctl.EventEditor, ctl.EncodeData(ctl.EditorData{Text: text}))
 	}
@@ -449,15 +522,15 @@ func (h *sessionHub) emitDraft() {
 // racing keystroke can never lose its text.
 func (h *sessionHub) prependDraft(text string) {
 	h.mu.Lock()
-	if cur := h.draftText; cur == "" {
-		h.draftText = text
+	if cur := h.vm.draftText; cur == "" {
+		h.vm.draftText = text
 	} else {
-		h.draftText = text + "\n" + cur
+		h.vm.draftText = text + "\n" + cur
 	}
-	if h.draftDue == nil {
-		h.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
+	if h.vm.draftDue == nil {
+		h.vm.draftDue = time.AfterFunc(draftDebounce, h.emitDraft)
 	} else {
-		h.draftDue.Reset(draftDebounce)
+		h.vm.draftDue.Reset(draftDebounce)
 	}
 	h.mu.Unlock()
 }
@@ -569,7 +642,7 @@ func (h *sessionHub) ModeCycle(back bool) permit.Mode {
 	} else {
 		m = h.barrier.Cycle() // re-evaluates any open dialog under the new mode
 	}
-	showPermissionMode(h.ui, m)
+	setPermissionMode(h.ui, m)
 	h.ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 	return m
 }
@@ -582,53 +655,48 @@ func (h *sessionHub) Snapshot() hubSnapshot {
 }
 
 // SnapshotAt is Snapshot also returning the event watermark the read was taken
-// at, captured under the same critical section as the head and the ephemeral
-// fields. The reply's watermark is that seq, which is what closes the
-// watermark-versus-head window: an entry.append naming this head can never sit
-// below the seq a client already reconciled.
+// at, captured under the same critical section as the head and every view
+// model field, so the reply is one internally consistent state. The reply's
+// watermark is that seq, which is what closes the watermark-versus-head
+// window: an entry.append naming this head can never sit below the seq a
+// client already reconciled.
 func (h *sessionHub) SnapshotAt() (hubSnapshot, uint64) {
 	h.mu.Lock()
 	seq := h.evSeq
+	vm := h.vm
 	snap := hubSnapshot{
 		SessionID:   h.sessionID,
 		SessionName: h.sessionName,
 		Workspace:   h.workspace,
 		Cwd:         h.cwd,
-		Model:       h.model,
-		Idle:        h.idle,
-		Spinning:    h.spinning,
-		QueuedRows:  redactQueueRows(h.queued),
-		Activity:    activityRows(h.activity),
+		Model:       vm.model,
+		Permission:  vm.permission,
+		Tools:       vm.tools,
+		Context:     vm.context,
+		Running:     vm.running,
+		Idle:        vm.idle,
+		Spinning:    vm.spinning,
+		Queued:      len(vm.queued),
+		QueuedRows:  redactQueueRows(vm.queued),
+		Activity:    activityRows(vm.activity),
 	}
 	if h.headFn != nil {
 		snap.Head = h.headFn() // live writer truth; the copy only gates head events
 	} else {
 		snap.Head = h.headID
 	}
-	segs := statusSegments(h.segments)
+	segs := statusSegments(vm.segments)
 	acct := h.acct
 	h.mu.Unlock()
 
-	// guarded sources read without the hub lock: their owners may call back in
-	if h.q != nil {
-		snap.Queued = h.q.pending()
-	}
-	if h.ag != nil {
-		snap.Running = h.ag.Running()
-	} else {
-		snap.Running = snap.Spinning
-	}
-	if h.barrier != nil {
-		snap.Permission = h.barrier.Mode().String()
-	}
+	// the two sources that cannot join the hub lock read after it: the ledger
+	// rides the agent's state lock (WithState), the broker's begin holds its own
+	// lock across its publish. Both may name a moment slightly newer than seq,
+	// which the watermark rule already supersedes.
 	if b := h.ui.dialogs; b != nil {
 		snap.Interactions = b.opened()
 	}
-	if h.tools != nil {
-		snap.Tools = toolSnapshot(h.tools)
-	}
 	if t := h.ledger(acct); t != nil {
-		snap.Context = t.Context()
 		snap.Usage = hubUsage{
 			Turns:     t.TurnsCount(),
 			Total:     t.Total(),
@@ -752,14 +820,14 @@ type hubSink struct {
 }
 
 func (s hubSink) TurnStart(i agent.TurnInfo) {
-	s.h.setSpinning(true)
+	s.h.setTurnLive(true)
 	for _, o := range s.h.observers() {
 		o.TurnStart(i)
 	}
 }
 
 func (s hubSink) TurnEnd(r agent.TurnResult) {
-	s.h.setSpinning(false)
+	s.h.setTurnLive(false)
 	for _, o := range s.h.observers() {
 		o.TurnEnd(r)
 	}
@@ -843,7 +911,10 @@ func (s hubSink) Usage(u llm.Usage) {
 	}
 }
 
+// Context records the bar's numbers on the view model, then fans the call out;
+// the hub owns the event, so observers republish nothing.
 func (s hubSink) Context(c tokens.ContextState) {
+	s.h.setContext(c)
 	for _, o := range s.h.observers() {
 		o.Context(c)
 	}
@@ -855,13 +926,15 @@ func (s hubSink) Notice(msg string, level agent.Level) {
 	}
 }
 
-// setSpinning tracks the working glyph from turn boundaries, publishing the
-// change in the same critical section.
-func (h *sessionHub) setSpinning(on bool) {
+// setTurnLive tracks a turn's boundary: whether one is in flight and whether
+// the working glyph spins, publishing the spinner's flip in the same critical
+// section. The running fact itself rides the turn events, not a dedicated one.
+func (h *sessionHub) setTurnLive(live bool) {
 	h.mu.Lock()
-	if h.spinning != on {
-		h.spinning = on
-		h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Spinning: &on}))
+	h.vm.running = live
+	if h.vm.spinning != live {
+		h.vm.spinning = live
+		h.publishLocked(ctl.EventStatus, ctl.EncodeData(ctl.StatusData{Spinning: &live}))
 	}
 	h.mu.Unlock()
 }

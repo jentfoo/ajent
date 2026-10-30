@@ -133,13 +133,17 @@ The session hub stamps every observable change with one event number at commit, 
 fanout, so commit order equals event order for every connection. Every reply carries the
 number its result was taken at, a snapshot's own number for reads and the post-mutation
 watermark for writes. That is the whole reconciliation rule: events at or below it are
-superseded by the result, events above it apply. A snapshot's number and its hub-held
-fields share one critical section; the sources that keep their own locks (the writer's
-head, the dialog broker, the agent, the barrier, the tool registry) are read immediately
-after, so a snapshot may describe a moment slightly newer than its own number. That
-direction is safe: the newer state already supersedes the at-or-below events, and an
-above-number event that re-describes it is idempotent by entry id, dialog id or full
-replacement.
+superseded by the result, events above it apply. The hub owns the ephemeral view model
+(status segments, activity and queue rows, idle, running, spinning, model labels, context
+numbers, permission mode, tool rows, draft), and every mutation updates that struct and
+fans out its event in one critical section, so a snapshot's number and its hub-held
+fields — plus the writer head, read through the writer's own head func — share that one
+section. The two sources that cannot join the hub lock (the dialog broker's open set,
+whose begin holds its own lock across its publish, and the usage totals behind the
+agent's state lock) are read immediately after, so a snapshot may describe a moment
+slightly newer than its own number. That direction is safe: the newer state already
+supersedes the at-or-below events, and an above-number event that re-describes it is
+idempotent by entry id, dialog id or full replacement.
 
 **Committed versus ephemeral.** Two families share the number space. The committed family
 is entry appends and branch changes, and everything scrollback-visible renders from it plus
@@ -160,13 +164,14 @@ watermark rule, by dialog id. Open dialogs ride the socket only: never the trans
 (they are runtime state, not history) and never the discovery record (which stays static
 facts for pickers).
 
-**Poll-only facts.** Not every snapshot field has a change event. The permission mode,
-tool rows, usage totals, model capabilities, the queue count and idle are announced by
-nothing: they mutate rarely and often note themselves another way (a mode cycle shows a
-notice and a status segment, tool toggles print), so a controller reads them by
-resnapshotting. The contract for a new snapshot field is to either publish a change
-event or join this named list, and the hub test holds the inventory to that, so a
-rendering surface can always tell which facts events carry and which only a snapshot
+**Poll-only facts.** Not every snapshot field has a change event. The ephemeral view
+model is fully event-covered (the permission mode, tool rows, queue count and idle
+gained their events as the hub took ownership), so the named list holds only the static
+facts — session id, workspace, cwd — plus the usage totals: their ledger accumulates
+between per-report usage events, so totals are read by resnapshotting, through the one
+documented read-after-unlock. The contract for a new snapshot field is to either publish
+a change event or join this named list, and the hub test holds the inventory to that, so
+a rendering surface can always tell which facts events carry and which only a snapshot
 reads. Seat release by disconnect follows the same rule: it rewrites the discovery
 record and never spends an event number.
 

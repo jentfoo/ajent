@@ -161,15 +161,17 @@ func showPermissionIndicator(ui *hubUI, b *permit.Barrier) {
 	if b == nil {
 		return
 	}
-	showPermissionMode(ui, b.Mode())
+	setPermissionMode(ui, b.Mode())
 }
 
-// showPermissionMode mirrors the live mode onto the permissions segment, the
-// default mode hidden until the user changes it.
-func showPermissionMode(ui *hubUI, m permit.Mode) {
+// setPermissionMode records the live mode on the hub and mirrors it onto the
+// permissions segment, the default mode hidden until the user changes it.
+// Every mode change funnels through here or hub.ModeCycle.
+func setPermissionMode(ui *hubUI, m permit.Mode) {
 	if ui == nil {
 		return
 	}
+	ui.hub.setPermissionMode(m)
 	if m != permit.ModeAllowRead { // default: hidden until the user changes it
 		ui.SetStatusSegment(segment(segPermissions, m.String(), m.Short()))
 		return

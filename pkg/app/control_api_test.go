@@ -1091,7 +1091,7 @@ func TestControlState(t *testing.T) {
 
 		reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctl-test"})
 		require.NoError(t, err)
-		rig.hub.tools = reg
+		rig.hub.setToolsRegistry(reg)
 
 		var st ctl.State
 		rp := c.call("a1", ctl.MethodState, map[string]any{})

@@ -3,15 +3,17 @@ package app
 import (
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// hubUI forwards the TUI's mutating surface and reports each call to the hub,
-// so a control client sees every visible change the local terminal commits.
-// The driver hands this wrapper to every consumer instead of the raw *tui.UI;
-// anything the wrapper does not report is either a stream event (observed
-// through the hub's sink) or invisible chrome. A nil terminal (serve mode)
-// turns every forward into a report only: the hub stays the sole front end.
+// hubUI is the shim between the session's consumers and the two surfaces a
+// mutation reaches: the hub's view model (which publishes the wire event) and
+// the local terminal (which repaints). Every mutating call routes through the
+// hub first, then tui.UI. A nil terminal (serve mode) skips the paint and the
+// hub stays the sole front end, so no call site needs a nil check. Anything a
+// shim method does not forward is either a stream event (observed through the
+// hub's sink) or local-only chrome: editor wiring, dialogs, recall, theme.
 type hubUI struct {
 	*tui.UI
 	hub     *sessionHub
@@ -32,6 +34,13 @@ func (u *hubUI) Notify(msg string, level tui.Level) {
 func (u *hubUI) NotifyLocal(msg string, level tui.Level) {
 	if u.UI != nil {
 		u.UI.Notify(msg, level)
+	}
+}
+
+// NotifyKeyedLocal is NotifyLocal for a keyed notice.
+func (u *hubUI) NotifyKeyedLocal(key, msg string, level tui.Level) {
+	if u.UI != nil {
+		u.UI.NotifyKeyed(key, msg, level)
 	}
 }
 
@@ -134,11 +143,20 @@ func (u *hubUI) SetTheme(pal tui.Palette) {
 	}
 }
 
-// SetContext updates the context bar. Display only: context rides stream
-// events and snapshots instead.
+// SetContext updates the context bar and reports it: the numbers are view
+// model state, published on the context event family.
 func (u *hubUI) SetContext(ci tui.ContextInfo) {
 	if u.UI != nil {
 		u.UI.SetContext(ci)
+	}
+	u.hub.setContext(contextState(ci))
+}
+
+// Insert types text at the caret for hosts that deliver content outside the
+// key stream. The edit callback it fires feeds the draft mirror, like typing.
+func (u *hubUI) Insert(text string) {
+	if u.UI != nil {
+		u.UI.Insert(text)
 	}
 }
 
@@ -172,3 +190,10 @@ func (u *hubUI) PrependInput(text string) {
 // Interactive reports whether a local editor exists to recover queued
 // prompts into. Serve mode answers false: an interrupt drops them instead.
 func (u *hubUI) Interactive() bool { return u.UI != nil }
+
+// contextState maps the terminal's context view onto the ledger's terms. The
+// field lists are pinned equal by tui/sink's own conversion test.
+func contextState(ci tui.ContextInfo) tokens.ContextState {
+	return tokens.ContextState{Used: ci.Used, Window: ci.Window,
+		Reserve: ci.Reserve, Compact: ci.Compact, Estimated: ci.Estimated}
+}

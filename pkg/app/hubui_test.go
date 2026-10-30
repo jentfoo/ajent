@@ -1,6 +1,9 @@
 package app
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"strings"
@@ -201,11 +204,12 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 		2*time.Second, 5*time.Millisecond)
 
 	hub.mu.Lock()
-	idle := hub.idle
-	model := hub.model
-	queued := hub.queued
-	segs := len(hub.segments)
-	acts := len(hub.activity)
+	idle := hub.vm.idle
+	model := hub.vm.model
+	queued := hub.vm.queued
+	segs := len(hub.vm.segments)
+	acts := len(hub.vm.activity)
+	ctx := hub.vm.context
 	hub.mu.Unlock()
 
 	assert.True(t, idle)
@@ -214,6 +218,7 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "waiting"}}, queued)
 	assert.Equal(t, 1, segs)
 	assert.Equal(t, 2, acts)
+	assert.Zero(t, ctx.Used) // untouched here: context has its own flow
 
 	assert.Equal(t, []string{"|plain notice", "subagent|keyed"}, log.noticesSeen())
 	assert.Equal(t, []string{"# printed"}, log.printsSeen())
@@ -238,7 +243,7 @@ func TestHubUILabelSetKeepsCaps(t *testing.T) {
 	hub.ui.SetModel("p/big-alt", "big", 2000)
 
 	hub.mu.Lock()
-	m := hub.model
+	m := hub.vm.model
 	hub.mu.Unlock()
 	assert.Equal(t, "p/big-alt", m.Key)
 	assert.Equal(t, 2000, m.Window)
@@ -267,6 +272,7 @@ func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	ui.UserEcho("typed line") // local only: no echo event exists to observe
 	ui.SetInput("filled")
 	ui.PrependInput("recovered")
+	ui.Insert("token") // nil terminal: dropped, never a nil-receiver panic
 
 	assert.Equal(t, []string{"|plain", "subagent|keyed"}, log.noticesSeen())
 	assert.Equal(t, []string{"# printed"}, log.printsSeen())
@@ -291,7 +297,7 @@ func TestHubUISegmentRemoval(t *testing.T) {
 	ui.SetStatusSegment(segment(segPlan, "", "")) // empty text removes
 
 	hub.mu.Lock()
-	_, present := hub.segments[segPlan]
+	_, present := hub.vm.segments[segPlan]
 	hub.mu.Unlock()
 	assert.False(t, present)
 
@@ -320,6 +326,45 @@ func TestHubUIDraftCoalescesAndHidesSecrets(t *testing.T) {
 	assert.Equal(t, []string{""}, log.draftsSeen())
 }
 
+// TestHubUIShimCoversEveryMutation pins the shim rule: every TUI-visible
+// mutation is declared on hubUI, so no consumer can reach the raw terminal
+// past the hub's view model, and serve mode's nil terminal cannot leak into a
+// call site. Local-only surfaces (editor wiring, dialogs, recall, theme setup)
+// keep their own paths. This list is the mutation surface.
+func TestHubUIShimCoversEveryMutation(t *testing.T) {
+	t.Parallel()
+
+	mutations := []string{
+		"Notify", "NotifyLocal", "NotifyKeyed", "NotifyKeyedLocal", "Print",
+		"SetStatusSegment", "SetModel", "SetModelOf",
+		"SetActivity", "SetActivityRanked", "SetQueued", "SetIdle",
+		"SetInput", "PrependInput", "Insert", "UserEcho", "UserImages",
+		"SetTheme", "SetContext", "Busy", "Interactive",
+	}
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "hubui.go", nil, 0)
+	require.NoError(t, err)
+	declared := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Recv == nil {
+			return true
+		}
+		star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
+		if !ok {
+			return true
+		}
+		if ident, ok := star.X.(*ast.Ident); ok && ident.Name == "hubUI" {
+			declared[fn.Name.Name] = true
+		}
+		return true
+	})
+	for _, name := range mutations {
+		assert.True(t, declared[name], "hubUI must declare %s so the mutation routes through the hub", name)
+	}
+}
+
 func TestHubUIIdleAndSpinTrack(t *testing.T) {
 	t.Parallel()
 
@@ -329,7 +374,7 @@ func TestHubUIIdleAndSpinTrack(t *testing.T) {
 	log.attach(hub)
 	ui := hub.ui
 
-	ui.SetIdle(false) // snapshot-only: idle has no event of its own
+	ui.SetIdle(false) // the flip publishes on the idle event
 	hub.sink().TurnStart(agent.TurnInfo{})
 	hub.sink().TurnEnd(agent.TurnResult{})
 	hub.sink().TurnEnd(agent.TurnResult{}) // idempotent: no second emission
@@ -342,7 +387,17 @@ func TestHubUIIdleAndSpinTrack(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []bool{true, false}, spins)
+
+	idles := make([]bool, 0, 1)
+	for _, ev := range log.named(ctl.EventIdle) {
+		var d ctl.IdleData
+		if ev.Decode(&d) == nil {
+			idles = append(idles, d.Idle)
+		}
+	}
+	assert.Equal(t, []bool{false}, idles)
 	hub.mu.Lock()
-	assert.False(t, hub.idle)
+	assert.False(t, hub.vm.idle)
+	assert.False(t, hub.vm.running) // the turn boundary tracked it back off
 	hub.mu.Unlock()
 }

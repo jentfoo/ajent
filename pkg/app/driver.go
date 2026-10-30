@@ -215,7 +215,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}
-	hub.tools = toolsReg
+	hub.setToolsRegistry(toolsReg)
 	// a configured enabled set replaces the built-in default (read/write/edit/bash),
 	// so find/grep/ls come on when config.json lists them.
 	if toolsReg != nil && len(set.Settings().Tools.Enabled) > 0 {

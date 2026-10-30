@@ -205,6 +205,18 @@ func TestAttachViewStreams(t *testing.T) {
 			return strings.Count(a.out(), "wrote notes.go") == 1
 		}, ctlWait, 5*time.Millisecond)
 	})
+
+	t.Run("idle_event_drives_rest_state", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		rig.hub.publish(ctl.EventIdle, ctl.IdleData{Idle: false})
+		require.Eventually(t, func() bool { return !a.view.ui.Idle() },
+			ctlWait, 5*time.Millisecond)
+		rig.hub.publish(ctl.EventIdle, ctl.IdleData{Idle: true})
+		require.Eventually(t, func() bool { return a.view.ui.Idle() },
+			ctlWait, 5*time.Millisecond)
+	})
 }
 
 // TestAttachToolResultEntryNoEcho pins the live-echo parity rule: a committed

@@ -392,8 +392,8 @@ func (s *controlServer) logPeer(peer peerIdentity) {
 // renders. These never enter the control event stream: connect noise would
 // consume seqs and replay back to every observer.
 func (s *controlServer) logControl(level tui.Level, msg string) {
-	if s.hub.ui.UI != nil {
-		s.hub.ui.UI.NotifyKeyed(controlNoticeKey, msg, level)
+	if s.hub.Interactive() {
+		s.hub.ui.NotifyKeyedLocal(controlNoticeKey, msg, level)
 		return
 	}
 	_, _ = fmt.Fprintf(os.Stderr, "ajent: control: %s\n", msg)

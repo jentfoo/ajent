@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-analyze/bulk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -349,9 +351,11 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	assert.Equal(t, permit.ModeAuto, b.Mode())
 	// the permissions segment appears with the mode, hidden again on the way back
 	hub.mu.Lock()
-	_, segShown := hub.segments[segPermissions]
+	_, segShown := hub.vm.segments[segPermissions]
+	mode := hub.vm.permission
 	hub.mu.Unlock()
 	assert.True(t, segShown)
+	assert.Equal(t, permit.ModeAuto.String(), mode)
 
 	hub.ModeCycle(true)
 	require.Eventually(t, func() bool {
@@ -359,9 +363,11 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 	assert.Equal(t, permit.ModeAllowRead, b.Mode())
 	hub.mu.Lock()
-	_, segShown = hub.segments[segPermissions]
+	_, segShown = hub.vm.segments[segPermissions]
+	mode = hub.vm.permission
 	hub.mu.Unlock()
 	assert.False(t, segShown)
+	assert.Equal(t, permit.ModeAllowRead.String(), mode)
 }
 
 // TestHubSnapshotTruth pins snapshot fields against their sources: tools from
@@ -380,18 +386,21 @@ func TestHubSnapshotTruth(t *testing.T) {
 	reg.Register(&stubTool{name: "alpha"}, true)
 	reg.Register(&stubTool{name: "beta"}, false)
 	reg.MarkReadOnly([]string{"alpha"})
-	hub.tools = reg
+	hub.setToolsRegistry(reg)
 
 	waitReady, takeReady := stagePair(t)
 	q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady, nil)
 	hub.q = q
 	q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 1)
 
-	hub.barrier = wiredBarrier(reg) // default mode allow-read, the snapshot's expectation is auto
+	b := wiredBarrier(reg) // default mode allow-read, the snapshot's expectation is auto
+	hub.barrier = b
+	showPermissionIndicator(hub.ui, b)
 
 	// spend lands on the ledger's totals, read through the hub's captured pointer
 	st.Tokens.RecordSpend("p/m", llm.Usage{Input: 120, Output: 30})
-	st.Tokens.SetBase(40) // the context bar reads the estimate buckets
+	st.Tokens.SetBase(40)               // the context bar reads the estimate buckets
+	hub.setContext(st.Tokens.Context()) // the view model's context copy
 
 	hub.ui.SetStatusSegment(segment(segPlan, "planning", "plan"))
 	hub.ui.SetModel("p/m", "m", 64000)
@@ -600,7 +609,7 @@ func TestHubQueueRowsRedactSecrets(t *testing.T) {
 
 	// the remembered copy stays whole for snapshots of the local truth
 	hub.mu.Lock()
-	queued := hub.queued
+	queued := hub.vm.queued
 	hub.mu.Unlock()
 	assert.Equal(t, rows, queued)
 }
@@ -620,9 +629,13 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 		"Context":      ctl.EventContext,
 		"Running":      ctl.EventTurnStart + ", " + ctl.EventTurnEnd,
 		"Spinning":     ctl.EventStatus,
+		"Idle":         ctl.EventIdle,
+		"Queued":       ctl.EventQueued,
 		"QueuedRows":   ctl.EventQueued,
 		"Activity":     ctl.EventActivity,
 		"Status":       ctl.EventStatus,
+		"Permission":   ctl.EventPermission,
+		"Tools":        ctl.EventTools,
 		"Interactions": ctl.EventInteractionPending + ", " + ctl.EventInteractionSettled,
 	}
 	// pollOnly names why no event announces the field; the design doc carries
@@ -631,12 +644,8 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 		"SessionID": "static: identity never changes",
 		"Workspace": "static: fixed for the run",
 		"Cwd":       "static: fixed for the run",
-		"Permission": "mode changes note themselves as notice and segment; " +
-			"the authoritative mode is a snapshot read",
-		"Tools":  "toggles print their effect; the registry is a snapshot read",
-		"Usage":  "totals accumulate silently; usage events are per-report",
-		"Idle":   "key-meaning state; a snapshot's Running answers it",
-		"Queued": "the count; queued texts carry the event",
+		"Usage": "ledger totals accumulate between per-report events; the read is " +
+			"the documented WithState read-after-unlock",
 	}
 
 	fields := make(map[string]bool)
@@ -655,4 +664,189 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 	for name := range pollOnly {
 		assert.True(t, fields[name], "poll-only field %s no longer exists on hubSnapshot", name)
 	}
+}
+
+// TestHubToolsPublishOnChange pins the tool rows' flow: installing a registry
+// seeds the view model, and every later reshape fires the registry's change
+// hook and republishes the rows without any per-site wiring.
+func TestHubToolsPublishOnChange(t *testing.T) {
+	t.Parallel()
+
+	term, _ := pipeUI(t)
+	log := &emitLog{}
+	hub := newTestHub(term)
+	log.attach(hub)
+
+	reg := tools.New()
+	reg.Register(&stubTool{name: "alpha"}, true)
+	reg.Register(&stubTool{name: "beta"}, true)
+	hub.setToolsRegistry(reg)
+
+	require.Eventually(t, func() bool { return len(log.named(ctl.EventTools)) == 1 },
+		2*time.Second, 5*time.Millisecond)
+	var td ctl.ToolsData
+	require.NoError(t, log.named(ctl.EventTools)[0].Decode(&td))
+	require.Len(t, td.Rows, 2)
+	assert.True(t, td.Rows[0].Enabled)
+
+	reg.SetEnabled([]string{"alpha"})
+	require.Eventually(t, func() bool { return len(log.named(ctl.EventTools)) == 2 },
+		2*time.Second, 5*time.Millisecond)
+	require.NoError(t, log.named(ctl.EventTools)[1].Decode(&td))
+	enabled := bulk.SliceFilter(func(r ctl.ToolState) bool { return r.Enabled }, td.Rows)
+	require.Len(t, enabled, 1)
+	assert.Equal(t, "alpha", enabled[0].Name)
+
+	snap := hub.Snapshot()
+	require.Len(t, snap.Tools, 2)
+	assert.False(t, snap.Tools[1].Enabled)
+}
+
+// TestHubContextMirrorsSink pins the context flow: the sink call records the
+// numbers on the view model and publishes the event once, from the hub.
+func TestHubContextMirrorsSink(t *testing.T) {
+	t.Parallel()
+
+	term, _ := pipeUI(t)
+	log := &emitLog{}
+	hub := newTestHub(term)
+	log.attach(hub)
+
+	want := tokens.ContextState{Used: 1200, Window: 64000, Reserve: 4000, Compact: 48000}
+	hub.sink().Context(want)
+
+	require.Eventually(t, func() bool { return len(log.named(ctl.EventContext)) == 1 },
+		2*time.Second, 5*time.Millisecond)
+	hub.mu.Lock()
+	got := hub.vm.context
+	hub.mu.Unlock()
+	assert.Equal(t, want, got)
+	assert.Equal(t, want.Used, hub.Snapshot().Context.Used)
+}
+
+// TestHubSnapshotConsistentUnderMutation hammers the view model setters
+// against concurrent SnapshotAt reads: every snapshot must be one internally
+// consistent state (counts matching their rows, the status row matching its
+// inputs, rows in display order) whatever interleaving produced it.
+func TestHubSnapshotConsistentUnderMutation(t *testing.T) {
+	t.Parallel()
+
+	term, _ := pipeUI(t)
+	hub := newTestHub(term)
+	reg := tools.New()
+	reg.Register(&stubTool{name: "alpha"}, true)
+	hub.setToolsRegistry(reg)
+
+	// several setters touch the same fields, so readers interleave real races.
+	// The closures pin their arguments so a later iteration cannot rewrite them.
+	mutate := make([]func(), 0, 19)
+	for _, spec := range []struct{ key, text, short string }{
+		{segPlan, "planning", "plan"}, {segMCP, "mcp 1/2", "1/2"},
+	} {
+		key, text, short := spec.key, spec.text, spec.short
+		mutate = append(mutate,
+			func() { hub.setSegment(segment(key, text, short)) },
+			func() { hub.setSegment(tui.Segment{Key: key}) })
+	}
+	for _, a := range []struct {
+		key, text string
+		rank      int
+	}{{"job:1", "reading", 1}, {"misc", "note", activityUnranked}, {"job:1", "", 0}} {
+		act := a
+		mutate = append(mutate, func() { hub.setActivity(act.key, act.text, act.rank) })
+	}
+	for _, r := range [][]ctl.QueueRow{
+		{{ID: "row-1", Text: "one"}, {ID: "row-2", Text: "two"}},
+		{{ID: "row-3", Text: "three"}},
+		nil,
+	} {
+		rows := r
+		mutate = append(mutate, func() { hub.setQueued(rows) })
+	}
+	mutate = append(mutate,
+		func() { hub.setIdle(true) },
+		func() { hub.setIdle(false) },
+		func() { hub.setTurnLive(true) },
+		func() { hub.setTurnLive(false) },
+		func() { hub.setModelLabel("p/m", "m", 64000) },
+		func() { hub.setPermissionMode(permit.ModeAuto) },
+		func() { hub.setPermissionMode(permit.ModeAllowRead) },
+		func() { hub.refreshTools() },
+		func() { hub.setContext(tokens.ContextState{Used: 100, Window: 64000, Reserve: 4000}) },
+	)
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			for j := 0; ; j++ {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				mutate[(n+j*4)%len(mutate)]()
+			}
+		}(i)
+	}
+
+	// validate names the invariant each check pins, on the snapshot as a whole
+	validate := func(snap hubSnapshot) []string {
+		var bad []string
+		if snap.Queued != len(snap.QueuedRows) {
+			bad = append(bad, "queued count disagrees with its rows")
+		}
+		if snap.Running != snap.Spinning { // both track the turn boundary
+			bad = append(bad, "running and spinning disagree")
+		}
+		if snap.Spinning != (snap.Status.Spinner != "") {
+			bad = append(bad, "spinner disagrees with spinning")
+		}
+		if snap.Status.Model != snap.Model.Key || snap.Status.ModelShort != snap.Model.Short ||
+			snap.Status.MaxTokens != snap.Model.Window {
+			bad = append(bad, "status labels disagree with the model copy")
+		}
+		if snap.Status.Tokens != snap.Context.Used || snap.Status.Reserve != snap.Context.Reserve ||
+			snap.Status.Compact != snap.Context.Compact || snap.Status.Estimated != snap.Context.Estimated {
+			bad = append(bad, "status numbers disagree with the context copy")
+		}
+		if !slices.IsSortedFunc(snap.Status.Segments, func(a, b tui.Segment) int {
+			if c := cmp.Compare(a.Order, b.Order); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.Key, b.Key)
+		}) {
+			bad = append(bad, "segments out of display order")
+		}
+		if !slices.IsSortedFunc(snap.Activity, func(a, b hubActivity) int {
+			return cmp.Compare(a.Rank, b.Rank)
+		}) {
+			bad = append(bad, "activity out of rank order")
+		}
+		return bad
+	}
+
+	var mu sync.Mutex
+	var failures []string
+	var readers sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for n := 0; n < 500; n++ {
+				if bad := validate(hub.Snapshot()); len(bad) > 0 {
+					mu.Lock()
+					failures = append(failures, bad...)
+					mu.Unlock()
+				}
+			}
+		}()
+	}
+	readers.Wait()
+	close(stop)
+	wg.Wait()
+
+	assert.Empty(t, failures)
 }
