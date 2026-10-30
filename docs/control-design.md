@@ -53,7 +53,7 @@ The dependency edges are load-bearing.
 Each write verb runs the implementation the keyboard already uses: editor submission, Esc,
 Shift+Tab, typing into the editor, the tail of double-Esc, answering a dialog. There is
 deliberately no second dispatch, so remote behavior shares local behavior and its tests,
-and a controller cannot reach a state the operator cannot produce by hand. Three rules
+and a controller cannot reach a state the operator cannot produce by hand. Four rules
 keep that single path honest under concurrent controllers.
 
 - **Mutating verbs run on one lane.** Submit, interrupt, recall, rewind and mode
@@ -64,14 +64,30 @@ keep that single path honest under concurrent controllers.
   the only turn starter. A submit that would block on a busy pump refuses with a
   retryable code instead of parking the lane behind it, which is what keeps
   interrupt latency alive.
+- **Branch switches share one state lane with dispatch.** Rewind, fork and the
+  compactor's append-then-swap hold the state lane across their whole
+  transaction, while turn dispatch holds it only long enough to re-check
+  conditions and commit the queue's draining mark, never across the turn
+  itself. That is what closes the swap-then-SetHead window: a prompt dispatched
+  before a rewind lands before it or ages out, never onto the branch the rewind
+  forked away from, and a compaction checkpoint can never record against a head
+  a rewind moved mid-rebuild. A rewind refuses while a drain owns the loop — a
+  running turn or the between-turns window over queued prompts — and interrupt
+  covers that same window: Esc stops the drain, releasing the staged-command
+  wait it sits in and recovering its queued prompts, exactly as it stops a
+  running turn. Pump lines carry the lane's dispatch generation; a rewind bumps
+  it and the pump returns aged lines to the editor with a notice naming what
+  happened, so a buffered prompt is decided once, never landed by accident.
 - **Rewind is one transaction.** Swapping agent state, moving the writer head and
   publishing the branch change form one ordered operation shared by double-Esc and the
   wire, so live state and the writer head cannot diverge and the last rewind wins no
   matter which surface sent it. Queued prompts clear with a recorded notice naming them,
   and their drop publishes inside the queue's own critical section beside the emptied
   rows, so pending rows resolve instead of vanishing and a prompt re-offered after the
-  rewind keeps its fresh row. A rewind never waits on a dialog or picker holding another
-  surface, which closes with a transient notice once the head really moves.
+  rewind keeps its fresh row. The clear and the staged-output discard run before any
+  step that can refuse, so a model restore hitting a running turn never leaves prompts
+  queued for the abandoned branch. A rewind never waits on a dialog or picker holding
+  another surface, which closes with a transient notice once the head really moves.
 - **Dialog answers stay off the lane.** The broker's first-resolution rule already
   linearizes them, and answer latency matters more than ordering against other verbs. A
   controller that dies mid-dialog leaves the dialog open for whoever answers next, exactly
@@ -165,7 +181,9 @@ queue, and a peer that stops reading loses its connection instead of stalling th
 loop. Each stage reserves room for the exit event, so no bound can drop it and an attached
 terminal can distinguish "session ended" from "connection lost". Shutdown quiesces an
 interrupted turn before emitting exit, under a bounded wait, so a wedged tool cannot hang
-exit.
+exit; the executor lane and the state lane drain under the same bound first, so a rewind
+still mid-transaction publishes its branch.changed before the end event, never after it,
+and decision dialogs root on the app-owned context so teardown settles them too.
 
 ## Bulk history comes from the file
 
@@ -260,21 +278,26 @@ prompts verbatim, so redaction covers the live surfaces only.
 1. Remote writes reuse the keyboard's implementation, so nothing dispatches twice or carries
    its own permission logic, and mutating verbs serialize on one lane with guards revalidated
    at execution.
-2. One seat at a time, released by disconnection or yield. Observers never mutate, and local
+2. Branch switches and turn dispatch serialize on one state lane: a rewind, fork or
+   compaction swap holds it across its whole transaction, dispatch only for its decision,
+   so live state and the writer head never diverge mid-append and a rewind's cleanups
+   all run inside the transaction. Interrupt covers the drain's between-turns window,
+   and shutdown drains the lane before the exit event publishes.
+3. One seat at a time, released by disconnection or yield. Observers never mutate, and local
    keys always work.
-3. One number space orders events and reply watermarks alike. Commit order equals event
+4. One number space orders events and reply watermarks alike. Commit order equals event
    order, so a snapshot and a live stream reconcile by one rule. A snapshot field either
    has a change event or sits on the named poll-only list, and the hub test holds that
    inventory.
-4. Committed content is entry appends plus branch changes, reconciled by entry id alone.
+5. Committed content is entry appends plus branch changes, reconciled by entry id alone.
    Everything else is ephemeral, governed by the watermark and never reconciled against the
    file, except open dialogs: they hold the run, so every snapshot lists them and every
    surface re-races what it lists.
-5. A live append paints exactly what replay paints for the same entry: one echo rule,
+6. A live append paints exactly what replay paints for the same entry: one echo rule,
    defined beside replay, feeds committed history and live appends alike.
-6. Delivery is fail-open: a slow peer loses its connection, never the session's turn, and the
+7. Delivery is fail-open: a slow peer loses its connection, never the session's turn, and the
    exit event cannot be dropped.
-7. Bulk history comes from the transcript file, so only deltas cross the socket.
-8. Peer credentials admit same-user connections and nothing else.
-9. Sockets and their records are per instance and token-scoped. A process removes only paths
+8. Bulk history comes from the transcript file, so only deltas cross the socket.
+9. Peer credentials admit same-user connections and nothing else.
+10. Sockets and their records are per instance and token-scoped. A process removes only paths
    carrying its own token, and detached sharing never depends on the socket at all.

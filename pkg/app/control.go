@@ -40,6 +40,11 @@ const (
 	// so shutdown never hangs on a peer that stopped reading.
 	connDrainWait = 250 * time.Millisecond
 
+	// laneQuiesceWait bounds the shutdown wait for the executor and state lanes
+	// to finish the verb or transaction they hold, so session.exit can never
+	// publish before a rewind's branch.changed.
+	laneQuiesceWait = 250 * time.Millisecond
+
 	// controlNoticeKey keys notices about the socket itself (refusals, verified
 	// connects), replacing rather than stacking across connections.
 	controlNoticeKey = "control"
@@ -149,6 +154,7 @@ type controlServer struct {
 	seat       *controlConn     // the connection holding the session's single control seat
 	seatHolder string           // its announced name, for refusal errors naming the holder
 	exec       *controlExecutor // the lane every mutating verb runs on
+	lane       *stateLane       // the branch-swap lane Close drains before exit; nil skips the wait
 }
 
 // controlRegistry is the discovery record beside the socket, written after
@@ -426,10 +432,11 @@ func (s *controlServer) remove(c *controlConn) {
 	}
 }
 
-// Close stops accepting, announces session.exit to every connection, flushes
-// it a bounded while, then unlinks this instance's own socket and registry.
-// Only paths carrying this token are ever removed, so a newer instance's
-// files are untouchable. Idempotent.
+// Close stops accepting, drains the executor and state lanes a bounded while
+// so no verb can publish after the end, announces session.exit to every
+// connection, flushes it a bounded while, then unlinks this instance's own
+// socket and registry. Only paths carrying this token are ever removed, so a
+// newer instance's files are untouchable. Idempotent.
 func (s *controlServer) Close(reason string) {
 	s.mu.Lock()
 	if s.closed {
@@ -446,6 +453,10 @@ func (s *controlServer) Close(reason string) {
 	s.mu.Unlock()
 
 	_ = s.ln.Close()
+	// a rewind still holding either lane would publish branch.changed after
+	// the end event, so both drain first under one bound
+	s.exec.quiesce(laneQuiesceWait)
+	s.lane.quiesce(laneQuiesceWait)
 	s.hub.publish(ctl.EventSessionExit, ctl.SessionExitData{Reason: reason})
 	for _, c := range conns {
 		c.detach(true)

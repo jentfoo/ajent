@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -500,6 +502,51 @@ func TestControlCloseUnlinkSocket(t *testing.T) {
 	rig.srv.Close("done")
 	_, err = os.Stat(rig.path)
 	assert.True(t, os.IsNotExist(err))
+}
+
+// TestControlCloseDrainsLanes pins the shutdown ordering: with a rewind
+// stalled on the state lane and a verb stalled on the executor lane, the exit
+// event holds until both finish, so no branch.changed can publish after it.
+func TestControlCloseDrainsLanes(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	rig := newControlRig(t, nil)
+	lane := newStateLane()
+	rig.srv.lane = lane
+
+	c := dialControl(t, rig.path)
+	c.hello()
+	var exited atomic.Bool
+	go func() {
+		for in := range c.inc {
+			if in.Event != nil && in.Event.Name == ctl.EventSessionExit {
+				exited.Store(true)
+			}
+		}
+	}()
+
+	// both stalls release exactly once, from the body or from cleanup on a
+	// failed assertion, so Close never waits its bound out needlessly
+	verbRelease := make(chan struct{})
+	var releaseVerb, freeLane sync.Once
+	t.Cleanup(func() {
+		releaseVerb.Do(func() { close(verbRelease) })
+		freeLane.Do(lane.unlock)
+	})
+	require.True(t, rig.srv.exec.run(func() { <-verbRelease }))
+	lane.lock()
+
+	closed := make(chan struct{})
+	go func() {
+		rig.srv.Close("done")
+		close(closed)
+	}()
+	require.Never(t, exited.Load, 150*time.Millisecond, 10*time.Millisecond,
+		"session.exit must not publish while a rewind or verb still runs")
+
+	freeLane.Do(lane.unlock)
+	releaseVerb.Do(func() { close(verbRelease) })
+	require.Eventually(t, exited.Load, 5*time.Second, 5*time.Millisecond)
+	<-closed
 }
 
 // TestControlHelloAnnouncesIdentity pins the hello contract: protocol version,

@@ -13,6 +13,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -77,7 +78,7 @@ func TestRunPump(t *testing.T) {
 			runPump(ctx, pump, nil, console, stager, nil,
 				false, wrapUI(t, ui), starts, func() {},
 				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil),
-				nil, &agent.State{Tokens: tokens.New(llm.Model{})}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+				nil, nil, &agent.State{Tokens: tokens.New(llm.Model{})}, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 			close(done)
 		}()
 
@@ -195,7 +196,7 @@ func TestRunPumpWakeFlushesDeferred(t *testing.T) {
 	go func() {
 		runPump(ctx, pump, nil, console, command.NewStager(ctx, nil, nil), nil,
 			false, wrapUI(t, ui), starts, func() {},
-			q, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+			q, nil, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
 		close(done)
 	}()
 
@@ -343,7 +344,7 @@ func TestRunPumpParkedHold(t *testing.T) {
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), nil,
-		false, wrapUI(t, ui), starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+		false, wrapUI(t, ui), starts, func() {}, q, nil, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
 
 	pump <- pumpLine{kind: command.KindPrompt, rest: "note", input: &agent.Input{Text: "note", Injected: true}}
 	require.Eventually(t, func() bool { return q.pending() == 1 }, time.Second, time.Millisecond)
@@ -398,7 +399,7 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, stager, expander,
-		false, wrapUI(t, ui), starts, func() {}, q, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
+		false, wrapUI(t, ui), starts, func() {}, q, nil, nil, st, nil, &sync.Once{}, func() {}, hooks, &drain)
 
 	stager.Run("echo boom", false)
 	require.Eventually(t, func() bool {
@@ -426,6 +427,60 @@ func TestRunPumpParkedSkipsFlush(t *testing.T) {
 	require.Eventually(t, func() bool { return len(p.Requests()) == 2 }, 5*time.Second, time.Millisecond)
 	assert.Contains(t, texts(p.Requests()[1]), "User Ran: echo boom")
 	assert.Contains(t, texts(p.Requests()[1]), "and then?")
+}
+
+// TestRunPumpStalePromptRecovers pins the pump-buffer rule: a prompt queued
+// before a rewind never silently lands on the branch it was not written
+// against. The pump returns it to the editor and resolves its pending row like
+// any queue exit, and no turn runs.
+func TestRunPumpStalePromptRecovers(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	wrapped := wrapUI(t, ui)
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textTurn("ran")}}}
+	ag, st := scriptedAgent(p)
+	console := &uiConsole{ui: wrapped, commands: command.NewRegistry()}
+	lane := newStateLane()
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
+	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
+	log := &emitLog{}
+	log.attach(wrapped.hub)
+
+	pump := make(chan pumpLine, 4)
+	starts := newStartState(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+
+	// the line queues before the pump serves it, then the rewind completes and
+	// bumps the generation: the line is aged out the moment it is dequeued
+	line := pumpLine{kind: command.KindPrompt, rest: "stale question", queueID: "row-1"}
+	line.gen = lane.stamp()
+	pump <- line
+	lane.bump()
+	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), expander,
+		false, wrapped, starts, func() {}, q, lane, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+
+	require.Eventually(t, func() bool {
+		return len(log.named(ctl.EventQueueDropped)) > 0
+	}, 5*time.Second, 5*time.Millisecond)
+
+	var qd ctl.QueueDroppedData
+	require.NoError(t, log.named(ctl.EventQueueDropped)[0].Decode(&qd))
+	assert.Equal(t, rewindCauseRewind, qd.Cause)
+	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "stale question"}}, qd.Rows)
+	assert.Empty(t, p.Requests()) // never dispatched onto the new branch
+	assert.False(t, q.drainLive())
+
+	// a line queued after the rewind carries the fresh generation and runs
+	fresh := pumpLine{kind: command.KindPrompt, rest: "fresh question"}
+	fresh.gen = lane.stamp()
+	pump <- fresh
+	require.Eventually(t, func() bool { return len(p.Requests()) == 1 },
+		5*time.Second, 5*time.Millisecond)
+	assert.Contains(t, texts(p.Requests()[0]), "fresh question")
 }
 
 func TestStartDrainInterruptLandsFill(t *testing.T) {

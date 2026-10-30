@@ -9,6 +9,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/tokens"
@@ -34,6 +35,9 @@ type pumpLine struct {
 	// onTurn runs as that input becomes a turn, so the sender can observe the turn
 	// its work produced rather than guessing when it lands.
 	onTurn func()
+	// gen is the state lane's dispatch generation at enqueue; a rewind bumps it,
+	// so a line dequeued afterwards was written against a branch that is gone.
+	gen uint64
 	// wake flushes queued state writes without dispatching, sent at drain exit
 	wake bool
 }
@@ -71,8 +75,9 @@ func newStartState(committed bool) *startState {
 }
 
 // runPump serves submitted lines until ctx (appRoot) is canceled. The pump
-// channel is never closed, so senders never race a close.
-func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *hubUI, starts *startState, settled func(), q *steerQueue, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
+// channel is never closed, so senders never race a close. lane serializes the
+// dispatch decision against branch swaps; nil dispatches unconditionally.
+func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console *uiConsole, stager *command.Stager, expander *refs.Expander, recording bool, ui *hubUI, starts *startState, settled func(), q *steerQueue, lane *stateLane, gate *typingGate, st *agent.State, editSinks []agent.Sink, seedToolsOnce *sync.Once, pushContext func(), hooks planHooks, drain *drainWaiter) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -116,7 +121,15 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 					console.Notify(n, tui.LevelWarn)
 				})
 				est := submitEstimate(in, pending)
-				if q.offer(in, echo, est) {
+				// the dispatch decision commits under the state lane: a rewind can
+				// neither slip between this check and the turn nor land a line the
+				// branch it was written against is gone from under
+				stale, queued := lane.dispatch(line.gen, func() bool { return q.offer(in, echo, est) })
+				if stale {
+					stalePrompt(ui, line)
+					continue
+				}
+				if queued {
 					if gate != nil {
 						gate.taken() // queued: pending() releases the hold, no handoff left to wait for
 					}
@@ -218,6 +231,31 @@ func submitEstimate(in agent.Input, pending int) int {
 	return est
 }
 
+// stalePrompt recovers one dequeued line a rewind aged out: its pending row
+// resolves like any queue exit, the text returns to the editor when one
+// exists, and a serve run drops it with a notice. Never a silent landing on
+// the branch the prompt was not written against.
+func stalePrompt(ui *hubUI, line pumpLine) {
+	id := line.queueID
+	if id == "" && line.input != nil && len(line.input.QueueIDs) > 0 {
+		id = line.input.QueueIDs[0]
+	}
+	if id == "" {
+		id = newQueueID()
+	}
+	ui.hub.queueDroppedCause(rewindCauseRewind, []ctl.QueueRow{{ID: id, Text: line.rest}})
+	if !ui.Interactive() {
+		ui.Notify("queued prompt dropped; the session rewound while it waited", tui.LevelWarn)
+		return
+	}
+	label := line.rest
+	if tok := pendingImages.refile(line.blocks); tok != "" {
+		label = strings.TrimSpace(tok + " " + label)
+	}
+	ui.PrependInput(label)
+	ui.NotifyLocal("prompt returned; the session rewound while it waited", tui.LevelWarn)
+}
+
 // drainWaiter tracks the live drain goroutine so shutdown can wait for its
 // abort fill before teardown reads the transcript. Only one drain runs at a
 // time (offers queue while one drains), so the newest channel covers all.
@@ -267,19 +305,27 @@ func (d *drainWaiter) wait(timeout time.Duration) bool {
 }
 
 // startDrain runs inputs as the turn goroutine, its exit observable on drain.
+// The drain's context is cancellable through the queue, so an interrupt between
+// turns releases the staged-command wait its take() may sit in.
 func startDrain(ctx context.Context, ui *hubUI, recording bool, ag *agent.Agent, q *steerQueue, inputs []agent.Input, starts *startState, hooks planHooks, drain *drainWaiter) {
 	// stamped before idle drops so a stale exit skips rather than races this write
 	gen := q.nextGen()
 	ui.SetIdle(false)
 	starts.dispatched.mark() // record the dispatched prompt, committing the tool block with it
 	starts.committed.mark()
+	dctx, cancel := context.WithCancel(ctx)
+	disarm := q.armDrain(cancel)
 	drain.launch(func() {
+		defer func() {
+			cancel() // release the context child even when nothing aborted
+			disarm()
+		}()
 		for {
-			err := ag.PromptBatch(ctx, inputs)
+			err := ag.PromptBatch(dctx, inputs)
 			// a workflow owns the next turn when it says so, errored turns included:
 			// its executor-retry rule depends on being reached after a failure.
 			if hooks.advance != nil {
-				if next, ok := hooks.advance(ctx); ok {
+				if next, ok := hooks.advance(dctx); ok {
 					inputs = []agent.Input{next}
 					continue
 				}
@@ -295,7 +341,7 @@ func startDrain(ctx context.Context, ui *hubUI, recording bool, ag *agent.Agent,
 				q.stopDrain() // leave items queued as rows, do not hammer a failing provider
 				break
 			}
-			next, ok := q.take(ctx)
+			next, ok := q.take(dctx)
 			if !ok {
 				break
 			}

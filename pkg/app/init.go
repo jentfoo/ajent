@@ -29,7 +29,9 @@ type initDeps struct {
 	notify   func(msg string, level tui.Level)
 	agents   *subagent.Manager
 	watch    *initWatch
-	pump     chan<- pumpLine
+	// send hands one line to the prompt pump: it stamps the dispatch generation
+	// and drops the line once the app root is canceled. nil disables /init.
+	send func(pumpLine)
 }
 
 // initController owns the /init project survey: one at a time, cancellable, and
@@ -47,7 +49,7 @@ type initController struct {
 // newInitController returns the controller, or nil when there is no tool registry
 // to run the survey through. In that case /init is simply absent.
 func newInitController(deps initDeps) *initController {
-	if deps.toolsReg == nil || deps.notify == nil || deps.pump == nil {
+	if deps.toolsReg == nil || deps.notify == nil || deps.send == nil {
 		return nil
 	}
 	c := &initController{
@@ -85,9 +87,8 @@ func (c *initController) start(ctx context.Context) {
 		c.deps.notify("init refused: press Esc to stop the turn first", tui.LevelWarn)
 		return
 	}
-	// captured before WithCancel: an abort must not silence the handoff, only
-	// shutdown (root undone) may
-	root := ctx
+	// the handoff rides the driver's send, so an abort (the WithCancel below)
+	// must not silence it; only app-root cancellation drops the line
 	ctx, cancel := context.WithCancel(ctx)
 	c.mu.Lock()
 	if c.cancel != nil {
@@ -108,22 +109,18 @@ func (c *initController) start(ctx context.Context) {
 		case err != nil:
 			c.deps.notify("init: "+err.Error(), tui.LevelWarn)
 		default:
-			c.submit(root, in)
+			c.submit(in)
 		}
 	}()
 }
 
-// submit hands the finished survey to the pump as an ordinary turn, dropping it
-// once root is canceled (pump shutdown).
-func (c *initController) submit(root context.Context, in agent.Input) {
-	// the label is what a queued row shows and what Esc recovers into the
-	// editor. Re-submitting it simply runs /init again.
-	select {
-	case c.deps.pump <- pumpLine{
+// submit hands the finished survey to the pump as an ordinary turn. The
+// driver's send stamps it with the dispatch generation and drops it once the
+// app root is canceled (pump shutdown).
+func (c *initController) submit(in agent.Input) {
+	c.deps.send(pumpLine{
 		kind: command.KindPrompt, rest: "/init", input: &in, onTurn: c.armWatch,
-	}:
-	case <-root.Done():
-	}
+	})
 }
 
 // abort ends a running survey and stops the children it spawned, reporting

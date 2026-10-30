@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"sync"
+	"time"
 )
 
 // controlExecutor is the one lane every mutating control verb runs on: submit,
@@ -19,6 +20,8 @@ type controlExecutor struct {
 	queue     []func()
 	interrupt []func() // priority lane, popped first
 	wake      chan struct{}
+	shut      bool           // quiesce armed: new work refuses
+	wg        sync.WaitGroup // one count per queued or running closure
 }
 
 // newControlExecutor builds the lane over root.
@@ -45,7 +48,7 @@ func (e *controlExecutor) runPriority(fn func()) bool {
 // the priority contract; pop order lives in loop.
 func (e *controlExecutor) enqueue(fn func(), priority bool) bool {
 	e.mu.Lock()
-	if e.root.Err() != nil {
+	if e.shut || e.root.Err() != nil {
 		e.mu.Unlock()
 		return false
 	}
@@ -54,12 +57,36 @@ func (e *controlExecutor) enqueue(fn func(), priority bool) bool {
 	} else {
 		e.queue = append(e.queue, fn)
 	}
+	e.wg.Add(1)
 	e.mu.Unlock()
 	select {
 	case e.wake <- struct{}{}:
 	default:
 	}
 	return true
+}
+
+// quiesce refuses new work and waits, bounded, for the lane to finish what it
+// holds, so shutdown's exit event publishes after the last verb's effects.
+// Reports whether the bound was hit.
+func (e *controlExecutor) quiesce(timeout time.Duration) bool {
+	e.mu.Lock()
+	e.shut = true
+	e.mu.Unlock()
+
+	done := make(chan struct{})
+	go func() {
+		e.wg.Wait()
+		close(done)
+	}()
+	t := time.NewTimer(timeout)
+	defer t.Stop()
+	select {
+	case <-done:
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 // loop pops interrupt-lane closures first, then the queue, so a verb queued
@@ -91,5 +118,6 @@ func (e *controlExecutor) loop() {
 			continue
 		}
 		fn()
+		e.wg.Done()
 	}
 }

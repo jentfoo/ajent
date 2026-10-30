@@ -223,8 +223,13 @@ func planCommands(ctl *plan.Controller) []command.Command {
 
 // forkTo points the session and agent state at head's branch and applies m as
 // its model. An empty head starts a new root, whose first entry is the model
-// change so a resumed branch can resolve it.
+// change so a resumed branch can resolve it. The whole switch runs under the
+// state lane, the rewind transaction's rule, so a rewind or dispatch can never
+// interleave with it.
 func (r *sessRec) forkTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head string, m llm.Model) error {
+	r.lane.lock()
+	defer r.lane.unlock()
+
 	moved := head != r.w.Head() // a fork in place only records the model, nothing to divide
 	if err := r.switchState(ui, ag, reg, head, rewindCauseFork, "plan: "); err != nil {
 		return err
@@ -237,7 +242,8 @@ func (r *sessRec) forkTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head str
 			"/model applies it", tui.LevelWarn)
 		return err
 	}
-	if moved {
+	if moved && ui.Interactive() {
+		// serve mode renders nothing: the embedded terminal is nil there
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}
 	return nil

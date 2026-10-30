@@ -105,6 +105,48 @@ func TestForkToRefusedMidTurn(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 }
 
+// TestForkToServeModeSurvivesDivider pins the serve-mode guard: a moved fork
+// draws its scrollback divider only where a terminal exists. A nil terminal
+// (serve mode) must not reach the embedded UI's nil receiver.
+func TestForkToServeModeSurvivesDivider(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-serve.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+	entries := make([]session.Entry, 0, 2)
+	for _, text := range []string{"goal", "draft"} {
+		e, aerr := w.Append(session.TypeMessage,
+			session.MessageData{Message: llm.Text(llm.RoleUser, text)})
+		require.NoError(t, aerr)
+		entries = append(entries, e)
+	}
+
+	m, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	ag := agent.New(&agent.State{Model: m, Tokens: tokens.New(m)}, agent.Options{})
+	serveUI := newSessionHub(hubDeps{}).ui // no terminal: the serve-mode shape
+
+	require.NotPanics(t, func() {
+		err = r.forkTo(serveUI, ag, reg, entries[0].ID, m)
+	})
+	require.NoError(t, err)
+	// the fork moved and recorded its model entry chained from the new head
+	after := readEntriesRewind(t, p)
+	require.Len(t, after, 4)
+	last := after[len(after)-1]
+	assert.Equal(t, session.TypeModelChange, last.Type)
+	assert.Equal(t, entries[0].ID, last.ParentID)
+	assert.Equal(t, last.ID, w.Head())
+}
+
 func TestForkToRefusedAfterSwitch(t *testing.T) {
 	t.Parallel()
 

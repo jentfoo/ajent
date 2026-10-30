@@ -65,7 +65,15 @@ type steerQueue struct {
 	items    []steerItem // oldest first
 	draining bool        // a goroutine is running turns and will drain us
 	gen      uint64      // bumped per dispatch, so a late drain exit knows it was superseded
+	// drainWait releases the live drain's take() wait, so an interrupt between
+	// turns ends the drain instead of waiting out the staged command it sits on.
+	// Armed at dispatch, dropped at drain exit.
+	drainWait *drainRelease
 }
+
+// drainRelease wraps one drain's cancel so the queue can tell its own armed
+// release from a newer drain's by identity.
+type drainRelease struct{ cancel context.CancelFunc }
 
 // steerItem is one queued prompt: its expanded input (carrying the row's
 // correlation id), the typed line shown in rows / recalled / echoed, and the
@@ -322,6 +330,32 @@ func (s *steerQueue) stopDrain() {
 	defer s.mu.Unlock()
 
 	s.draining = false
+}
+
+// armDrain records cancel as the live drain's release and returns the disarm
+// its goroutine runs at exit, which keeps whatever a newer drain armed.
+func (s *steerQueue) armDrain(cancel context.CancelFunc) (disarm func()) {
+	r := &drainRelease{cancel: cancel}
+	s.mu.Lock()
+	s.drainWait = r
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.drainWait == r {
+			s.drainWait = nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+// cancelDrain releases the live drain's take() wait. No-op when none runs.
+func (s *steerQueue) cancelDrain() {
+	s.mu.Lock()
+	r := s.drainWait
+	s.mu.Unlock()
+	if r != nil {
+		r.cancel()
+	}
 }
 
 // recall pops the newest item back into the editor and refreshes rows,

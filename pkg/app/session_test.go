@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,9 +21,11 @@ import (
 	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -1456,6 +1459,264 @@ func rewindPicked(t *testing.T, r *sessRec, ui *hubUI, ag *agent.Agent, reg *llm
 		return
 	}
 	_, _ = r.rewindTo(ui, ag, reg, head, rewindCauseRewind)
+}
+
+// rewindRig wires the driver's dispatch shape over one real transcript: a
+// recorder-landed agent, a steer queue, and a pump dispatching through a state
+// lane beside the rewind that holds it. prompts is how many scripted replies
+// the provider carries.
+type rewindRig struct {
+	rec  *sessRec
+	lane *stateLane
+	ag   *agent.Agent
+	st   *agent.State
+	reg  *llm.Registry
+	q    *steerQueue
+	pump chan pumpLine
+	// send queues one stamped line, the driver's own sender
+	send func(pumpLine)
+	prov *llm.ScriptedProvider
+	ui   *hubUI
+	log  *emitLog
+}
+
+func newRewindRig(t *testing.T, prompts int) *rewindRig {
+	t.Helper()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	term := newPumpTestUI(t)
+	ui := wrapUI(t, term)
+	log := &emitLog{}
+	log.attach(ui.hub)
+
+	turns := make([]llm.ScriptedTurn, prompts)
+	for i := range turns {
+		turns[i] = llm.ScriptedTurn{Events: textTurnRewind("reply " + strconv.Itoa(i))}
+	}
+	prov := &llm.ScriptedProvider{Turns: turns}
+
+	w, err := session.Create(filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-race.jsonl"),
+		session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	rec := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+	rec.onSwitch = func([]llm.Message, string) {
+		ui.hub.setHead(w.Head(), rewindCauseRewind) // the driver's wiring
+	}
+
+	model, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	st := &agent.State{Model: model, Tokens: tokens.New(model)}
+	ag := agent.New(st, agent.Options{
+		Provider:  func(llm.Model) (llm.Provider, error) { return prov, nil },
+		Sinks:     []agent.Sink{rec.rec.Sink(agent.NopSink{})},
+		Env:       agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnMessage: []func(agent.MessageInfo){rec.rec.Message},
+	})
+
+	fake := &fakeQueueUI{}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
+
+	pump := make(chan pumpLine, 4)
+	lane := rec.lane
+	send := func(line pumpLine) {
+		line.gen = lane.stamp()
+		pump <- line
+	}
+	console := &uiConsole{ui: ui, commands: command.NewRegistry()}
+	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
+	starts := newStartState(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), expander,
+		true, ui, starts, func() {}, q, lane, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+
+	// a seed exchange the rewinds fork away from, present in live state too
+	// the way a resumed session's rebuild leaves it
+	writeMessage(t, rec, "one")
+	writeMessage(t, rec, "reply one")
+	seedEntries := mustEntries(t, w)
+	seedState, _ := session.State(session.Branch(seedEntries, w.Head()), modelResolver(reg))
+	st.Messages = seedState.Messages
+
+	rig := &rewindRig{rec: rec, lane: lane, ag: ag, st: st, reg: reg, q: q,
+		pump: pump, send: send, prov: prov, ui: ui, log: log}
+	rec.busy = func() bool { return ag.Running() || q.drainLive() }
+	return rig
+}
+
+// branchTexts lists the current branch's user and assistant message texts, so
+// assertions can speak in prompt terms rather than entry ids.
+func branchTexts(t *testing.T, w *session.Writer) []string {
+	t.Helper()
+
+	entries, _, err := session.Read(w.Path())
+	require.NoError(t, err)
+	var out []string
+	for _, e := range session.Branch(entries, w.Head()) {
+		if e.Type != session.TypeMessage {
+			continue
+		}
+		var md session.MessageData
+		require.NoError(t, json.Unmarshal(e.Data, &md))
+		out = append(out, textOf(md.Message))
+	}
+	return out
+}
+
+// TestRewindHoldsLaneAgainstDispatch pins the closed swap-then-SetHead window:
+// while a rewind holds the state lane mid-transaction, a concurrent dispatch
+// cannot start a turn, and the line it tried to dispatch — queued against the
+// branch the rewind forked away from — comes back instead of landing.
+func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
+	t.Parallel()
+
+	rig := newRewindRig(t, 4)
+	entries := mustEntries(t, rig.rec.w)
+	branch := session.Branch(entries, rig.rec.w.Head())
+	target := branch[1].ID // the seed user prompt
+	before := rig.rec.w.Head()
+
+	// the busy hook is the deterministic stall: the rewind parks inside the
+	// lane at its refuse check until the test releases it
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	rig.rec.busy = func() bool {
+		once.Do(func() { close(entered) })
+		<-release
+		return false
+	}
+
+	rewound := make(chan struct{})
+	go func() {
+		defer close(rewound)
+		_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+	}()
+	<-entered // the lane is held mid-transaction, nothing has moved
+
+	rig.send(pumpLine{kind: command.KindPrompt, rest: "racing prompt"})
+	// the dispatch decision waits on the lane: no model request may leave, so
+	// no entry can append from the head the rewind is about to move
+	require.Never(t, func() bool { return len(rig.prov.Requests()) > 0 },
+		150*time.Millisecond, 10*time.Millisecond)
+
+	close(release)
+	<-rewound
+	assert.NotEqual(t, before, rig.rec.w.Head()) // the switch landed
+
+	// the rewind bumped the generation under the line's stamp, so the racing
+	// prompt recovers instead of running against the switched state. Rewinding
+	// onto the seed prompt drops it from context (it becomes the editor prefill)
+	require.Eventually(t, func() bool {
+		return len(rig.log.named(ctl.EventQueueDropped)) > 0
+	}, 5*time.Second, 5*time.Millisecond)
+	assert.Empty(t, rig.prov.Requests())
+	assert.Empty(t, branchTexts(t, rig.rec.w))
+
+	// a prompt queued after the rewind carries the fresh generation and runs
+	// as the new branch's own turn, appending from its head
+	rig.send(pumpLine{kind: command.KindPrompt, rest: "fresh after rewind"})
+	require.Eventually(t, func() bool { return len(rig.prov.Requests()) == 1 },
+		5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return slices.Contains(branchTexts(t, rig.rec.w), "fresh after rewind")
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+// TestRewindDispatchRaceKeepsBranch races a dispatched prompt against a rewind
+// over and over: whichever wins, the live state must keep describing exactly
+// the writer head's branch, the invariant a torn swap-then-SetHead window used
+// to break by appending from the old head while the head moved.
+func TestRewindDispatchRaceKeepsBranch(t *testing.T) {
+	t.Parallel()
+
+	const iterations = 16
+	rig := newRewindRig(t, iterations+4)
+	entries := mustEntries(t, rig.rec.w)
+	target := session.Branch(entries, rig.rec.w.Head())[1].ID
+
+	for i := 0; i < iterations; i++ {
+		rig.send(pumpLine{kind: command.KindPrompt, rest: "race " + strconv.Itoa(i)})
+		rewound := make(chan struct{})
+		go func() {
+			defer close(rewound)
+			_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+		}()
+		<-rewound
+
+		// settle: the drain exits and the pump holds no buffered line
+		require.Eventually(t, func() bool {
+			return !rig.q.drainLive() && len(rig.pump) == 0
+		}, 5*time.Second, 5*time.Millisecond, "iteration %d never settled", i)
+
+		entries := mustEntries(t, rig.rec.w)
+		rebuilt, _ := session.State(session.Branch(entries, rig.rec.w.Head()), modelResolver(rig.reg))
+		assert.Equal(t, rebuilt.Messages, rig.st.Messages,
+			"iteration %d: live state diverged from the head's branch", i)
+	}
+}
+
+// TestRewindCleanupRunsOnRestoreRefusal pins the transaction's cleanup ordering:
+// a model restore that hits a running turn returns early, and the queue clear
+// (with its recorded notice) must already have run, never leaving prompts
+// queued for the branch the rewind abandoned.
+func TestRewindCleanupRunsOnRestoreRefusal(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, _, _ := plainUI(t)
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-clean.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, err)
+	entries := readEntriesRewind(t, p)
+
+	fake := &fakeQueueUI{}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
+	q.hold(agent.Input{Text: "queued for the old branch", QueueIDs: []string{"row-9"}},
+		"queued for the old branch", 0)
+	require.Equal(t, 1, q.pending())
+
+	var discarded bool
+	ag, _, start, release := heldTurnAgent(t)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane(),
+		discardStaged: func() {
+			discarded = true
+			start() // land the turn between the head move and the model restore
+		},
+		clearQueued: q.clearForRewind}
+
+	_, err = r.rewindTo(wrapUI(t, ui), ag, reg, entries[1].ID, rewindCauseRewind)
+	require.ErrorIs(t, err, errTurnRunning) // the restore refused, cleanup behind it
+	release()
+
+	assert.True(t, discarded)
+	assert.Equal(t, 0, q.pending()) // the clear ran despite the refusal
+
+	after := readEntriesRewind(t, p)
+	noticed := bulk.SliceFilter(func(e session.Entry) bool { return e.Type == session.TypeNotice }, after)
+	require.Len(t, noticed, 1)
+	// the notice chains from the switched head, so it replays on the new branch
+	assert.Equal(t, entries[0].ID, noticed[0].ParentID)
+	var nd session.NoticeData
+	require.NoError(t, noticed[0].Decode(&nd))
+	assert.Contains(t, nd.Message, "queued for the old branch")
+	assert.Equal(t, noticed[0].ID, w.Head())
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.

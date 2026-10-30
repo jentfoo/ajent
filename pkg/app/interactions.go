@@ -136,6 +136,9 @@ type localDialogs interface {
 // when no local surface exists: dialogs then hold for a remote answer.
 type interactionBroker struct {
 	ui localDialogs
+	// root parents decision dialogs, so teardown settles them with the run.
+	// Assigned once the driver's app root exists; nil falls back to Background.
+	root context.Context
 
 	mu         sync.Mutex
 	nextID     uint64
@@ -460,6 +463,15 @@ func (b *interactionBroker) Ask(ctx context.Context, q tui.Question) (tui.Answer
 	return askResult(b.race(d, racer))
 }
 
+// dialogRoot is the parent decision dialogs root on, Background until the
+// driver assigns the app root.
+func (b *interactionBroker) dialogRoot() context.Context {
+	if b.root != nil {
+		return b.root
+	}
+	return context.Background()
+}
+
 // OpenDecision opens an approval dialog, brokered. A plain-render UI cannot
 // show one, so it reports ErrNoUI with no dialog opened; with no local surface
 // at all the dialog opens and holds for a remote answer.
@@ -471,10 +483,16 @@ func (b *interactionBroker) OpenDecision(req tui.DecisionRequest) (permit.Dialog
 		return nil, tui.ErrNoUI
 	}
 	// no caller context exists on this seam (permit.Dialog carries none), so the
-	// dialog roots its own cancelable one: begin mints the race context under the
-	// dialog lock and stores its cancel as the abandon the first settle runs
-	d := b.begin(context.Background(), dialogDecision, req.Prompt, req.Context,
+	// dialog roots the app's lifetime: begin mints the race context under the
+	// dialog lock and stores its cancel as the abandon the first settle runs,
+	// and the watcher below settles the dialog once that context ends, so a run
+	// with no local racer never leaves it open past teardown
+	d := b.begin(b.dialogRoot(), dialogDecision, req.Prompt, req.Context,
 		answerShapes{options: optionLabels(req.Options)})
+	go func() {
+		<-d.raceCtx.Done()
+		d.settle(interactionAnswer{Err: tui.ErrCancelled}) // no-op once anything won
+	}()
 	if b.ui != nil {
 		// the abandon cancel exists from begin, so a mode-cycle resolve racing
 		// this racer still cancels it

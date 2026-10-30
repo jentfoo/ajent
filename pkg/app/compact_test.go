@@ -132,6 +132,40 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 	return out
 }
 
+// TestCompactorSwapJoinsStateLane pins the append-then-swap section: it holds
+// the state lane like a rewind does, so neither can interleave its own swap
+// with the other's. Held, the checkpoint never records; released, it lands.
+func TestCompactorSwapJoinsStateLane(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream(fullSummary)},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+	c.rec.lane = newStateLane()
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+
+	// a rewind is mid-transaction: the swap section must wait behind it
+	c.rec.lane.lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.run(t.Context(), agent.CompactManual, "")
+		done <- err
+	}()
+
+	require.Never(t, func() bool { return len(compactionEntries(t, w)) > 0 },
+		150*time.Millisecond, 10*time.Millisecond,
+		"the checkpoint must not record while a rewind holds the lane")
+
+	c.rec.lane.unlock()
+	require.NoError(t, <-done)
+	assert.Len(t, compactionEntries(t, w), 1)
+	require.Len(t, st.Messages, 3) // the swap landed behind the checkpoint
+}
+
 func TestCompactorManualSingleTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{

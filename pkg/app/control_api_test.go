@@ -426,7 +426,7 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 	var once sync.Once
 	var drain drainWaiter
 	go runPump(ctx, pump, ag, console, stager, expander, true, rig.hub.ui,
-		newStartState(false), func() {}, q, gate, st, nil, &once, func() {}, planHooks{}, &drain)
+		newStartState(false), func() {}, q, nil, gate, st, nil, &once, func() {}, planHooks{}, &drain)
 }
 
 // TestControlInputSet pins input.set: the editor buffer takes the text on an

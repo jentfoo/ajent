@@ -372,6 +372,39 @@ func TestCheckSessionTarget(t *testing.T) {
 	})
 }
 
+// TestAbortRunning pins the interrupt's two targets: a running turn and the
+// drain's between-turns window. An idle queue with no turn stops nothing.
+func TestAbortRunning(t *testing.T) {
+	t.Parallel()
+
+	newQueue := func(fake *fakeQueueUI) *steerQueue {
+		waitReady, takeReady := stagePair(t)
+		return newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady, nil)
+	}
+	idleAgent := func() *agent.Agent {
+		return agent.New(&agent.State{Tokens: tokens.New(llm.Model{})}, agent.Options{})
+	}
+	stager := func() *command.Stager {
+		return command.NewStager(t.Context(), nil, agent.NopSink{})
+	}
+
+	t.Run("idle_stops_nothing", func(t *testing.T) {
+		q := newQueue(&fakeQueueUI{})
+		assert.False(t, abortRunning(idleAgent(), q, stager()))
+	})
+
+	t.Run("drain_live_stops_between_turns", func(t *testing.T) {
+		fake := &fakeQueueUI{}
+		q := newQueue(fake)
+		q.offer(agent.Input{Text: "running"}, "running", 0) // marks draining, like the pump
+		require.True(t, q.offer(agent.Input{Text: "queued"}, "queued", 0))
+
+		assert.True(t, abortRunning(idleAgent(), q, stager()))
+		assert.Equal(t, 0, q.pending())
+		assert.Equal(t, []string{"queued"}, fake.prepended)
+	})
+}
+
 func TestResolveSubAgentModel(t *testing.T) {
 	t.Parallel()
 

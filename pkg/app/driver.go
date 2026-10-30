@@ -67,6 +67,11 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		workspace: config.Cwd(), cwd: env.Cwd, acct: st.Tokens,
 	})
 
+	// one state lane serializes the transactions that swap or move the branch
+	// (rewind, fork, the compactor's append-then-swap) against turn dispatch,
+	// so a turn never starts against a state a swap is halfway through replacing
+	lane := newStateLane()
+
 	// every turn is recorded into the workspace transcript so double-Esc while idle
 	// can open the context-tree picker and rewind onto an earlier point.
 	var modelKey string
@@ -119,6 +124,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// so a socket that exists proves a signal will be caught.
 	appRoot, stopApp := context.WithCancel(context.Background())
 	defer stopApp()
+	// decision dialogs root here so teardown settles them with the run
+	dialogs.root = appRoot
 
 	quit := make(chan struct{})
 
@@ -179,6 +186,10 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 			}
 		}
 		ctlSrv = srv
+		if ctlSrv != nil {
+			// Close drains it before session.exit publishes
+			ctlSrv.lane = lane
+		}
 		if cerr != nil {
 			if serve {
 				return "", fmt.Errorf("control socket: %w", cerr)
@@ -572,10 +583,12 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		rec.discardStaged = stager.Discard
 	}
 	pump := make(chan pumpLine, 16)
-	// send queues a line for the pump. The pump is never closed: runPump exits via
-	// appRoot, so the arm drops the line once shutdown cancels it instead of blocking
-	// on a full channel no one drains.
+	// send queues a line for the pump, stamped with the dispatch generation so a
+	// rewind can age it out. The pump is never closed: runPump exits via appRoot,
+	// so the arm drops the line once shutdown cancels it instead of blocking on a
+	// full channel no one drains.
 	send := func(line pumpLine) {
+		line.gen = lane.stamp()
 		select {
 		case pump <- line:
 		case <-appRoot.Done():
@@ -615,7 +628,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// one /init is simply absent, like the plan workflow without a transcript.
 	ictl := newInitController(initDeps{
 		cwd: config.Cwd(), toolsReg: toolsReg, sink: sink, ag: ag,
-		notify: ui.Notify, agents: sag, watch: initSeen, pump: pump,
+		notify: ui.Notify, agents: sag, watch: initSeen, send: send,
 	})
 	hub.initCtl = ictl
 	if ictl != nil {
@@ -674,6 +687,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// first keypress. trySend backs remote submissions: the control lane refuses
 	// a full queue instead of parking on it.
 	trySend := func(line pumpLine) bool {
+		line.gen = lane.stamp()
 		select {
 		case pump <- line:
 			return true
@@ -694,16 +708,19 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// exists; a control request that races the wiring sees the unavailable
 	// error, never a partial rewind.
 	if rec != nil {
+		rec.lane = lane
+		// dispatched work the rewind must refuse against: a running turn, or a
+		// drain that owns the next one in the between-turns window
+		rec.busy = func() bool { return ag.Running() || q.drainLive() }
 		// queued prompts clear inside the rewind transaction: the drop event and
 		// the emptied rows publish in one queue critical section, so a prompt
 		// re-offered after the rewind keeps its fresh pending row. Only the
 		// notice entry records here.
 		rec.clearQueued = q.clearForRewind
-		var rewindMu sync.Mutex
 		rewindTo := func(head, cause string) (string, error) {
-			rewindMu.Lock()
-			defer rewindMu.Unlock()
 			if ctl != nil && ctl.Active() {
+				// the stop's restoring fork joins the lane itself, so it runs
+				// before this transaction claims it
 				ctl.Stop()
 			}
 			return rec.rewindTo(ui, ag, reg, head, cause)
@@ -760,7 +777,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	drain.wake = func() { send(pumpLine{wake: true}) }
 	go runPump(appRoot,
 		pump, ag, console, stager, expander, rec != nil, ui, starts,
-		settled, q, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
+		settled, q, lane, gate, st, editSinks, &seedToolsOnce, pushContext, hooks, &drain)
 
 	// an argv prompt is the user's own input, recalled like a typed line. It carries no
 	// editor escape, so Append sees the very text the transcript records and its secret
@@ -978,13 +995,17 @@ const (
 )
 
 // abortRunning stops a running turn Esc-style: queued prompts return to the
-// editor, the stream cancels, any staged shell beside it dies too. Reports
-// whether a turn ran so callers can fall through to other cancel targets.
+// editor, the stream cancels, any staged shell beside it dies too. The drain's
+// between-turns window counts as running: its staged-command wait must stop
+// and its queued prompts recover, or the prompts run as the turn Esc tried to
+// stop. Reports whether anything was stopped so callers can fall through to
+// other cancel targets.
 func abortRunning(ag *agent.Agent, q *steerQueue, stager *command.Stager) bool {
-	if !ag.Running() {
+	if !ag.Running() && (q == nil || !q.drainLive()) {
 		return false
 	}
 	q.abort()
+	q.cancelDrain() // release the drain's take() wait
 	ag.Interrupt()
 	if stager.Pending() {
 		stager.Cancel() // a staged shell runs beside the turn, stop it too

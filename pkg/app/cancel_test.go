@@ -465,6 +465,73 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 	}
 }
 
+// TestControlEscapeStopsDrainStagedWait pins the between-turns interrupt window:
+// with no turn mid-flight, the drain loop sits in take's staged-command wait
+// over a queued prompt. Esc must answer stopTurn, recover the prompt to the
+// editor, kill the staged shell and end the drain, never wait the command out
+// and never run the queued prompt as the turn the user tried to stop.
+func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		control tui.Control
+	}{
+		{"ctrl_c", tui.ControlInterrupt},
+		{"escape", tui.ControlEscape},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := newPumpTestUI(t)
+			// a second scripted turn exists so a broken interrupt would run the
+			// queued prompt, not just run out of script
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+				{Events: textTurn("first done")},
+				{Events: textTurn("queued ran")},
+			}}
+			ag, _ := scriptedAgent(p)
+
+			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "esc-staged"})
+			require.NoError(t, err)
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
+			fake := &fakeQueueUI{}
+			q := newSteerQueue(fake, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady, nil)
+
+			stager.Run("sleep 30", false) // output waits for the queued prompt's delivery
+			require.True(t, stager.Pending())
+			assert.False(t, ag.Running()) // the window this pins is between turns
+
+			// the drain runs the first prompt, then waits out the staged command
+			// inside take before delivering the queued one
+			q.offer(agent.Input{Text: "first"}, "first", 0) // marks draining, like the pump
+			require.True(t, q.offer(agent.Input{Text: "queued question"}, "queued question", 0))
+			starts := newStartState(false)
+			var drain drainWaiter
+			startDrain(t.Context(), wrapUI(t, ui), false, ag, q,
+				[]agent.Input{{Text: "first"}}, starts, planHooks{}, &drain)
+			require.Eventually(t, func() bool { return len(p.Requests()) == 1 },
+				5*time.Second, 5*time.Millisecond)
+
+			controls := make(chan tui.Control, 1)
+			quit := make(chan struct{})
+			hub := newTestHub(ui)
+			hub.ag = ag
+			hub.q = q
+			hub.stager = stager
+			go controlLoop(t.Context(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
+			controls <- tc.control
+
+			require.Eventually(t, func() bool { return q.pending() == 0 },
+				5*time.Second, 5*time.Millisecond, "the queued prompt must recover")
+			assert.False(t, drain.wait(5*time.Second)) // the drain ended, not stalled
+			assert.Equal(t, []string{"queued question"}, fake.prepended)
+			require.Eventually(t, func() bool { return !stager.Pending() },
+				5*time.Second, 5*time.Millisecond, "the staged shell must die")
+			assert.Len(t, p.Requests(), 1) // the recovered prompt never ran as a turn
+		})
+	}
+}
+
 // TestControlAbortKeepsStagedOutput pins a turn mid-tool with a finished `!`
 // run staged and a prompt queued mid-turn, then drives Esc: the abort recovers
 // the prompt to the editor while the staged output stays in the stager (never

@@ -404,6 +404,42 @@ func TestSteerQueue(t *testing.T) {
 		assert.Len(t, fake.lastQueued(), 1)
 	})
 
+	t.Run("cancel_drain_releases_wait", func(t *testing.T) {
+		// the armed cancel is what an interrupt between turns reaches: it ends
+		// the drain's staged-command wait, a disarm never disarms a newer drain,
+		// and no drain armed means a no-op
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady, nil)
+
+		released := make(chan struct{}, 2)
+		arm := func() (disarm func()) {
+			ctx, cancel := context.WithCancel(t.Context())
+			disarm = q.armDrain(cancel)
+			go func() {
+				<-ctx.Done()
+				released <- struct{}{}
+			}()
+			t.Cleanup(cancel)
+			return disarm
+		}
+
+		q.cancelDrain() // nothing armed: a no-op
+		select {
+		case <-released:
+			t.Fatal("cancel reached nothing")
+		default:
+		}
+
+		stale := arm()
+		fresh := arm() // a newer drain took the release over
+		stale()        // its exit must not drop what the newer drain armed
+		q.cancelDrain()
+		<-released
+
+		fresh()
+		assert.Nil(t, q.drainWait) // armed then disarmed: nothing left to release
+	})
+
 	t.Run("recall_pops_lifo", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var refreshes int // submit-bucket updates on each pop

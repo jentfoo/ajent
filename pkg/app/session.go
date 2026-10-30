@@ -46,6 +46,14 @@ type sessRec struct {
 	// hint is the transcript's root id, cached on first read and stable for the
 	// process lifetime.
 	hint string
+	// lane serializes the branch-swap transactions (rewind, fork, the
+	// compactor's append-then-swap) against turn dispatch. Nil runs them
+	// unserialized, for harnesses driving a single surface.
+	lane *stateLane
+	// busy reports dispatched-but-unsettled work a rewind must refuse against: a
+	// running turn or a drain that owns the next one between turns. Nil lets the
+	// agent's own running flag decide.
+	busy func() bool
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
 	// and @ reference ids stop describing what it replaced. cause names why the
 	// head moved, for the branch.changed event. Nil until main wires it.
@@ -681,7 +689,8 @@ var errTurnRunning = errors.New("a turn is running")
 // switchState points the writer and live agent state at head's branch, an empty
 // head starting a new root, firing the switch callbacks once both moved. cause
 // names the move for the branch.changed event. It reports errTurnRunning when a
-// turn claims the loop first, with nothing moved.
+// turn claims the loop first, with nothing moved. Callers hold the state lane
+// (rewindTo, forkTo), so the swap cannot interleave with another transaction.
 func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause, prefix string) error {
 	var rebuilt agent.State
 	if head != "" {
@@ -932,12 +941,23 @@ const (
 
 // rewindTo switches onto head's branch, the double-Esc operation minus its
 // picker: rebuild state, move the writer, keep the live model, discard staged
-// output meant for the branch left behind. An interactive run redraws to the
-// restored context; a serve run has nothing to redraw. It reports the new head
-// entry id. Notifications for mid-operation failures stay inside (they render
-// locally and reach observers as notice events); the returned error is the
-// caller's machine-readable copy.
+// output meant for the branch left behind. The whole transaction runs under the
+// state lane and refuses while dispatched work may still claim the loop, so a
+// dispatched prompt never appends from a head the rewind is moving. An
+// interactive run redraws to the restored context; a serve run has nothing to
+// redraw. It reports the new head entry id. Notifications for mid-operation
+// failures stay inside (they render locally and reach observers as notice
+// events); the returned error is the caller's machine-readable copy.
 func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause string) (string, error) {
+	r.lane.lock()
+	defer r.lane.unlock()
+
+	// guards revalidate at execution: a drain that owns turns (running or
+	// between them) will append under this rewind otherwise
+	if r.busy != nil && r.busy() {
+		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
+		return "", errTurnRunning
+	}
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
 		return "", err
@@ -969,20 +989,9 @@ func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, 
 	if r.discardStaged != nil {
 		r.discardStaged() // staged against the branch just left, not this one's to carry
 	}
-	// a turn claiming the loop here runs against the switched state, so the redraw
-	// below would wipe its live output: leave the screen to it
-	if err := r.restoreForkModel(ui, ag, reg, saveModel); err != nil {
-		// never force the saved model onto a running turn, name what was not kept instead
-		ui.Notify(fmt.Sprintf(
-			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
-			saveModel.Key()), tui.LevelWarn)
-		return newHead, err
-	}
-
-	// queued prompts clear with a recorded notice naming them, so resume
-	// replays the loss and editor history still recalls the texts. The local
-	// line rides NotifyLocal: controllers render the committed entry, so the
-	// same news must not also ride the ephemeral notice family
+	// cleanup for the branch just left runs before any step that can refuse:
+	// a model restore that hits a running turn must not leave prompts queued for
+	// the abandoned branch or staged output riding the new one
 	if r.clearQueued != nil {
 		if labels := r.clearQueued(); len(labels) > 0 {
 			if _, err := r.appendEntry(session.TypeNotice, session.NoticeData{
@@ -993,6 +1002,19 @@ func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, 
 			}
 			ui.NotifyLocal("queued prompts cleared by the rewind; up-arrow recalls them", tui.LevelWarn)
 		}
+	}
+	// buffered pump lines queued before this rewind age out: the pump returns
+	// them to the editor instead of landing them on the new branch
+	r.lane.bump()
+
+	// a turn claiming the loop here runs against the switched state, so the redraw
+	// below would wipe its live output: leave the screen to it
+	if err := r.restoreForkModel(ui, ag, reg, saveModel); err != nil {
+		// never force the saved model onto a running turn, name what was not kept instead
+		ui.Notify(fmt.Sprintf(
+			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
+			saveModel.Key()), tui.LevelWarn)
+		return newHead, err
 	}
 
 	// redraw to just the restored context, then drop the picked text into the

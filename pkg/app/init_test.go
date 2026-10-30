@@ -198,14 +198,20 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("submit_drops_after_shutdown", func(t *testing.T) {
 		h := newInitHarness(t)
-		for i := 0; i < cap(h.pump); i++ { // fill so a naive send would block forever
-			h.pump <- pumpLine{kind: command.KindCommand, rest: "filler"}
-		}
 		root, cancel := context.WithCancel(t.Context())
-		cancel()
+		cancel() // the run is over: the handoff must drop rather than block
+		h.ctl.deps.send = func(l pumpLine) {
+			if root.Err() != nil {
+				return // the driver's send drops once the app root is canceled
+			}
+			select {
+			case h.pump <- l:
+			case <-root.Done():
+			}
+		}
 
-		require.NotPanics(t, func() { h.ctl.submit(root, agent.Input{Text: "late result"}) })
-		assert.Len(t, h.pump, cap(h.pump)) // the late survey result never joined
+		require.NotPanics(t, func() { h.ctl.submit(agent.Input{Text: "late result"}) })
+		assert.Empty(t, h.pump) // the late survey result never joined
 	})
 
 	t.Run("nil_controller_never_aborts", func(t *testing.T) {
@@ -390,6 +396,8 @@ func newHoldManager(t *testing.T) *subagent.Manager {
 type initHarness struct {
 	ctl  *initController
 	pump chan pumpLine
+	// send hands lines to pump the way the driver's stamped sender would
+	send func(pumpLine)
 
 	// held blocks agent_poll until the test releases it, and polling closes once to
 	// announce that a survey really reached its spawn step.
@@ -430,6 +438,12 @@ func newInitHarness(t *testing.T) *initHarness {
 	require.NoError(t, err)
 
 	h := &initHarness{pump: make(chan pumpLine, 4), polling: make(chan struct{})}
+	h.send = func(l pumpLine) {
+		select {
+		case h.pump <- l:
+		default: // full: drop, the driver's own send drops on root cancel
+		}
+	}
 	reg.RegisterFrom(tools.SourceBuiltin, &initStub{name: "agent_start", run: func(context.Context, agent.ToolCall) agent.ToolResult {
 		return agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: "started"}},
@@ -461,7 +475,7 @@ func newInitHarness(t *testing.T) *initHarness {
 	}}, true)
 
 	h.ctl = newInitController(initDeps{
-		cwd: dir, toolsReg: reg, sink: agent.NopSink{}, pump: h.pump,
+		cwd: dir, toolsReg: reg, sink: agent.NopSink{}, send: h.send,
 		notify: func(msg string, _ tui.Level) {
 			h.mu.Lock()
 			h.msgs = append(h.msgs, msg)

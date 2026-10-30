@@ -218,6 +218,13 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		After:            res.After,
 		Reduce:           &res.Reduce,
 	}
+	// the append and the swap share the state lane: a rewind or fork can
+	// neither interleave its own swap between them nor move the head under
+	// the rebuild. Everything above (the summariser call included) stays off
+	// the lane, so a slow summary never blocks a rewind.
+	c.rec.lane.lock()
+	defer c.rec.lane.unlock()
+
 	if _, aerr := c.rec.appendEntry(session.TypeCompaction, cd); aerr != nil {
 		c.notify("compaction failed: recording the checkpoint: "+aerr.Error(), agent.LevelWarn)
 		return false, aerr

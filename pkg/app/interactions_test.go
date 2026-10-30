@@ -448,6 +448,40 @@ func TestBrokerDecisionPlainModeRefuses(t *testing.T) {
 	assert.ErrorIs(t, err, tui.ErrNoUI)
 }
 
+// TestBrokerDecisionRootCancelSettles pins the teardown parenting: a decision
+// dialog roots the app root, so a run with no local racer settles when the run
+// quits instead of holding open past shutdown.
+func TestBrokerDecisionRootCancelSettles(t *testing.T) {
+	t.Parallel()
+
+	root, cancel := context.WithCancel(t.Context())
+	b, log := newBroker(nil) // serve shape: nothing local to ask
+	b.root = root
+
+	d, err := b.OpenDecision(tui.DecisionRequest{
+		Prompt: "Allow?", Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
+	})
+	require.NoError(t, err)
+
+	settled := make(chan error, 1)
+	go func() {
+		_, werr := d.Wait(t.Context())
+		settled <- werr
+	}()
+
+	cancel() // teardown: the run quits with the dialog still open
+
+	select {
+	case werr := <-settled:
+		require.ErrorIs(t, werr, permit.ErrDenied) // cancelled reads as denial, never a hang
+	case <-time.After(5 * time.Second):
+		t.Fatal("the open decision never settled after root cancel")
+	}
+	require.Eventually(t, func() bool { return len(log.endsSeen()) == 1 },
+		2*time.Second, 5*time.Millisecond)
+	assert.True(t, log.endsSeen()[0].outcome.Cancelled)
+}
+
 func TestBrokerDecisionNoOptionsWaitsErrNoUI(t *testing.T) {
 	t.Parallel()
 
