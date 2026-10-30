@@ -6,6 +6,7 @@ import (
 	"slices"
 	"sync"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/tui"
 )
@@ -287,22 +288,22 @@ func (d *brokerDialog) wait(ctx context.Context) interactionAnswer {
 
 // race settles d from whichever arrives first: the local surface, a remote
 // resolve, or ctx ending. The abandon cancel was installed at begin from this
-// same parent, so a settle racing this call still cancels the local racer. A
-// local racer that cannot ask at all (ErrNoUI) leaves the dialog open for a
+// same parent, so a settle racing this call still cancels the local racer. The
+// racers run on the dialog's own context, not the caller's: the first settle
+// cancels it, so wait's cancel-settle path and the racers share one lifetime.
+// A local racer that cannot ask at all (ErrNoUI) leaves the dialog open for a
 // remote answer. It returns the winning answer.
-func (b *interactionBroker) race(ctx context.Context, d *brokerDialog, local func(context.Context) interactionAnswer) interactionAnswer {
+func (b *interactionBroker) race(d *brokerDialog, local func(context.Context) interactionAnswer) interactionAnswer {
 	if local != nil {
 		go func() {
-			a := local(ctx)
+			a := local(d.raceCtx)
 			if errors.Is(a.Err, tui.ErrNoUI) {
 				return // nobody local to ask: the dialog stays open for a remote answer
 			}
 			d.settle(a)
 		}()
 	}
-	// the dialog's own context, not the caller's: the first settle cancels it,
-	// so wait's cancel-settle path and the racers share one lifetime
-	return d.wait(d.raceCtx) //nolint:contextcheck // rooted at begin, cancelled by the first settle
+	return d.wait(d.raceCtx)
 }
 
 // Resolve answers an open dialog remotely. It reports an unknown id, or
@@ -340,6 +341,23 @@ func (b *interactionBroker) lookup(id uint64) (info interactionInfo, open, ended
 		Subject: d.subject, Shapes: d.shapes}, true, false
 }
 
+// opened lists every still-open dialog oldest first: the announcements a
+// snapshot carries, so a surface that attaches (or reattaches) mid-dialog sees
+// and can answer what currently holds the run.
+func (b *interactionBroker) opened() []interactionInfo {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ids := bulk.MapKeysSlice(b.open)
+	slices.Sort(ids)
+	out := make([]interactionInfo, 0, len(ids))
+	for _, id := range ids {
+		d := b.open[id]
+		out = append(out, interactionInfo{ID: d.id, Kind: d.kind, Prompt: d.prompt,
+			Subject: d.subject, Shapes: d.shapes})
+	}
+	return out
+}
+
 // holding reports the earliest still-open dialog, the one a local surface
 // renders first and therefore the one holding the editor. Callers naming what
 // owns the input read its Kind.
@@ -363,7 +381,7 @@ func (b *interactionBroker) Pick(ctx context.Context, prompt string, items []tui
 		local = func(ctx context.Context) (int, error) { return b.ui.PickContext(ctx, prompt, items, opts) }
 	}
 	d := b.begin(ctx, dialogPick, prompt, "", answerShapes{options: pickLabels(items)})
-	return choiceResult(b.race(ctx, d, indexRacer(local)))
+	return choiceResult(b.race(d, indexRacer(local)))
 }
 
 // MultiPick presents a filterable multi-select list, brokered.
@@ -374,7 +392,7 @@ func (b *interactionBroker) MultiPick(ctx context.Context, prompt string, items 
 	}
 	d := b.begin(ctx, dialogMultiPick, prompt, "",
 		answerShapes{options: pickLabels(items), multi: true})
-	a := b.race(ctx, d, multiRacer(local))
+	a := b.race(d, multiRacer(local))
 	return multiResult(a)
 }
 
@@ -385,7 +403,7 @@ func (b *interactionBroker) Select(ctx context.Context, prompt string, options [
 		local = func(ctx context.Context) (int, error) { return b.ui.SelectContext(ctx, prompt, options) }
 	}
 	d := b.begin(ctx, dialogSelect, prompt, "", answerShapes{options: optionLabels(options)})
-	return choiceResult(b.race(ctx, d, indexRacer(local)))
+	return choiceResult(b.race(d, indexRacer(local)))
 }
 
 // Confirm asks a yes or no question, brokered.
@@ -395,7 +413,7 @@ func (b *interactionBroker) Confirm(ctx context.Context, prompt string) (bool, e
 		local = func(ctx context.Context) (bool, error) { return b.ui.ConfirmContext(ctx, prompt) }
 	}
 	d := b.begin(ctx, dialogConfirm, prompt, "", answerShapes{options: []string{"Yes", "No"}})
-	a := b.race(ctx, d, boolRacer(local))
+	a := b.race(d, boolRacer(local))
 	if a.Err != nil || a.Declined {
 		_, err := choiceResult(a)
 		return false, err
@@ -424,7 +442,7 @@ func (b *interactionBroker) text(ctx context.Context, kind dialogKind, label, pl
 		}
 	}
 	d := b.begin(ctx, kind, label, "", answerShapes{text: true, secret: secret})
-	a := b.race(ctx, d, textRacer(local))
+	a := b.race(d, textRacer(local))
 	return textResult(a)
 }
 
@@ -439,7 +457,7 @@ func (b *interactionBroker) Ask(ctx context.Context, q tui.Question) (tui.Answer
 	}
 	d := b.begin(ctx, dialogAsk, q.Text, "",
 		answerShapes{options: optionLabels(q.Options), text: true, chat: true})
-	return askResult(b.race(ctx, d, racer))
+	return askResult(b.race(d, racer))
 }
 
 // OpenDecision opens an approval dialog, brokered. A plain-render UI cannot

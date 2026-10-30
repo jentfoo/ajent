@@ -121,14 +121,27 @@ ephemeral state atomically, so it can never describe two moments.
 **Committed versus ephemeral.** Two families share the number space. The committed family
 is entry appends and branch changes, and everything scrollback-visible renders from it plus
 transcript backfill, so dedupe by entry id is the only rule it needs. Echo has no wire
-concept at all: a prompt renders when its entry commits, never when it is submitted. No
-event outside that family may move a head. The ephemeral family is everything else
-(stream deltas, dialogs, queue rows, transient notices) and is governed by the watermark
-alone, never reconciled against the file.
+concept at all: a prompt renders when its entry commits, never when it is submitted, and
+a live append paints exactly what replay paints for the same entry, so one echo rule (kept
+beside replay in `pkg/session`) feeds both. No event outside that family may move a head.
+The ephemeral family is everything else (stream deltas, dialogs, queue rows, transient
+notices) and is governed by the watermark alone, never reconciled against the file — with
+one exception below.
+
+**Open dialogs are state, not paint.** A dialog holding the run cannot be an event a late
+arrival misses, so every snapshot lists the interactions still open, exactly as their
+pending events announced them. A controller that attaches mid-dialog learns what holds
+input and can answer it by id; a reconnecting one re-races locally what it still lists and
+cancels racers whose dialogs settled while it was away. Reconciliation stays the one
+watermark rule, by dialog id. Open dialogs ride the socket only: never the transcript
+(they are runtime state, not history) and never the discovery record (which stays static
+facts for pickers).
 
 **Reconnect is always a resnapshot.** There is no retained-window replay on the wire. A
 reconnecting controller snapshots again and renders only the difference against what it has
 already rendered, which removes the whole class of gaps a bounded replay buffer creates.
+The snapshot's open dialogs are part of that difference, so a dialog spanning a drop
+re-races instead of stranding the run on a dialog nobody attached can see.
 
 Delivery is fail-open and bounded. Each connection stages outbound lines behind its own
 queue, and a peer that stops reading loses its connection instead of stalling the turn
@@ -163,7 +176,10 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
 - **Parity is structural.** Events replay through the same sink mapping the host terminal
   applies to its own output, and committed history through transcript replay. State that
   would fight the host's stays local: editor drafts, prompt recall, and the pre-fill a
-  rewind computes from the branch it already read.
+  rewind computes from the branch it already read. Recall reads the same local stores the
+  host keyboard recalls from (`command-design.md`), keyed by hello's workspace: Ctrl+R
+  walks the workspace-wide store, arrows scope to this session's transcript. The served
+  run owns every write; an attached terminal only reads.
 - **The seat degrades honestly.** Attach claims the seat, or attaches as a named read-only
   viewer when another controller holds it. Detaching frees the seat by disconnection and
   never ends the served run, while `/exit` submitted from either side does.
@@ -223,10 +239,13 @@ prompts verbatim, so redaction covers the live surfaces only.
    order, so a snapshot and a live stream reconcile by one rule.
 4. Committed content is entry appends plus branch changes, reconciled by entry id alone.
    Everything else is ephemeral, governed by the watermark and never reconciled against the
-   file.
-5. Delivery is fail-open: a slow peer loses its connection, never the session's turn, and the
+   file, except open dialogs: they hold the run, so every snapshot lists them and every
+   surface re-races what it lists.
+5. A live append paints exactly what replay paints for the same entry: one echo rule,
+   defined beside replay, feeds committed history and live appends alike.
+6. Delivery is fail-open: a slow peer loses its connection, never the session's turn, and the
    exit event cannot be dropped.
-6. Bulk history comes from the transcript file, so only deltas cross the socket.
-7. Peer credentials admit same-user connections and nothing else.
-8. Sockets and their records are per instance and token-scoped. A process removes only paths
+7. Bulk history comes from the transcript file, so only deltas cross the socket.
+8. Peer credentials admit same-user connections and nothing else.
+9. Sockets and their records are per instance and token-scoped. A process removes only paths
    carrying its own token, and detached sharing never depends on the socket at all.

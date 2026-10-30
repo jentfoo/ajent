@@ -63,10 +63,8 @@ type attachView struct {
 	buf          []ctl.Event // events seen before backfill, applied against its watermark
 	redrawQueued bool        // a full repaint is already queued; another head move needs none
 
-	// promptsCache is the last good recall list, labeled with the head it was
-	// read at. prompts() is the only writer, off the actor, under mu.
-	promptsCache []session.Prompt
-	promptsHead  string
+	// promptsHead and promptsCache are gone: recall reads the same on-disk
+	// indexes the host keyboard uses, which cache by size and mtime themselves.
 }
 
 // setTranscript names the file bulk reads come from. Called once before the
@@ -205,7 +203,7 @@ func (v *attachView) backfill(ctx context.Context) error {
 		return err
 	}
 	done := make(chan error, 1)
-	v.send(func() { done <- v.applyBackfill(snap, branch, seq) }) //nolint:contextcheck // the view root is this goroutine's only context
+	v.send(func() { done <- v.applyBackfill(snap, branch, seq) })
 	select {
 	case err := <-done:
 		return err
@@ -259,6 +257,7 @@ func (v *attachView) applyBackfill(snap ctl.State, branch []session.Entry, water
 	}
 	v.reconcilePending(branch)
 	v.applySnapshot(snap)
+	v.reconcileDialogs(v.root, snap.Interactions)
 	v.streaming = snap.Running || snap.Spinning
 	return nil
 }
@@ -293,12 +292,11 @@ func (v *attachView) renderHistory(branch []session.Entry) {
 func (v *attachView) renderEntry(e session.Entry) {
 	switch e.Type {
 	case session.TypeMessage:
-		var md session.MessageData
-		if json.Unmarshal(e.Data, &md) != nil {
-			return
-		}
-		if md.Message.Role == llm.RoleUser && !md.Injected {
-			v.sink.UserPrompt(llm.FirstBlockText(md.Message.Content))
+		// the echo rule is Replay's: tool results fold under their tool headers
+		// (the stream's tool.result painted them) and injected context is its own
+		// block, so neither may echo as a prompt row
+		if text := session.EchoPrompt(e); text != "" {
+			v.sink.UserPrompt(text)
 		}
 	case session.TypeNotice:
 		var nd session.NoticeData
@@ -308,11 +306,35 @@ func (v *attachView) renderEntry(e session.Entry) {
 	}
 }
 
-// installRecall wires plain / and ctrl+r onto the terminal, sourcing both
-// from this session's recorded prompts: there is no local store.
+// installRecall wires plain ↑/↓ and ctrl+r onto the terminal over the same
+// local stores the host keyboard recalls from (command-design.md): search
+// walks the workspace-wide recall store keyed to the served run's workspace,
+// arrows scope to this session's own transcript. Read-only participation: the
+// served run appends, this terminal only recalls.
 func (v *attachView) installRecall() {
-	v.ui.SetHistorySearch(func() []tui.SearchItem { return searchItems(dedupePrompts(v.prompts())) })
-	v.ui.SetPromptHistory(func() []string { return session.PromptTexts(v.prompts()) })
+	search, arrows := v.recallSources()
+	v.ui.SetHistorySearch(search)
+	v.ui.SetPromptHistory(arrows)
+}
+
+// recallSources builds the ctrl+r and ↑/↓ providers from hello's own facts:
+// a nil search means no recall store was readable, so both gestures fall back
+// to editor history, and a missing transcript path lets arrows share that
+// fallback. Everything reads local files; nothing rides the socket.
+func (v *attachView) recallSources() (search func() []tui.SearchItem, arrows func() []string) {
+	hello := v.helloNow()
+	store, err := session.NewStore()
+	if err != nil {
+		return nil, nil
+	}
+	hist, _ := session.NewEditorHistory(store, hello.Workspace, secretPrefix)
+	idx := session.NewRecallIndex(store, hello.Workspace, secretPrefix, hist)
+	search = func() []tui.SearchItem { return searchItems(idx.Lines()) }
+	if hello.TranscriptPath != "" {
+		sess := session.NewTranscriptIndex(hello.TranscriptPath, secretPrefix)
+		arrows = func() []string { return session.PromptTexts(sess.Prompts()) }
+	}
+	return search, arrows
 }
 
 // applySnapshot paints the chrome a snapshot holds truth for.
@@ -505,7 +527,9 @@ func (v *attachView) apply(ev ctl.Event) {
 	case ctl.EventInteractionPending:
 		var d ctl.InteractionPendingData
 		if ev.Decode(&d) == nil {
-			v.beginInteraction(d)
+			// the racer must outlive the event that announced it, so it roots on
+			// the view, not any request context
+			v.beginInteraction(v.root, d)
 		}
 	case ctl.EventInteractionSettled:
 		var d ctl.InteractionSettledData
@@ -639,51 +663,6 @@ func (v *attachView) showOutcome(text string) {
 	})
 }
 
-// prompts returns the session's recorded user prompts, newest first: the recall
-// source for plain / and ctrl+r search. It reads the transcript file, caching
-// until the head moves so gestures never re-read an unchanged branch; a failed
-// read keeps the last good list.
-func (v *attachView) prompts() []session.Prompt {
-	v.mu.Lock()
-	cached, labeled := v.promptsCache, v.promptsHead
-	head := v.head
-	v.mu.Unlock()
-
-	if cached != nil && labeled == head {
-		return cached // the branch has not moved since this cache was read
-	}
-	branch, err := client.ReadBranch(v.transcript(), head)
-	if err != nil {
-		return cached
-	}
-	ps := branchPrompts(branch)
-	v.mu.Lock()
-	v.promptsCache, v.promptsHead = ps, head
-	v.mu.Unlock()
-	return ps
-}
-
-// branchPrompts extracts one transcript branch's recorded user prompts, newest
-// first, minus secret-prefixed lines.
-func branchPrompts(entries []session.Entry) []session.Prompt {
-	ps := session.PromptsOf(entries)
-	return bulk.SliceFilter(func(p session.Prompt) bool {
-		return !session.HasSecretPrefix(secretPrefix, p.Text)
-	}, ps)
-}
-
-// dedupePrompts keeps each text's newest occurrence; the list is newest first.
-func dedupePrompts(ps []session.Prompt) []session.Prompt {
-	seen := make(map[string]struct{}, len(ps))
-	return bulk.SliceFilter(func(p session.Prompt) bool {
-		if _, dup := seen[p.Text]; dup {
-			return false
-		}
-		seen[p.Text] = struct{}{}
-		return true
-	}, ps)
-}
-
 // applyStatus forwards one status-row change. Spinning is ignored: the turn
 // events driving the host's own spinner drive this view's through the sink.
 func (v *attachView) applyStatus(ev ctl.Event) {
@@ -780,11 +759,36 @@ func (v *attachView) setRunning(running bool) {
 
 // beginInteraction races a remote dialog against the local human: the first
 // answer wins on the session side, and a settled event cancels this racer. The
-// racer rides the view root, so teardown takes any still-open one with it.
-func (v *attachView) beginInteraction(d ctl.InteractionPendingData) {
-	ctx, cancel := context.WithCancel(v.root)
+// racer rides parent, the view root on live paths, so teardown takes any
+// still-open one with it rather than whichever request happened to announce
+// the dialog. Idempotent by id: a resnapshot re-listing a dialog already
+// racing here starts nothing new.
+func (v *attachView) beginInteraction(parent context.Context, d ctl.InteractionPendingData) {
+	if _, racing := v.dialogs[d.ID]; racing {
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
 	v.dialogs[d.ID] = cancel
 	go v.raceDialog(ctx, d)
+}
+
+// reconcileDialogs brings this surface's racers to the snapshot's open set:
+// dialogs still holding the run that no racer serves open locally, and
+// racers whose dialogs settled while this terminal was away cancel. The
+// watermark already dropped their events, so the socket's snapshot is the
+// only word on what still holds. parent seeds any racer it opens; live
+// paths pass the view root, never a request context, so a dialog never
+// dies with the resnapshot that re-announced it.
+func (v *attachView) reconcileDialogs(parent context.Context, list []ctl.InteractionPendingData) {
+	live := bulk.SliceToSetBy(func(d ctl.InteractionPendingData) uint64 { return d.ID }, list)
+	for id := range v.dialogs {
+		if _, open := live[id]; !open {
+			v.settleInteraction(id)
+		}
+	}
+	for _, d := range list {
+		v.beginInteraction(parent, d)
+	}
 }
 
 // raceDialog asks the local surface and resolves what it answered. A settled
@@ -800,7 +804,7 @@ func (v *attachView) raceDialog(ctx context.Context, d ctl.InteractionPendingDat
 	defer rcancel()
 	conn := v.connFor()
 	if conn == nil {
-		return // the socket dropped mid-dialog; reconnect re-announces it
+		return // the socket dropped mid-dialog; the reconnect's resnapshot re-races it
 	}
 	err := conn.Resolve(rctx, ans)
 	var wire *ctl.Error
@@ -887,7 +891,10 @@ func answerLocal(ctx context.Context, dl localDialogs, d ctl.InteractionPendingD
 		switch {
 		case ans.Declined:
 			return cancel()
-		case ans.Chat || (ans.Text != "" && len(opts) == 0):
+		case len(opts) == 0 || ans.Chat:
+			// a no-options ask is free text and an empty submit is a real (empty)
+			// answer, matching the host terminal; only announced options make an
+			// index meaningful
 			return ctl.ResolveParams{ID: d.ID, Text: &ans.Text, Chat: ans.Chat}, true
 		default:
 			return ctl.ResolveParams{ID: d.ID, Index: &ans.Index}, true

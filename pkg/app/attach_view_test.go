@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/session"
@@ -30,40 +32,60 @@ func TestAttachBackfillRendersHistory(t *testing.T) {
 		ctlWait, 5*time.Millisecond)
 }
 
-// TestAttachPrompts pins the recall source: the attached session's recorded
-// user prompts arrive newest first, injected context, assistant messages and
-// secret-prefixed lines never surface, and prompts submitted after attach join
-// the list once their entry.append moves the head.
-func TestAttachPrompts(t *testing.T) {
-	t.Run("from_file", func(t *testing.T) {
-		rig := newControlRig(t, func(rec *sessRec) {
-			writeMessage(t, rec, "first prompt")
-			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "secret: hunter2")})
-			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleAssistant, "an answer")})
-			rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "injected"), Injected: true})
-			writeMessage(t, rec, "second prompt")
-		})
-		a := newAttachRig(t, rig)
-
-		ps := a.view.prompts()
-		assert.Equal(t, []string{"second prompt", "first prompt"}, session.PromptTexts(ps))
+// TestAttachRecallSources pins the recall scopes against a session that an
+// earlier one came before: ctrl+r walks the workspace-wide recall store, so the
+// prior session's prompt surfaces beside the attached session's own while
+// injected context, assistant messages and secret-prefixed lines never do; and
+// plain arrows stay scoped to the attached transcript alone. Both follow
+// prompts the host records after attach through the files they read.
+func TestAttachRecallSources(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "attached session prompt")
 	})
 
-	t.Run("follow_head", func(t *testing.T) {
-		rig := newControlRig(t, func(rec *sessRec) {
-			writeMessage(t, rec, "before attach")
-		})
-		a := newAttachRig(t, rig)
+	// an earlier session in the same workspace recorded one prompt and one secret
+	prior, err := rig.rec.store.Create(config.Cwd(),
+		session.SessionData{Version: session.Version(), Workspace: config.Cwd()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = prior.Close() })
+	priorRec := &sessRec{rec: session.NewRecorder(prior)}
+	priorRec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "earlier session prompt")})
+	priorRec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "secret: hunter2")})
 
-		ps := a.view.prompts()
-		require.Len(t, ps, 1)
-		assert.Equal(t, "before attach", ps[0].Text)
+	// the attached transcript itself carries a second prompt, a reply and an
+	// injected row that must never surface on either gesture
+	writeMessage(t, rig.rec, "second prompt")
+	rig.rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleAssistant, "an answer")})
+	rig.rec.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "injected"), Injected: true})
 
-		writeMessage(t, rig.rec, "after attach")
-		require.Eventually(t, func() bool {
-			return len(a.view.prompts()) == 2
-		}, ctlWait, 5*time.Millisecond)
-	})
+	a := newAttachRig(t, rig)
+	search, arrows := a.view.recallSources()
+	require.NotNil(t, search)
+	require.NotNil(t, arrows)
+
+	texts := func(items []tui.SearchItem) []string {
+		out := make([]string, len(items))
+		for i, it := range items {
+			out[i] = it.Text
+		}
+		return out
+	}
+	st := texts(search()) // search spans sessions; secrets stay excluded at read time
+	assert.Contains(t, st, "earlier session prompt")
+	assert.Contains(t, st, "attached session prompt")
+	assert.NotContains(t, st, "secret: hunter2")
+	assert.NotContains(t, st, "injected")
+	assert.NotContains(t, st, "an answer")
+
+	at := arrows() // arrows read only the attached transcript, newest first
+	assert.Equal(t, []string{"second prompt", "attached session prompt"}, at)
+
+	// a later host-recorded prompt joins both through the files, no reattach
+	writeMessage(t, rig.rec, "later prompt")
+	require.Eventually(t, func() bool {
+		_, arr := a.view.recallSources()
+		return slices.Equal(arr(), []string{"later prompt", "second prompt", "attached session prompt"})
+	}, ctlWait, 5*time.Millisecond)
 }
 
 // TestAttachRunSearchesHistory pins the ctrl+r wiring end to end: an attached
@@ -185,6 +207,45 @@ func TestAttachViewStreams(t *testing.T) {
 	})
 }
 
+// TestAttachToolResultEntryNoEcho pins the live-echo parity rule: a committed
+// tool-result entry (user role, tool-result blocks only) is not a prompt, so
+// the attached terminal never paints the empty user row the host does not
+// show, whether a turn is streaming or at rest. A typed prompt still echoes.
+func TestAttachToolResultEntryNoEcho(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+	record := func(rec *sessRec) {
+		rec.rec.Message(agent.MessageInfo{
+			Message: llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.ToolResultBlock{CallID: "t1", ToolName: "bash",
+					Content: llm.BlockList{llm.TextBlock{Text: "denied by user"}}, IsError: true},
+			}},
+		})
+	}
+
+	t.Run("at_rest", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+		record(rig.rec)
+		writeMessage(t, rig.rec, "next prompt") // ordered after the entry under test
+
+		require.Eventually(t, func() bool { return strings.Contains(a.out(), "next prompt") },
+			ctlWait, 5*time.Millisecond)
+		assert.NotContains(t, a.out(), "❯ \n", "tool-result entry echoed as an empty prompt row")
+	})
+
+	t.Run("while_streaming", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+		rig.hub.publish(ctl.EventTurnStart, ctl.TurnStartData{})
+		record(rig.rec)
+		writeMessage(t, rig.rec, "steering line")
+
+		require.Eventually(t, func() bool { return strings.Contains(a.out(), "steering line") },
+			ctlWait, 5*time.Millisecond)
+		assert.NotContains(t, a.out(), "❯ \n", "tool-result entry echoed as an empty prompt row")
+	})
+}
+
 // TestAttachViewWatermarkDropsStaleEvents pins the connect-time rule: events
 // at or below the backfill watermark are superseded by what was just rendered.
 func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
@@ -238,15 +299,18 @@ func TestAttachRedrawKeepsLiveAppends(t *testing.T) {
 }
 
 // blockingPick is a local surface whose dialogs return only when their ctx
-// ends, standing in for a human mid-dialog.
+// ends, standing in for a human mid-dialog. cancelSeen, when non-nil, gets the
+// racer's context error at dismissal so tests can assert the dialog closed.
 type blockingPick struct {
-	mode tui.Mode
+	mode       tui.Mode
+	cancelSeen chan error
 }
 
 func (b *blockingPick) Mode() tui.Mode { return b.mode }
 
 func (b *blockingPick) PickContext(ctx context.Context, _ string, _ []tui.PickItem, _ tui.PickOptions) (int, error) {
 	<-ctx.Done()
+	b.reportCancel(ctx)
 	return 0, ctx.Err()
 }
 
@@ -256,7 +320,19 @@ func (b *blockingPick) MultiPickContext(_ context.Context, _ string, _ []tui.Pic
 
 func (b *blockingPick) SelectContext(ctx context.Context, _ string, _ []tui.Option) (int, error) {
 	<-ctx.Done()
+	b.reportCancel(ctx)
 	return 0, ctx.Err()
+}
+
+// reportCancel publishes the dismissal on cancelSeen without blocking.
+func (b *blockingPick) reportCancel(ctx context.Context) {
+	if b.cancelSeen == nil {
+		return
+	}
+	select {
+	case b.cancelSeen <- ctx.Err():
+	default:
+	}
 }
 
 func (b *blockingPick) ConfirmContext(ctx context.Context, _ string) (bool, error) {
@@ -328,6 +404,29 @@ func TestAttachAnswerLocal(t *testing.T) {
 			assert.True(t, params.Chat)
 		})
 
+		t.Run("empty_ask_answers_text", func(t *testing.T) {
+			// a no-options ask (the barrier's deny-reason prompt) answered with an
+			// empty submit must send text, never the index a refused answer leaves
+			// the dialog open behind
+			empty := &scriptedLocal{mode: tui.ModeAlt, asks: []tui.Answer{{Text: ""}}}
+			params, ok := answerLocal(t.Context(), empty,
+				ctl.InteractionPendingData{ID: 6, Kind: "ask", Prompt: "reason for denying"})
+			require.True(t, ok)
+			require.NotNil(t, params.Text)
+			assert.Empty(t, *params.Text)
+			assert.Nil(t, params.Index)
+		})
+
+		t.Run("optioned_ask_answers_index", func(t *testing.T) {
+			choosing := &scriptedLocal{mode: tui.ModeAlt, asks: []tui.Answer{{Index: 1}}}
+			params, ok := answerLocal(t.Context(), choosing,
+				ctl.InteractionPendingData{ID: 7, Kind: "ask", Prompt: "proceed?",
+					Options: []string{"yes", "no"}})
+			require.True(t, ok)
+			require.NotNil(t, params.Index)
+			assert.Equal(t, 1, *params.Index)
+		})
+
 		t.Run("secret_answers_hidden", func(t *testing.T) {
 			params, ok := answerLocal(t.Context(), local,
 				ctl.InteractionPendingData{ID: 5, Kind: "secret", Prompt: "key"})
@@ -363,6 +462,85 @@ func TestAttachAnswerLocal(t *testing.T) {
 	})
 }
 
+// TestAttachSnapshotCarriesOpenDialogs pins the resnapshot rule: dialogs are
+// runtime state that rides the socket's snapshot, so a controller attaching
+// mid-dialog races what holds the run, and a resnapshot cancels racers whose
+// dialogs settled while their terminal was away.
+func TestAttachSnapshotCarriesOpenDialogs(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+
+	t.Run("open_before_attach_races", func(t *testing.T) {
+		rig := newServeRig(t, nil) // no host surface: the dialog holds for a remote answer
+		answered := make(chan int, 1)
+		go func() { // an approval dialog the host terminal cannot answer
+			dlg, err := rig.broker.OpenDecision(tui.DecisionRequest{
+				Prompt: "allow?", Options: []tui.Option{{Label: "Yes"}, {Label: "No"}},
+			})
+			assert.NoError(t, err)
+			idx, werr := dlg.Wait(t.Context())
+			assert.NoError(t, werr)
+			answered <- idx
+		}()
+		require.Eventually(t, func() bool { return len(rig.broker.opened()) == 1 },
+			ctlWait, 5*time.Millisecond)
+
+		a := newAttachRig(t, rig) // attaches after the pending event, snapshot only
+
+		var ids []uint64
+		a.view.send(func() { // the snapshot's open dialog opened a local racer
+			for id := range a.view.dialogs {
+				ids = append(ids, id)
+			}
+		})
+		a.view.waitIdle()
+		require.Len(t, ids, 1, "open dialog did not race from the snapshot")
+
+		// the raced dialog answers over the socket; its settled event retires the racer
+		_, err := a.conn.ClaimSeat(t.Context(), "attach-test", false)
+		require.NoError(t, err)
+		i := 1
+		require.NoError(t, a.conn.Resolve(t.Context(), ctl.ResolveParams{ID: ids[0], Index: &i}))
+		assert.Equal(t, 1, <-answered)
+		require.Eventually(t, func() bool {
+			var racing bool
+			a.view.call(func() { _, racing = a.view.dialogs[ids[0]] })
+			return !racing
+		}, ctlWait, 5*time.Millisecond)
+	})
+
+	t.Run("settled_while_away_cancels", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+		parent, done := context.WithCancel(t.Context()) // a parent the resnapshot may seed racers from
+		t.Cleanup(done)
+		a.view.send(func() {
+			a.view.dialogs[9] = cancel           // a racer left over from a dropped connection
+			a.view.reconcileDialogs(parent, nil) // the resnapshot lists nothing open
+			_, racing := a.view.dialogs[9]
+			assert.False(t, racing, "racer outlived its dialog")
+			assert.ErrorIs(t, ctx.Err(), context.Canceled)
+		})
+		a.view.waitIdle()
+	})
+
+	t.Run("pending_twice_races_once", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		a := newAttachRig(t, rig)
+
+		a.view.send(func() {
+			d := ctl.InteractionPendingData{ID: 3, Kind: "input", Prompt: "name"}
+			a.view.beginInteraction(a.view.root, d)
+			a.view.beginInteraction(a.view.root, d) // a resnapshot re-listing the same dialog
+			assert.Len(t, a.view.dialogs, 1)
+			a.view.settleInteraction(3)
+		})
+		a.view.waitIdle()
+	})
+}
+
 // TestAttachSettledCancelsLocalRacer pins the race rule end to end: a settled
 // event ends the local dialog and no resolve leaves the process.
 func TestAttachSettledCancelsLocalRacer(t *testing.T) {
@@ -371,7 +549,7 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	a.view.send(func() { a.view.beginInteraction(ctl.InteractionPendingData{ID: 7}) })
+	a.view.send(func() { a.view.beginInteraction(a.view.root, ctl.InteractionPendingData{ID: 7}) })
 	a.view.send(func() { a.view.dialogs[7] = cancel }) // swap the racer for a controlled one
 
 	done := make(chan struct{})

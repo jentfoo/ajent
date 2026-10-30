@@ -14,6 +14,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
@@ -626,6 +627,24 @@ func TestControlResolve(t *testing.T) {
 			settled(t)
 		})
 
+		t.Run("empty_text_answers_optionless_ask", func(t *testing.T) {
+			// an empty submit is a real (empty) answer, like the host terminal: the
+			// deny-reason prompt closes instead of wedging both sessions
+			go func() {
+				r, _ := rig.broker.Ask(t.Context(), tui.Question{Text: "reason for denying"})
+				assert.False(t, r.Declined)
+			}()
+			ev := c.collect(ctl.EventInteractionPending, 1)[0]
+			var pd ctl.InteractionPendingData
+			require.NoError(t, ev.Decode(&pd))
+
+			rp := answer(t, map[string]any{"id": pd.ID, "text": ""})
+			require.Nil(t, rp.Error)
+			sd := settled(t)
+			assert.True(t, sd.Answered)
+			assert.Empty(t, sd.Text)
+		})
+
 		t.Run("wrong_shape_refused", func(t *testing.T) {
 			id := open(t, "input")
 			rp := answer(t, map[string]any{"id": id, "index": 0})
@@ -979,7 +998,7 @@ func TestControlState(t *testing.T) {
 
 		snap := rig.hub.Snapshot()
 		assert.Equal(t, snap.SessionID, st.Session.ID)
-		assert.Equal(t, "/repo", st.Workspace)
+		assert.Equal(t, config.Cwd(), st.Workspace)
 		assert.True(t, st.Idle)
 		assert.False(t, st.Running)
 		assert.Equal(t, []string{"next prompt"}, st.QueuedTexts)

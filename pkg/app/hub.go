@@ -90,6 +90,9 @@ type hubSnapshot struct {
 	QueuedTexts []string
 	Activity    []hubActivity
 	Status      tui.Status // the status row the local terminal renders
+	// Interactions lists every still-open dialog oldest first: state that holds
+	// the run, so a snapshot must carry it the way queue rows and activity do.
+	Interactions []interactionInfo
 }
 
 // hubDeps is what the driver can supply at hub construction. Objects built
@@ -619,6 +622,9 @@ func (h *sessionHub) SnapshotAt() (hubSnapshot, uint64) {
 	}
 	if h.barrier != nil {
 		snap.Permission = h.barrier.Mode().String()
+	}
+	if b := h.ui.dialogs; b != nil {
+		snap.Interactions = b.opened()
 	}
 	if h.tools != nil {
 		snap.Tools = toolSnapshot(h.tools)

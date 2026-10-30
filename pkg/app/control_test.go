@@ -67,7 +67,7 @@ func newControlRigUI(t *testing.T, pre func(rec *sessRec), term *tui.UI) *contro
 
 	broker := newInteractionBroker(term, nil, nil)
 	hub := newSessionHub(hubDeps{
-		ui: term, dialogs: broker, workspace: "/repo",
+		ui: term, dialogs: broker, workspace: config.Cwd(),
 		cwd: "/repo", acct: tokens.New(llm.Model{}),
 	})
 
@@ -513,7 +513,7 @@ func TestControlHelloAnnouncesIdentity(t *testing.T) {
 	h := c.hello()
 	assert.Equal(t, ctl.Protocol, h.Protocol)
 	assert.Equal(t, rig.hub.Snapshot().SessionID, h.Session.ID)
-	assert.Equal(t, "/repo", h.Workspace)
+	assert.Equal(t, config.Cwd(), h.Workspace) // the recall-store key a host keyboard would use
 	assert.Equal(t, "/repo", h.Cwd)
 	assert.True(t, h.Interactive)
 	assert.False(t, h.Serve)

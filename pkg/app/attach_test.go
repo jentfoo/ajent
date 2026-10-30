@@ -62,6 +62,7 @@ func newAttachRigTerm(t *testing.T, rig *controlRig, term *tui.UI, out func() st
 	root, stopRoot := context.WithCancel(t.Context())
 	t.Cleanup(stopRoot)
 	view := newAttachView(term, conn, root, hello.TranscriptPath)
+	view.setHello(hello) // RunAttach records the greeting too; recall keys off it
 	view.swapConn(conn)
 	a := &attachRig{rig: rig, conn: conn, view: view, out: out,
 		events: make(chan ctl.Event, 512)}

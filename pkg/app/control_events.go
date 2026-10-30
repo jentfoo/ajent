@@ -126,12 +126,7 @@ func (s *ctlStreamSink) TurnEnd(r agent.TurnResult) {
 // settled on End, so no client holds a dialog that never resolves.
 func controlDialogHooks(hub *sessionHub) (func(interactionInfo), func(uint64, interactionOutcome)) {
 	begin := func(info interactionInfo) {
-		hub.publish(ctl.EventInteractionPending, ctl.InteractionPendingData{
-			ID: info.ID, Kind: info.Kind.String(), Prompt: info.Prompt,
-			Subject: info.Subject, Options: info.Shapes.options,
-			Multi: info.Shapes.multi, Text: info.Shapes.text,
-			Secret: info.Shapes.secret, Chat: info.Shapes.chat,
-		})
+		hub.publish(ctl.EventInteractionPending, ctlInteraction(info))
 	}
 	end := func(id uint64, o interactionOutcome) {
 		hub.publish(ctl.EventInteractionSettled, ctl.InteractionSettledData{
@@ -140,6 +135,18 @@ func controlDialogHooks(hub *sessionHub) (func(interactionInfo), func(uint64, in
 		})
 	}
 	return begin, end
+}
+
+// ctlInteraction maps one dialog announcement onto its wire shape: the
+// pending event and the snapshot's interaction list share it exactly, so a
+// resnapshot says what a pending event would say.
+func ctlInteraction(info interactionInfo) ctl.InteractionPendingData {
+	return ctl.InteractionPendingData{
+		ID: info.ID, Kind: info.Kind.String(), Prompt: info.Prompt,
+		Subject: info.Subject, Options: info.Shapes.options,
+		Multi: info.Shapes.multi, Text: info.Shapes.text,
+		Secret: info.Shapes.secret, Chat: info.Shapes.chat,
+	}
 }
 
 // --- conversions from hub and session types onto the wire ---
@@ -167,6 +174,12 @@ func ctlStateFrom(s hubSnapshot) ctl.State {
 			Spinner:  s.Status.Spinner,
 			Segments: ctlSegments(s.Status.Segments),
 		},
+	}
+	if s.Interactions != nil {
+		st.Interactions = make([]ctl.InteractionPendingData, len(s.Interactions))
+		for i, info := range s.Interactions {
+			st.Interactions[i] = ctlInteraction(info)
+		}
 	}
 	if s.Tools != nil {
 		st.Tools = make([]ctl.ToolState, len(s.Tools))

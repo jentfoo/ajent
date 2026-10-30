@@ -237,6 +237,45 @@ func TestBrokerNoLocalHoldsForRemote(t *testing.T) {
 	assert.Equal(t, 1, ends[0].outcome.Index)
 }
 
+// a remote answer must cancel the local racer, or its menu stays open on the
+// host terminal: /model answered from an attach left the picker up there.
+func TestBrokerRemoteAnswerClosesLocal(t *testing.T) {
+	t.Parallel()
+
+	local := &blockingPick{cancelSeen: make(chan error, 1)}
+	b, log := newBroker(local)
+
+	picked := make(chan int, 1)
+	go func() {
+		i, err := b.Pick(t.Context(), "Model", []tui.PickItem{{Label: "a"}, {Label: "b"}}, tui.PickOptions{})
+		if err != nil {
+			picked <- -1
+			return
+		}
+		picked <- i
+	}()
+
+	require.Eventually(t, func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.open) == 1 // the local pick is up and holding for input
+	}, 2*time.Second, 5*time.Millisecond)
+
+	require.NoError(t, b.Resolve(firstOpenID(b), interactionAnswer{Index: 1}))
+	assert.Equal(t, 1, <-picked)
+
+	select {
+	case err := <-local.cancelSeen:
+		require.ErrorIs(t, err, context.Canceled) // the local dialog was dismissed
+	case <-time.After(2 * time.Second):
+		t.Fatal("remote answer did not cancel the open local pick")
+	}
+
+	require.Eventually(t, func() bool {
+		return len(log.endsSeen()) == 1
+	}, 2*time.Second, 5*time.Millisecond)
+}
+
 func TestBrokerFirstResolutionWins(t *testing.T) {
 	t.Parallel()
 

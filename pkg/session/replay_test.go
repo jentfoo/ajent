@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/agent"
@@ -306,4 +307,78 @@ func TestReplay(t *testing.T) {
 		Replay(branch, s, ReplayOptions{})
 		assert.Equal(t, []string{"start:real prompt", "user:real prompt", "turn_end"}, s.calls)
 	})
+}
+
+// TestEchoPrompt pins the live-echo rule against Replay's: only a typed prompt
+// echoes, tool-result carriers and injected context never do, and the text
+// matches what Replay draws for the same entry.
+func TestEchoPrompt(t *testing.T) {
+	t.Parallel()
+
+	prompt := msgUser("m1", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.TextBlock{Text: "one"},
+		llm.TextBlock{Text: "two"},
+	}})
+	cases := []struct {
+		name string
+		e    Entry
+		want string
+	}{
+		{"prompt_joins_text", prompt, "one two"},
+		{"tool_result_carrier", resultMessage("r1", "c1", "denied by user"), ""},
+		{"parallel_result_carrier", parallelBranch()[2], ""},
+		{"error_result_carrier", resultMessageErr("r2", "c1"), ""},
+		{"injected_context", injectedUser("i1", "User Ran: date"), ""},
+		{"replayed_injected", replayedUser("i2", "User Ran: date"), ""},
+		{"assistant_message", assistantText("a1", "answer"), ""},
+		{"notice_entry", noticeEntry("n1", NoticeData{Message: "careful"}), ""},
+		{"undecodable_data", Entry{ID: "x", Type: TypeMessage, Data: []byte("{")}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, EchoPrompt(tc.e))
+		})
+	}
+}
+
+// TestEchoPromptMatchesReplay pins the coupling between live rendering and
+// replay: for every entry of a branch carrying all message shapes, EchoPrompt
+// returns exactly the text Replay echoes as that entry's prompt, and nothing
+// for the entries Replay folds or draws as blocks. Replay may change how it
+// draws; this test is what forces the live echo rule to follow.
+func TestEchoPromptMatchesReplay(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		{ID: "s", Type: TypeSession},
+		msgUser("m1", llm.Text(llm.RoleUser, "first prompt")),
+		assistantToolCalls("a1", llm.ToolCallBlock{ID: "c1", Name: "bash"}),
+		resultMessage("r1", "c1", "ls out"),
+		msgUser("m2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.TextBlock{Text: "steering"},
+			llm.ToolResultBlock{CallID: "c2", Content: llm.BlockList{llm.TextBlock{Text: "kept"}}},
+		}}),
+		injectedUser("i1", "User Ran: date"),
+		replayedUser("i2", "User Ran: echo hi"),
+		msgUser("m3", llm.Text(llm.RoleUser, "last prompt")),
+		noticeEntry("n1", NoticeData{Message: "careful"}),
+	}
+
+	s := &replaySink{}
+	Replay(branch, s, ReplayOptions{})
+
+	var echoed []string
+	for _, e := range branch {
+		if text := EchoPrompt(e); text != "" {
+			echoed = append(echoed, text)
+		}
+	}
+	var replayed []string
+	for _, c := range s.calls {
+		if prompt, ok := strings.CutPrefix(c, "user:"); ok {
+			replayed = append(replayed, prompt)
+		}
+	}
+	assert.Equal(t, []string{"first prompt", "steering", "last prompt"}, replayed)
+	assert.Equal(t, replayed, echoed)
 }

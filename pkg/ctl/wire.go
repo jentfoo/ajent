@@ -367,25 +367,30 @@ type SeatLostData struct {
 }
 
 // State is the state.get result: one consistent read of everything a
-// controller polls.
+// controller polls. Interactions lists the dialogs still holding the run,
+// exactly the shape their pending events carry, so a controller connecting
+// mid-dialog learns what holds input and can answer it by id. Open dialogs
+// are runtime state: they ride the socket only, never the transcript or the
+// discovery record.
 type State struct {
-	Session     Session       `json:"session"`
-	Workspace   string        `json:"workspace"`
-	Cwd         string        `json:"cwd"`
-	Head        string        `json:"head"` // transcript head entry id, for branching a file read
-	Model       ModelState    `json:"model"`
-	Permission  string        `json:"permission"` // barrier mode name, "" when no gate exists
-	Tools       []ToolState   `json:"tools"`
-	Usage       UsageState    `json:"usage"`
-	Context     ContextData   `json:"context"`
-	Running     bool          `json:"running"`
-	Idle        bool          `json:"idle"`
-	Spinning    bool          `json:"spinning"`
-	Queued      int           `json:"queued"`
-	QueuedTexts []string      `json:"queuedTexts"`
-	Activity    []ActivityRow `json:"activity"`
-	Status      StatusRow     `json:"status"`
-	Seat        SeatState     `json:"seat"`
+	Session      Session                  `json:"session"`
+	Workspace    string                   `json:"workspace"`
+	Cwd          string                   `json:"cwd"`
+	Head         string                   `json:"head"` // transcript head entry id, for branching a file read
+	Model        ModelState               `json:"model"`
+	Permission   string                   `json:"permission"` // barrier mode name, "" when no gate exists
+	Tools        []ToolState              `json:"tools"`
+	Usage        UsageState               `json:"usage"`
+	Context      ContextData              `json:"context"`
+	Running      bool                     `json:"running"`
+	Idle         bool                     `json:"idle"`
+	Spinning     bool                     `json:"spinning"`
+	Queued       int                      `json:"queued"`
+	QueuedTexts  []string                 `json:"queuedTexts"`
+	Activity     []ActivityRow            `json:"activity"`
+	Status       StatusRow                `json:"status"`
+	Seat         SeatState                `json:"seat"`
+	Interactions []InteractionPendingData `json:"interactions,omitempty"` // open dialogs, oldest first
 }
 
 // SeatState reports the control seat: whether anyone holds it, who, and

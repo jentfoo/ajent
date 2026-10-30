@@ -165,6 +165,25 @@ func toolBody(tr llm.ToolResultBlock) string {
 	return sb.String()
 }
 
+// EchoPrompt returns the text a live surface echoes for one committed entry
+// as a user prompt, empty when the entry is not a prompt echo: tool-result
+// carriers fold under their tool headers and injected context replays as its
+// own block, exactly the branches Replay never echoes. The text matches
+// Replay's, joined blocks with an image placeholder per image.
+func EchoPrompt(e Entry) string {
+	if e.Type != TypeMessage {
+		return ""
+	}
+	var md MessageData
+	if err := e.Decode(&md); err != nil {
+		return ""
+	}
+	if md.Message.Role != llm.RoleUser || md.Injected || llm.OnlyToolResults(md.Message.Content) {
+		return ""
+	}
+	return userText(md.Message)
+}
+
 // userText extracts the plain text of a prompt message, with one image
 // placeholder appended per image block so a picture submitted with the prompt
 // is never silently invisible on resume.
