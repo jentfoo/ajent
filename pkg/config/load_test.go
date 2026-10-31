@@ -64,6 +64,22 @@ func TestLoad(t *testing.T) {
 		assert.Equal(t, "high", st.Reasoning.Level)
 	})
 
+	t.Run("partial_keymap_override_keeps_defaults", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+
+		// a project layer overriding only keymap.newline must not inherit a
+		// submit list from any default layer: the two arrays would then both
+		// name enter and collide at ParseKeymap
+		writeConfig(t, filepath.Join(ProjectDir(home), ConfigFileName), `{"ui":{"keymap":{"newline":["enter"]}}}`)
+
+		s, _, err := Load(Options{Workspace: home})
+		require.NoError(t, err)
+		km := s.Settings().UI.Keymap
+		assert.Empty(t, km.Submit)
+		assert.Equal(t, []string{"enter"}, km.Newline)
+	})
+
 	t.Run("missing_files_are_not_errors", func(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)

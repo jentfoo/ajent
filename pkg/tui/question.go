@@ -43,7 +43,7 @@ func (u *UI) Ask(ctx context.Context, q Question) (Answer, error) {
 	if closed { // never block when there is nobody to ask
 		return Answer{}, ErrNoUI
 	}
-	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1, completer: q.Completer}
+	st := &questionState{text: q.Text, options: slices.Clone(q.Options), chatIndex: -1, completer: q.Completer, keymap: u.keymap}
 	if len(st.options) > 0 && u.mode != ModePlain {
 		// plain mode has no row to type into, so there any non-numeric line is the reply
 		st.chatIndex = len(st.options)
@@ -77,6 +77,7 @@ type questionState struct {
 
 	completer Completer          // Tab completion for the reply, nil when none
 	comp      *completionOverlay // reply's Tab-driven listing, nil when closed
+	keymap    keymap             // resolves submit/newline keys, mirrors the prompt field
 }
 
 func (s *questionState) rows(t Theme, width, maxRows int) ([]string, int, int) {
@@ -227,8 +228,15 @@ func (s *questionState) key(k key) (bool, error) {
 	switch k.typ { // free text, mirrored from the input row's editing keys
 	case keyRune, keyPaste:
 		s.answer.Insert(flatInput(k.text))
-	case keyNewline: // Alt+Enter or Ctrl+J wraps onto a new line, Enter submits
-		s.answer.Insert("\n")
+	case keyNewline, keyEnter:
+		// the keymap decides which physical line-ending key submits and which
+		// inserts a newline, matching the prompt field
+		switch resolveKeyRole(s.keymap, k) {
+		case roleNewline:
+			s.answer.Insert("\n")
+		case roleSubmit:
+			return true, nil
+		}
 	case keyBackspace:
 		s.answer.Backspace()
 	case keyDelete:
@@ -260,8 +268,6 @@ func (s *questionState) key(k key) (bool, error) {
 	case keyTab:
 		s.tabComplete()
 		return false, nil
-	case keyEnter:
-		return true, nil
 	}
 	s.comp = nil // any other key drops a spent listing, as the prompt's does
 	return false, nil

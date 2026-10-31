@@ -1266,6 +1266,16 @@ The key table:
 | Shift+← | out-of-band `ControlModeCycleBack`, the same cycle one mode back with the same dialog re-evaluation |
 | PgUp / PgDn (inline) | page the multi-line buffer: PgUp moves toward the head, PgDn toward the tail, each snapping onto the boundary when within one page or already on its row. In alt they scroll committed output (`render.scroll`) |
 
+The submit and newline keys are configurable via `ui.keymap` (see
+config-design.md, "UI"). The decoder tags each line-ending key with a canonical
+physical name (`enter`, `ctrl+j`, `alt+enter`), and the editor resolves that name
+against the keymap to decide whether it submits or inserts a newline. The same
+resolution drives the prompt field and the free-text answer editor of a
+question, so a remapped `enter` is a newline in both. A confirm or option-select
+surface (an option list, the permission barrier, a search or completion overlay)
+still takes the decoded `enter` to accept, so remapping `enter` to a newline
+cannot strand a confirmation dialog.
+
 An **open completion menu** (`/` commands and command arguments) holds the
 keyboard until resolved. The top candidate is highlighted from the moment it
 opens, `↑`/`↓` cycle the highlight and mark the selection *moved*, and `Tab`

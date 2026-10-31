@@ -68,6 +68,11 @@ func Run(o RunOptions) int {
 		warnings = append(warnings, fmt.Sprintf("unknown ui.images %q, detecting instead", imagesName))
 		imagesName = ""
 	}
+	keymap, err := tui.ParseKeymap(set.Settings().UI.Keymap.Submit, set.Settings().UI.Keymap.Newline)
+	if err != nil {
+		warnings = append(warnings, err.Error()+", using defaults")
+		keymap = tui.Keymap{}
+	}
 	tools.SetImagesEnabled(!set.Settings().Images.Block)
 	tools.ApplyLimits(tools.LimitsFrom(set.Settings().Tools.Limits))
 
@@ -123,6 +128,7 @@ func Run(o RunOptions) int {
 		Model:      label,
 		ModelShort: short,
 		MaxTokens:  active.ContextWindow,
+		Keymap:     keymap,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)

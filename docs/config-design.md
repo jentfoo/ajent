@@ -226,6 +226,20 @@ defaults to detection, forcing the capability the way `ui.color` forces depth.
 Like `ui.render` it is read once before `tui.New` with no `/settings` row, and
 an unknown name falls back to detection (see tui-design.md, "Terminal images").
 
+`ui.keymap` names the keys that submit a prompt (`submit`) and those that insert
+a newline (`newline`). Each list is a set of tui keymap identifiers, and the
+lists are overrides only: a key the config names moves off its hard-coded
+default (`enter` submits, `ctrl+j` and `alt+enter` insert a newline), and a key
+the config never names keeps that default. The two lists merge per key, so a
+project can remap just `enter` to newline without repeating the rest, and a
+partial override never collides with a default binding. The keymap is applied
+when the editor resolves a line-ending key, so it affects the prompt field and
+the free-text answer editor of a question, never a confirm or option-select
+surface, which still takes `enter`. Like `ui.render` it is read once before
+`tui.New` and has no `/settings` row. An unknown key name or a key the user
+bound to both actions warns and falls back to the defaults at startup (see
+tui-design.md, "Keys").
+
 ### Images
 
 `images.block`, off by default, is the one image delivery key. It applies to the
