@@ -322,7 +322,7 @@ func holdForDialog(ctx context.Context, p Prompter, verdict <-chan Class) (<-cha
 // holds the prompter while the user types, then opens an approval dialog. In the
 // auto modes a concurrent classification can approve the call without a dialog.
 func (b *Barrier) Asker() tools.Asker {
-	return func(ctx context.Context, call agent.ToolCall, _ tools.Decision) tools.Decision {
+	return func(ctx context.Context, call agent.ToolCall) tools.Decision {
 		g := b.gateNow()
 		m := g.mode
 

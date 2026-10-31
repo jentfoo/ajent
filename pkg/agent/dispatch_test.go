@@ -155,71 +155,63 @@ func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3"}, ids) // call order preserved
 }
 
-func TestOnToolBatchSeesCallsInMessageOrder(t *testing.T) {
+// TestOnToolBatch pins batch delivery: the hook sees calls in message order
+// before anything launches, even against a provider whose parallel calls finish
+// streaming out of order (sub-agent id reservation reads this batch as message
+// order, so completion races upstream must not reorder it).
+func TestOnToolBatch(t *testing.T) {
 	t.Parallel()
 
-	stubs := map[string]*stubTool{
-		"a": {name: "a", result: "ra", parallel: true},
-		"b": {name: "b", result: "rb", parallel: true},
-		"c": {name: "c", result: "rc", parallel: true},
-	}
-	set := &mapSet{tools: map[string]Tool{"a": stubs["a"], "b": stubs["b"], "c": stubs["c"]}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: append(threeToolCalls(), doneEvent())},
-		{Events: textOnly("done")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
-	a.state.Model.Caps.ParallelTools = true
-
-	var batches [][]string
-	a.opts.OnToolBatch = func(_ context.Context, calls []ToolCall) {
-		for name, st := range stubs {
-			assert.Zero(t, st.callCount(), "%s ran before the hook saw the batch", name)
+	newAgent := func(events []llm.Event, hook func([]ToolCall)) *Agent {
+		stubs := map[string]*stubTool{
+			"a": {name: "a", result: "ra", parallel: true},
+			"b": {name: "b", result: "rb", parallel: true},
+			"c": {name: "c", result: "rc", parallel: true},
 		}
+		set := &mapSet{tools: map[string]Tool{"a": stubs["a"], "b": stubs["b"], "c": stubs["c"]}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: events},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		a.state.Model.Caps.ParallelTools = true
+		a.opts.OnToolBatch = func(_ context.Context, calls []ToolCall) {
+			for _, st := range stubs {
+				assert.Zero(t, st.callCount())
+			}
+			hook(calls)
+		}
+		return a
+	}
+
+	collect := func(calls []ToolCall) [][]string {
 		names := make([]string, len(calls))
 		for i, c := range calls {
 			names[i] = c.Name + ":" + c.ID
 		}
-		batches = append(batches, names)
+		return [][]string{names}
 	}
 
-	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
-	assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
-}
+	t.Run("sees_calls_in_message_order", func(t *testing.T) {
+		var batches [][]string
+		a := newAgent(append(threeToolCalls(), doneEvent()), func(calls []ToolCall) {
+			batches = append(batches, collect(calls)...)
+		})
 
-// TestOnToolBatchOrdersScrambledEnds pins the stream-order guarantee against a
-// provider whose parallel calls finish streaming out of order: sub-agent id
-// reservation reads this batch as message order, so completion races upstream
-// must not reorder it.
-func TestOnToolBatchOrdersScrambledEnds(t *testing.T) {
-	t.Parallel()
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches) // call order preserved
+	})
 
-	stubs := map[string]*stubTool{
-		"a": {name: "a", result: "ra", parallel: true},
-		"b": {name: "b", result: "rb", parallel: true},
-		"c": {name: "c", result: "rc", parallel: true},
-	}
-	set := &mapSet{tools: map[string]Tool{"a": stubs["a"], "b": stubs["b"], "c": stubs["c"]}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: append(threeToolCallsScrambled(), doneEvent())},
-		{Events: textOnly("done")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
-	a.state.Model.Caps.ParallelTools = true
+	t.Run("orders_scrambled_ends", func(t *testing.T) {
+		var batches [][]string
+		a := newAgent(append(threeToolCallsScrambled(), doneEvent()), func(calls []ToolCall) {
+			batches = append(batches, collect(calls)...)
+		})
 
-	var batches [][]string
-	a.opts.OnToolBatch = func(_ context.Context, calls []ToolCall) {
-		names := make([]string, len(calls))
-		for i, c := range calls {
-			names[i] = c.Name + ":" + c.ID
-		}
-		batches = append(batches, names)
-	}
-
-	require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
-	assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.Equal(t, [][]string{{"a:1", "b:2", "c:3"}}, batches)
+	})
 }
 
 // TestRunToolInterruptErrorFillsMarker asserts a tool that only propagates the
@@ -303,7 +295,7 @@ func TestDispatchAbortIgnoresToolContext(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return set.tools["a"].(*ignoreCtxTool).callCount() == 1 &&
 			set.tools["b"].(*ignoreCtxTool).callCount() == 1
-	}, defaultTimeout, pollInterval, "both tools must start before the interrupt")
+	}, defaultTimeout, pollInterval)
 
 	a.Interrupt()
 	close(block) // the tools ignore ctx, so only release lets dispatch return

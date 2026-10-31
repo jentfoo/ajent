@@ -715,8 +715,7 @@ func TestLoopFollowUpRunsAfterTurn(t *testing.T) {
 	go func() {
 		errCh <- a.Prompt(t.Context(), Input{Text: "one"})
 	}()
-	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval,
-		"turn one must be in flight before the follow-up is queued")
+	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
 	assert.True(t, a.FollowUp(Input{Text: "two"}))
 	close(block) // let turn one finish, the loop then drains the follow-up
@@ -743,8 +742,7 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "start"}) }()
-	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval,
-		"the turn must be in flight before steering is accepted")
+	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
 	assert.True(t, a.Steer(Input{Text: "steered!"}))
 	// an injected steer with an echo surfaces live (no submission echo) while the typed one stays silent
@@ -891,67 +889,63 @@ func TestSteerLeftoverSurvivesErroredTurn(t *testing.T) {
 	assert.Equal(t, []string{"first", "second", "note"}, userTexts(reqs[1].Messages))
 }
 
-// TestLoopHoldInterruptLandsNothing: an interrupt releasing AwaitInput ends the
-// turn before anything appends, so the held prompt never reaches state and no
-// delivery callback fires for the boundary that never streamed.
-func TestLoopHoldInterruptLandsNothing(t *testing.T) {
+// An interrupt releasing AwaitInput either lands nothing (the held prompt ends
+// before anything appends) or delivers input accepted while the hold was open.
+func TestLoopHoldInterrupt(t *testing.T) {
 	t.Parallel()
 
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("late")}}}
-	catch := &resultCatcher{}
-	a := newTestAgent(nil, p, catch)
-	a.opts.AwaitInput = func(context.Context) {
-		close(entered)
-		<-release
-	}
+	t.Run("lands_nothing", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("late")}}}
+		catch := &resultCatcher{}
+		a := newTestAgent(nil, p, catch)
+		a.opts.AwaitInput = func(context.Context) {
+			close(entered)
+			<-release
+		}
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
-	<-entered
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
+		<-entered
 
-	a.Interrupt()
-	close(release)
+		a.Interrupt()
+		close(release)
 
-	require.NoError(t, <-errCh) // an interrupted hold is a clean abort, not a failure
-	assert.Equal(t, llm.StopAborted, catch.result.Stop)
-	assert.Empty(t, p.Requests())
-	assert.Empty(t, a.state.Messages)
-}
+		require.NoError(t, <-errCh) // an interrupted hold is a clean abort, not a failure
+		assert.Equal(t, llm.StopAborted, catch.result.Stop)
+		assert.Empty(t, p.Requests())
+		assert.Empty(t, a.state.Messages)
+	})
 
-// TestLoopHoldInterruptDeliversAcceptedSteer: input accepted while a hold is
-// still open queues behind the abort, so the fresh turn it starts delivers it
-// rather than losing it.
-func TestLoopHoldInterruptDeliversAcceptedSteer(t *testing.T) {
-	t.Parallel()
+	t.Run("delivers_accepted_steer", func(t *testing.T) {
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("after")}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.AwaitInput = func(context.Context) {
+			// the follow-up turn the delivered steer starts holds too, but entered
+			// already fired for the aborted one
+			once.Do(func() { close(entered) })
+			<-release
+		}
 
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("after")}}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.AwaitInput = func(context.Context) {
-		// the follow-up turn the delivered steer starts holds too, but entered
-		// already fired for the aborted one
-		once.Do(func() { close(entered) })
-		<-release
-	}
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
+		<-entered
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "held"}) }()
-	<-entered
+		a.Interrupt() // drops what was queued, running stays true during the unwind
+		var delivered bool
+		require.True(t, a.Steer(Input{Text: "note", Delivered: func() { delivered = true }}))
+		close(release)
 
-	a.Interrupt() // drops what was queued, running stays true during the unwind
-	var delivered bool
-	require.True(t, a.Steer(Input{Text: "note", Delivered: func() { delivered = true }}))
-	close(release)
-
-	require.NoError(t, <-errCh)
-	assert.True(t, delivered)
-	reqs := p.Requests()
-	require.Len(t, reqs, 1)
-	assert.Equal(t, []string{"note"}, userTexts(reqs[0].Messages))
+		require.NoError(t, <-errCh)
+		assert.True(t, delivered)
+		reqs := p.Requests()
+		require.Len(t, reqs, 1)
+		assert.Equal(t, []string{"note"}, userTexts(reqs[0].Messages))
+	})
 }
 
 // TestLoopStepCompactInterruptAppendsNothing: a cancel during the step
@@ -1030,11 +1024,7 @@ func TestLoopAwaitInput(t *testing.T) {
 		_, errCh, entered := newAgent(p, true, release)
 
 		// the second model call must not be sent while AwaitInput is held
-		select {
-		case <-entered:
-		case <-time.After(defaultTimeout):
-			t.Fatal("AwaitInput never engaged at the boundary")
-		}
+		<-entered
 		assert.Len(t, p.Requests(), 1)
 
 		close(release)
@@ -1050,20 +1040,12 @@ func TestLoopAwaitInput(t *testing.T) {
 		release := make(chan struct{})
 		a, errCh, entered := newAgent(p, true, release)
 
-		select {
-		case <-entered:
-		case <-time.After(defaultTimeout):
-			t.Fatal("AwaitInput never engaged at the boundary")
-		}
+		<-entered
 		assert.Len(t, p.Requests(), 1)
 
 		a.Interrupt() // cancels the turn context, a held wait releases via ctx.Done
-		select {
-		case err := <-errCh:
-			require.NoError(t, err) // an interrupted hold is a clean abort, not a failure
-		case <-time.After(defaultTimeout):
-			t.Fatal("Prompt did not return after the interrupt")
-		}
+		err := <-errCh
+		require.NoError(t, err) // an interrupted hold is a clean abort, not a failure
 		assert.Len(t, p.Requests(), 1)
 	})
 }
@@ -1140,7 +1122,7 @@ func TestBuildRequest(t *testing.T) {
 	}
 	a := newTestAgent(st, nil, NopSink{})
 
-	t.Run("clamps_level_and_sets_output_cap", func(t *testing.T) {
+	t.Run("clamps_level_caps_output", func(t *testing.T) {
 		req := a.buildRequest()
 		assert.Equal(t, llm.LevelHigh, req.Reasoning.Level) // max clamps down to high
 		assert.Positive(t, req.MaxTokens)
@@ -1227,7 +1209,7 @@ func lastUserText(p *llm.ScriptedProvider) string {
 	return ""
 }
 
-func TestNormalizeInputAllRoutes(t *testing.T) {
+func TestNormalizeInput(t *testing.T) {
 	t.Parallel()
 
 	mark := func(in Input) Input {
@@ -1324,21 +1306,19 @@ func TestNormalizeInputAllRoutes(t *testing.T) {
 		require.NoError(t, <-errCh)
 		assert.Equal(t, "seen:hello", lastUserText(p))
 	})
-}
 
-func TestNormalizeInputPreparedSkips(t *testing.T) {
-	t.Parallel()
+	t.Run("prepared_skips", func(t *testing.T) {
+		mark := func(in Input) Input {
+			in.Text = "seen:" + in.Text
+			return in
+		}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.NormalizeInput = mark
 
-	mark := func(in Input) Input {
-		in.Text = "seen:" + in.Text
-		return in
-	}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.NormalizeInput = mark
-
-	require.NoError(t, a.Prompt(t.Context(), Input{Text: "hello", Prepared: true}))
-	assert.Equal(t, "hello", lastUserText(p))
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "hello", Prepared: true}))
+		assert.Equal(t, "hello", lastUserText(p))
+	})
 }
 
 // TestPromptBatch pins the per-input annotations that survive a batch submit:

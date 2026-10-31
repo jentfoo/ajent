@@ -302,53 +302,63 @@ func matchEvent(t *testing.T, evs []ctl.Event, name, want string) ctl.Event {
 // local answer raises one interaction.settled carrying the outcome, and secret
 // inputs never echo their text.
 func TestControlInteractionAnnouncements(t *testing.T) {
-	// not parallel: the rig pins AJENT_HOME
-	local := &scriptedLocal{mode: tui.ModeAlt, picks: []int{1}, inputs: []string{"sk-local-answer"}}
-	rig := newServeRig(t, local)
-	c := dialControl(t, rig.path)
-	c.hello()
+	t.Run("pick_dialog", func(t *testing.T) {
+		local := &scriptedLocal{mode: tui.ModeAlt, picks: []int{1}}
+		rig := newServeRig(t, local)
+		c := dialControl(t, rig.path)
+		c.hello()
 
-	// a pick dialog opens, the local racer answers it, and the outcome settles
-	picked := make(chan int, 1)
-	go func() {
-		i, perr := rig.broker.Pick(t.Context(), "pick one", []tui.PickItem{{Label: "a"}, {Label: "b"}}, tui.PickOptions{})
-		assert.NoError(t, perr)
-		picked <- i
-	}()
+		// a pick dialog opens, the local racer answers it, and the outcome settles
+		picked := make(chan int, 1)
+		go func() {
+			i, perr := rig.broker.Pick(t.Context(), "pick one", []tui.PickItem{{Label: "a"}, {Label: "b"}}, tui.PickOptions{})
+			assert.NoError(t, perr)
+			picked <- i
+		}()
 
-	pending := c.collect(ctl.EventInteractionPending, 1)[0]
-	var pd ctl.InteractionPendingData
-	require.NoError(t, pending.Decode(&pd))
-	assert.Equal(t, uint64(1), pd.ID)
-	assert.Equal(t, "pick", pd.Kind)
-	assert.Equal(t, "pick one", pd.Prompt)
-	assert.Equal(t, []string{"a", "b"}, pd.Options)
+		pending := c.collect(ctl.EventInteractionPending, 1)[0]
+		var pd ctl.InteractionPendingData
+		require.NoError(t, pending.Decode(&pd))
+		assert.Equal(t, uint64(1), pd.ID)
+		assert.Equal(t, "pick", pd.Kind)
+		assert.Equal(t, "pick one", pd.Prompt)
+		assert.Equal(t, []string{"a", "b"}, pd.Options)
 
-	assert.Equal(t, 1, <-picked) // the local answer won the race
-	settled := c.collect(ctl.EventInteractionSettled, 1)[0]
-	var sdd ctl.InteractionSettledData
-	require.NoError(t, settled.Decode(&sdd))
-	assert.Equal(t, pd.ID, sdd.ID)
-	assert.True(t, sdd.Answered)
-	assert.Equal(t, 1, sdd.Index)
+		assert.Equal(t, 1, <-picked) // the local answer won the race
+		settled := c.collect(ctl.EventInteractionSettled, 1)[0]
+		var sdd ctl.InteractionSettledData
+		require.NoError(t, settled.Decode(&sdd))
+		assert.Equal(t, pd.ID, sdd.ID)
+		assert.True(t, sdd.Answered)
+		assert.Equal(t, 1, sdd.Index)
+	})
 
 	// a secret input announces without its text; the local answer reaches its
 	// caller but never the settled outcome
-	secret := make(chan string, 1)
-	go func() {
-		ans, _ := rig.broker.InputSecret(t.Context(), "api key", "sk-...")
-		secret <- ans
-	}()
-	pending = c.collect(ctl.EventInteractionPending, 1)[0]
-	require.NoError(t, pending.Decode(&pd))
-	assert.Equal(t, "secret", pd.Kind)
-	assert.Equal(t, "api key", pd.Prompt)
-	assert.Equal(t, "sk-local-answer", <-secret)
+	t.Run("secret_input", func(t *testing.T) {
+		local := &scriptedLocal{mode: tui.ModeAlt, inputs: []string{"sk-local-answer"}}
+		rig := newServeRig(t, local)
+		c := dialControl(t, rig.path)
+		c.hello()
 
-	settled = c.collect(ctl.EventInteractionSettled, 1)[0]
-	require.NoError(t, settled.Decode(&sdd))
-	assert.True(t, sdd.Answered)
-	assert.Empty(t, sdd.Text) // the secret never echoes
+		secret := make(chan string, 1)
+		go func() {
+			ans, _ := rig.broker.InputSecret(t.Context(), "api key", "sk-...")
+			secret <- ans
+		}()
+		pending := c.collect(ctl.EventInteractionPending, 1)[0]
+		var pd ctl.InteractionPendingData
+		require.NoError(t, pending.Decode(&pd))
+		assert.Equal(t, "secret", pd.Kind)
+		assert.Equal(t, "api key", pd.Prompt)
+		assert.Equal(t, "sk-local-answer", <-secret)
+
+		settled := c.collect(ctl.EventInteractionSettled, 1)[0]
+		var sdd ctl.InteractionSettledData
+		require.NoError(t, settled.Decode(&sdd))
+		assert.True(t, sdd.Answered)
+		assert.Empty(t, sdd.Text) // the secret never echoes
+	})
 }
 
 // TestControlBarrierHoldsForRemote pins the serve-mode hold: with no local

@@ -1228,13 +1228,9 @@ func heldTurnAgent(t *testing.T) (*agent.Agent, *agent.State, func(), func()) {
 	start := func() {
 		began.Store(true)
 		go func() { errCh <- ag.Prompt(ctx, agent.Input{Text: "held"}) }()
-		select {
-		case <-bp.onCreate:
-		case <-time.After(5 * time.Second):
-			// start may run off the test goroutine (a switch hook), so no Fatal here
-			t.Error("the held turn never started")
-			return
-		}
+		// start may run off the test goroutine (a switch hook): a stall fails
+		// via the test timeout rather than t.Fatal on a foreign goroutine
+		<-bp.onCreate
 		assert.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
 	}
 	release := func() {
@@ -1678,12 +1674,11 @@ func TestRewindDispatchRaceKeepsBranch(t *testing.T) {
 		// settle: the drain exits and the pump holds no buffered line
 		require.Eventually(t, func() bool {
 			return !rig.q.drainLive() && len(rig.pump) == 0
-		}, 5*time.Second, 5*time.Millisecond, "iteration %d never settled", i)
+		}, 5*time.Second, 5*time.Millisecond)
 
 		entries := mustEntries(t, rig.rec.w)
 		rebuilt, _ := session.State(session.Branch(entries, rig.rec.w.Head()), modelResolver(rig.reg))
-		assert.Equal(t, rebuilt.Messages, rig.st.Messages,
-			"iteration %d: live state diverged from the head's branch", i)
+		assert.Equal(t, rebuilt.Messages, rig.st.Messages)
 	}
 }
 
@@ -1961,7 +1956,7 @@ func TestResumeSurfacesSnapshotWarnings(t *testing.T) {
 
 	st := &agent.State{Tokens: tokens.New(llm.Model{})}
 	_, warns := rec.restoreState(set, reg, st, nil)
-	assert.NotEmpty(t, warns, "the open-time parse must carry Read's per-line warnings")
+	assert.NotEmpty(t, warns)
 }
 
 func TestResumeSeesConcurrentAppend(t *testing.T) {
@@ -2227,4 +2222,47 @@ func TestRenameSettleYieldsToOlderRival(t *testing.T) {
 	eff, note = renameSettle(store, ws, "contested", mine2.Path(), rec2)
 	assert.Equal(t, "contested", eff)
 	assert.Contains(t, note, "ambiguous")
+}
+
+func TestCheckSessionTarget(t *testing.T) {
+	ws := t.TempDir()
+	t.Chdir(ws)
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	w, cerr := store.Create(ws, session.SessionData{Version: session.Version(), Name: "fix-parser"})
+	require.NoError(t, cerr)
+	id := w.Head()
+	require.NoError(t, w.Close())
+
+	t.Run("resume_by_name", func(t *testing.T) {
+		_, err := CheckSessionTarget(ResumeID, "fix-parser")
+		assert.NoError(t, err)
+	})
+
+	t.Run("resume_by_id", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeID, id)
+		assert.NoError(t, err)
+	})
+
+	t.Run("resume_unknown_fails", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeID, "no-such-session")
+		assert.Error(t, err)
+	})
+
+	t.Run("new_name_is_allowed", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, "brand-new")
+		assert.NoError(t, err)
+	})
+
+	t.Run("existing_name_is_allowed", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, "fix-parser")
+		assert.NoError(t, err)
+	})
+
+	t.Run("name_matching_id_fails", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, id)
+		assert.Error(t, err)
+	})
 }

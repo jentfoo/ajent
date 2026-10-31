@@ -162,7 +162,7 @@ func TestCompletionNotification(t *testing.T) {
 		assert.Empty(t, m.Boundary())
 	})
 
-	t.Run("deliver_idle_leaves_pending_and_flush_reoffers", func(t *testing.T) {
+	t.Run("idle_deliver_keeps_pending", func(t *testing.T) {
 		c := newCapture()
 		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("s1", llm.Usage{})}})
 		m := New(wired(t, Options{
@@ -294,7 +294,7 @@ func TestCompletionBatching(t *testing.T) {
 		ins := m.Boundary()
 		require.Len(t, ins, 1)
 		assert.Contains(t, ins[0].Text, id2)
-		assert.NotContains(t, ins[0].Text, id1, "a polled id must never be named")
+		assert.NotContains(t, ins[0].Text, id1)
 	})
 
 	// every result polled before the boundary: no input at all
@@ -458,7 +458,7 @@ func TestReserve(t *testing.T) {
 			want[id] = fmt.Sprintf("sub-%d", i+1)
 		}
 
-		for round := range 100 { // shuffled claim orders across many fresh managers
+		for range 100 { // shuffled claim orders across many fresh managers
 			m2 := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil }}))
 			t.Cleanup(m2.Close)
 			m2.Reserve(calls)
@@ -477,7 +477,7 @@ func TestReserve(t *testing.T) {
 				}(c)
 			}
 			wg.Wait()
-			assert.Equal(t, want, got, "round %d", round)
+			assert.Equal(t, want, got)
 		}
 	})
 
@@ -994,7 +994,7 @@ func TestActivityRow(t *testing.T) {
 				clears = append(clears, i)
 			}
 		}
-		require.Len(t, clears, 1, "the row is cleared once, at completion: %q", rows)
+		require.Len(t, clears, 1)
 		assert.Equal(t, len(rows)-1, clears[0])
 		for _, rank := range ranks { // every publish carries the job number as its rank
 			assert.Equal(t, 1, rank)
@@ -1103,7 +1103,7 @@ func TestStatusAgeIgnoresFinishedJobs(t *testing.T) {
 	defer mu.Unlock()
 	assert.Contains(t, last, "1 running")
 	assert.Contains(t, last, "1 done")
-	assert.NotContains(t, last, "(oldest 10m", "a finished job's age must not feed the note")
+	assert.NotContains(t, last, "(oldest 10m")
 }
 
 func TestStatusPublishesOnActivation(t *testing.T) {

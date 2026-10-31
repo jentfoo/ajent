@@ -264,12 +264,8 @@ func TestBrokerRemoteAnswerClosesLocal(t *testing.T) {
 	require.NoError(t, b.Resolve(firstOpenID(b), interactionAnswer{Index: 1}))
 	assert.Equal(t, 1, <-picked)
 
-	select {
-	case err := <-local.cancelSeen:
-		require.ErrorIs(t, err, context.Canceled) // the local dialog was dismissed
-	case <-time.After(2 * time.Second):
-		t.Fatal("remote answer did not cancel the open local pick")
-	}
+	err := <-local.cancelSeen
+	require.ErrorIs(t, err, context.Canceled) // the local dialog was dismissed
 
 	require.Eventually(t, func() bool {
 		return len(log.endsSeen()) == 1
@@ -368,58 +364,6 @@ func TestBrokerLocalErrNoUIStaysOpen(t *testing.T) {
 	require.NoError(t, <-resolved)
 }
 
-func TestBrokerDecisionRacesRemote(t *testing.T) {
-	t.Parallel()
-
-	local := &scriptedLocal{}
-	b, log := newBroker(local)
-
-	d, err := b.OpenDecision(tui.DecisionRequest{
-		Prompt:  "Allow bash?",
-		Context: "rm -rf /tmp/x",
-		Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
-	})
-	require.NoError(t, err)
-
-	require.Eventually(t, func() bool {
-		return len(log.beginsSeen()) == 1
-	}, 2*time.Second, 5*time.Millisecond)
-	begins := log.beginsSeen()
-	assert.Equal(t, dialogDecision, begins[0].Kind)
-	assert.Equal(t, "rm -rf /tmp/x", begins[0].Subject)
-
-	go d.Resolve(0)
-	idx, werr := d.Wait(t.Context())
-	require.NoError(t, werr)
-	assert.Equal(t, 0, idx)
-
-	d.Close() // resolved already: a no-op
-
-	require.Eventually(t, func() bool {
-		return len(log.endsSeen()) == 1
-	}, 2*time.Second, 5*time.Millisecond)
-	assert.True(t, log.endsSeen()[0].outcome.Answered)
-}
-
-func TestBrokerDecisionEscIsDenied(t *testing.T) {
-	t.Parallel()
-
-	b, _ := newBroker(nil)
-	d, err := b.OpenDecision(tui.DecisionRequest{
-		Prompt:  "Allow?",
-		Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
-	})
-	require.NoError(t, err)
-
-	settled := make(chan error, 1)
-	go func() {
-		settled <- b.Resolve(firstOpenID(b), interactionAnswer{Declined: true})
-	}()
-	require.NoError(t, <-settled)
-	_, werr := d.Wait(t.Context())
-	require.ErrorIs(t, werr, permit.ErrDenied)
-}
-
 // firstOpenID blocks until a dialog registers and returns its id.
 func firstOpenID(b *interactionBroker) uint64 {
 	for {
@@ -437,59 +381,99 @@ func firstOpenID(b *interactionBroker) uint64 {
 	}
 }
 
-func TestBrokerDecisionPlainModeRefuses(t *testing.T) {
-	t.Parallel()
+// TestBrokerOpenDecision pins the OpenDecision flow: a remote answer closes
+// the local pick, Esc is denied, plain mode refuses legibly, root cancel
+// settles as denial and an optionless interaction waits for ErrNoUI.
+func TestBrokerOpenDecision(t *testing.T) {
+	t.Run("races_remote", func(t *testing.T) {
+		local := &scriptedLocal{}
+		b, log := newBroker(local)
 
-	local := &scriptedLocal{mode: tui.ModePlain}
-	b, _ := newBroker(local)
-	_, err := b.OpenDecision(tui.DecisionRequest{
-		Prompt: "Allow?", Options: []tui.Option{{Label: "Allow"}},
+		d, err := b.OpenDecision(tui.DecisionRequest{
+			Prompt:  "Allow bash?",
+			Context: "rm -rf /tmp/x",
+			Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
+		})
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			return len(log.beginsSeen()) == 1
+		}, 2*time.Second, 5*time.Millisecond)
+		begins := log.beginsSeen()
+		assert.Equal(t, dialogDecision, begins[0].Kind)
+		assert.Equal(t, "rm -rf /tmp/x", begins[0].Subject)
+
+		go d.Resolve(0)
+		idx, werr := d.Wait(t.Context())
+		require.NoError(t, werr)
+		assert.Equal(t, 0, idx)
+
+		d.Close() // resolved already: a no-op
+
+		require.Eventually(t, func() bool {
+			return len(log.endsSeen()) == 1
+		}, 2*time.Second, 5*time.Millisecond)
+		assert.True(t, log.endsSeen()[0].outcome.Answered)
 	})
-	assert.ErrorIs(t, err, tui.ErrNoUI)
-}
 
-// TestBrokerDecisionRootCancelSettles pins the teardown parenting: a decision
-// dialog roots the app root, so a run with no local racer settles when the run
-// quits instead of holding open past shutdown.
-func TestBrokerDecisionRootCancelSettles(t *testing.T) {
-	t.Parallel()
+	t.Run("esc_is_denied", func(t *testing.T) {
+		b, _ := newBroker(nil)
+		d, err := b.OpenDecision(tui.DecisionRequest{
+			Prompt:  "Allow?",
+			Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
+		})
+		require.NoError(t, err)
 
-	root, cancel := context.WithCancel(t.Context())
-	b, log := newBroker(nil) // serve shape: nothing local to ask
-	b.root = root
-
-	d, err := b.OpenDecision(tui.DecisionRequest{
-		Prompt: "Allow?", Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
-	})
-	require.NoError(t, err)
-
-	settled := make(chan error, 1)
-	go func() {
+		settled := make(chan error, 1)
+		go func() {
+			settled <- b.Resolve(firstOpenID(b), interactionAnswer{Declined: true})
+		}()
+		require.NoError(t, <-settled)
 		_, werr := d.Wait(t.Context())
-		settled <- werr
-	}()
+		require.ErrorIs(t, werr, permit.ErrDenied)
+	})
 
-	cancel() // teardown: the run quits with the dialog still open
+	t.Run("plain_mode_refuses", func(t *testing.T) {
+		local := &scriptedLocal{mode: tui.ModePlain}
+		b, _ := newBroker(local)
+		_, err := b.OpenDecision(tui.DecisionRequest{
+			Prompt: "Allow?", Options: []tui.Option{{Label: "Allow"}},
+		})
+		assert.ErrorIs(t, err, tui.ErrNoUI)
+	})
 
-	select {
-	case werr := <-settled:
+	t.Run("root_cancel_settles", func(t *testing.T) {
+		root, cancel := context.WithCancel(t.Context())
+		b, log := newBroker(nil) // serve shape: nothing local to ask
+		b.root = root
+
+		d, err := b.OpenDecision(tui.DecisionRequest{
+			Prompt: "Allow?", Options: []tui.Option{{Label: "Allow"}, {Label: "Deny"}},
+		})
+		require.NoError(t, err)
+
+		settled := make(chan error, 1)
+		go func() {
+			_, werr := d.Wait(t.Context())
+			settled <- werr
+		}()
+
+		cancel() // teardown: the run quits with the dialog still open
+
+		werr := <-settled
 		require.ErrorIs(t, werr, permit.ErrDenied) // cancelled reads as denial, never a hang
-	case <-time.After(5 * time.Second):
-		t.Fatal("the open decision never settled after root cancel")
-	}
-	require.Eventually(t, func() bool { return len(log.endsSeen()) == 1 },
-		2*time.Second, 5*time.Millisecond)
-	assert.True(t, log.endsSeen()[0].outcome.Cancelled)
-}
+		require.Eventually(t, func() bool { return len(log.endsSeen()) == 1 },
+			2*time.Second, 5*time.Millisecond)
+		assert.True(t, log.endsSeen()[0].outcome.Cancelled)
+	})
 
-func TestBrokerDecisionNoOptionsWaitsErrNoUI(t *testing.T) {
-	t.Parallel()
-
-	b, _ := newBroker(nil)
-	d, err := b.OpenDecision(tui.DecisionRequest{Prompt: "Allow?", Options: nil})
-	require.NoError(t, err)
-	_, werr := d.Wait(t.Context())
-	assert.ErrorIs(t, werr, tui.ErrNoUI)
+	t.Run("no_options_waits_err_no_ui", func(t *testing.T) {
+		b, _ := newBroker(nil)
+		d, err := b.OpenDecision(tui.DecisionRequest{Prompt: "Allow?", Options: nil})
+		require.NoError(t, err)
+		_, werr := d.Wait(t.Context())
+		assert.ErrorIs(t, werr, tui.ErrNoUI)
+	})
 }
 
 func TestBrokerCancelledContextSettles(t *testing.T) {

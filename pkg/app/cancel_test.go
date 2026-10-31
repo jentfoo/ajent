@@ -166,12 +166,7 @@ func TestClassifierAdapterCancelClosesStream(t *testing.T) {
 	require.Eventually(t, func() bool { return bp.created.Load() >= 1 }, time.Second, time.Millisecond)
 	cancel()
 
-	var got clres
-	select {
-	case got = <-resCh:
-	case <-time.After(time.Second * 3):
-		t.Fatal("Classify did not return after cancellation")
-	}
+	got := <-resCh
 	assert.Equal(t, permit.ClassUnsure, got.c) // cancelled: never a partial "readonly" verdict
 
 	require.Eventually(t, func() bool {
@@ -269,11 +264,7 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 		prompter.mu.Unlock()
 		require.Eventually(t, func() bool { return bp.created.Load() >= createdBefore+1 }, time.Second, time.Millisecond)
 		d.Resolve(0) // "Allow"
-		select {
-		case <-done:
-		case <-time.After(time.Second * 3):
-			t.Fatal("the asker did not return after the dialog was answered")
-		}
+		<-done
 		return got
 	}
 
@@ -296,7 +287,7 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 
 // askCancel drives one barrier asker call and returns its decision.
 func askCancel(b *permit.Barrier, ctx context.Context, input string) tools.Decision {
-	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)}, tools.Decision{Action: tools.ActionAsk})
+	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)})
 }
 
 // TestControlInterruptCancelsStagedShell pins a turn mid-tool so ag.Running()
@@ -359,7 +350,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 
 			controls <- tc.control
 			require.Eventually(t, func() bool { return !stager.Pending() },
-				5*time.Second, time.Millisecond, "the staged shell must be cancelled")
+				5*time.Second, time.Millisecond)
 
 			// the cancelled command still stages its partial result, marked interrupted
 			msgs := stager.Flush(t.Context())
@@ -371,12 +362,8 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 
 			// the turn itself aborts cleanly
 			close(release)
-			select {
-			case err := <-errCh:
-				require.NoError(t, err)
-			case <-time.After(5 * time.Second):
-				t.Fatal("turn did not finish")
-			}
+			err = <-errCh
+			require.NoError(t, err)
 		})
 	}
 }
@@ -452,15 +439,11 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			controls <- tc.control
 
 			require.Eventually(t, func() bool { return !st.Tokens.Context().Estimated },
-				5*time.Second, time.Millisecond, "the dropped prompt's reserve must clear")
+				5*time.Second, time.Millisecond)
 			close(release)
 
-			select {
-			case err := <-errCh:
-				require.NoError(t, err) // a clean abort, not a failed turn
-			case <-time.After(5 * time.Second):
-				t.Fatal("turn did not finish")
-			}
+			err = <-errCh
+			require.NoError(t, err) // a clean abort, not a failed turn
 		})
 	}
 }
@@ -522,11 +505,11 @@ func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
 			controls <- tc.control
 
 			require.Eventually(t, func() bool { return q.pending() == 0 },
-				5*time.Second, 5*time.Millisecond, "the queued prompt must recover")
+				5*time.Second, 5*time.Millisecond)
 			assert.False(t, drain.wait(5*time.Second)) // the drain ended, not stalled
 			assert.Equal(t, []string{"queued question"}, fake.prepended)
 			require.Eventually(t, func() bool { return !stager.Pending() },
-				5*time.Second, 5*time.Millisecond, "the staged shell must die")
+				5*time.Second, 5*time.Millisecond)
 			assert.Len(t, p.Requests(), 1) // the recovered prompt never ran as a turn
 		})
 	}
@@ -610,10 +593,6 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	assert.Contains(t, msgs[0].Message.Content[0].(llm.TextBlock).Text, "User Ran: echo boom")
 
 	close(release) // the interrupted turn still unwinds cleanly
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("turn did not finish")
-	}
+	err = <-errCh
+	require.NoError(t, err)
 }

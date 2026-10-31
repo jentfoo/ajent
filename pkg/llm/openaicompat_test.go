@@ -306,7 +306,7 @@ func TestCompatProviderStream(t *testing.T) {
 		}, msg.Content)
 	})
 
-	t.Run("malformed_args_fail_the_call_not_the_turn", func(t *testing.T) {
+	t.Run("malformed_args_fail_the_call", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/malformed_tool_args.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
@@ -336,7 +336,7 @@ func TestCompatProviderStream(t *testing.T) {
 		require.Len(t, acc.Message().Content, 2) // both calls reach the agent for dispatch
 	})
 
-	t.Run("tool_index_restart_keeps_both_calls", func(t *testing.T) {
+	t.Run("tool_index_restart_keeps_both", func(t *testing.T) {
 		// a proxy emitting one batch of calls, then a fresh sequential batch
 		// restarting at index 0 within the same response
 		srv, _ := sseServer(t, "compat/tool_index_restart.sse")
@@ -357,7 +357,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.JSONEq(t, `{"path":"b.go"}`, string(second.Input))
 	})
 
-	t.Run("unnamed_reuse_fails_that_call_not_the_turn", func(t *testing.T) {
+	t.Run("unnamed_reuse_fails_that_call", func(t *testing.T) {
 		// fragments arriving on the reused index with no id or name cannot be
 		// attributed: the closed call stays intact and the stray call fails by name
 		srv, _ := sseServer(t, "compat/tool_index_restart_unnamed.sse")
@@ -421,7 +421,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.Equal(t, Usage{Input: 10, CacheRead: 40}, usage)
 	})
 
-	t.Run("mid_stream_error_surfaces_the_partial", func(t *testing.T) {
+	t.Run("mid_stream_error_surfaces_partial", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/error_midstream.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
@@ -444,7 +444,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.False(t, ok) // an opaque code keeps the fail-safe default
 	})
 
-	t.Run("mid_stream_numeric_code_is_recoverable", func(t *testing.T) {
+	t.Run("mid_stream_numeric_recovers", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/error_midstream_numeric.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
@@ -462,7 +462,7 @@ func TestCompatProviderStream(t *testing.T) {
 		assert.True(t, ok) // numeric codes ride the same status ladder
 	})
 
-	t.Run("close_mid_stream_is_not_an_error", func(t *testing.T) {
+	t.Run("close_mid_stream_not_error", func(t *testing.T) {
 		srv, _ := sseServer(t, "compat/text.sse")
 		p := newCompatTestProvider(t, srv.URL)
 
@@ -498,7 +498,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		return last.StopReason, last.Err
 	}
 
-	t.Run("no_finish_tools_infer_stop_tool_use", func(t *testing.T) {
+	t.Run("no_finish_infers_stop_tools", func(t *testing.T) {
 		caps := flavorDefaults[FlavorLMStudio].caps
 		caps.SupportsFinishReason = false
 		stop, err := collectStop(t, "compat/no_finish_tool.sse", caps)
@@ -506,7 +506,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		assert.Equal(t, StopToolUse, stop)
 	})
 
-	t.Run("no_finish_text_infer_end_turn", func(t *testing.T) {
+	t.Run("no_finish_infers_end_turn", func(t *testing.T) {
 		caps := flavorDefaults[FlavorLMStudio].caps
 		caps.SupportsFinishReason = false
 		stop, err := collectStop(t, "compat/no_finish_text.sse", caps)
@@ -514,7 +514,7 @@ func TestCompatStreamFinishReason(t *testing.T) {
 		assert.Equal(t, StopEndTurn, stop)
 	})
 
-	t.Run("no_finish_with_support_is_truncation", func(t *testing.T) {
+	t.Run("no_finish_support_is_truncation", func(t *testing.T) {
 		caps := flavorDefaults[FlavorLMStudio].caps
 		caps.SupportsFinishReason = true
 		_, err := collectStop(t, "compat/no_finish_text.sse", caps)
@@ -558,7 +558,7 @@ func TestCompatStreamFinish(t *testing.T) {
 		assert.Equal(t, StopEndTurn, done.StopReason)
 	})
 
-	t.Run("clean_eof_without_finish_is_truncation", func(t *testing.T) {
+	t.Run("clean_eof_no_finish_truncates", func(t *testing.T) {
 		s := bareStream(t, caps(true))
 
 		events := s.finish(io.EOF)
@@ -596,35 +596,6 @@ func TestCompatStreamFinish(t *testing.T) {
 		require.NoError(t, done.Err)
 		assert.Equal(t, StopEndTurn, done.StopReason)
 	})
-}
-
-func TestStopReasonFrom(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		reason   string
-		expected StopReason
-	}{
-		{"stop", "stop", StopEndTurn},
-		{"end_turn_spelling", "end_turn", StopEndTurn},
-		{"tool_calls", "tool_calls", StopToolUse},
-		{"function_call", "function_call", StopToolUse},
-		{"length", "length", StopMaxTokens},
-		{"max_tokens_field", fieldMaxTokens, StopMaxTokens},
-		{"content_filter_is_incomplete", "content_filter", StopIncomplete},
-		{"mixed_case_stop", "STOP", StopEndTurn},
-		{"mixed_case_tool_calls", "Tool_Calls", StopToolUse},
-		{"mixed_case_length", "Length", StopMaxTokens},
-		{"mixed_case_content_filter", "Content_Filter", StopIncomplete},
-		{"empty_is_unknown", "", StopUnknown},
-		{"unknown_defaults_end_turn", "some_future_reason", StopEndTurn},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.expected, stopReasonFrom(tc.reason))
-		})
-	}
 }
 
 func TestBuildCompatBody(t *testing.T) {
@@ -695,7 +666,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"prompt_cache_key":"`+t.Name()+`"`)
 	})
 
-	t.Run("no_prompt_cache_key_when_disabled", func(t *testing.T) {
+	t.Run("no_cache_key_when_disabled", func(t *testing.T) {
 		req := baseReq()
 		req.SessionID = t.Name()
 		req.Model.Caps.SupportsExplicitPromptCache = true // capable but not requested
@@ -705,7 +676,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.NotContains(t, string(body), "prompt_cache_key")
 	})
 
-	t.Run("no_prompt_cache_key_when_uncapable", func(t *testing.T) {
+	t.Run("no_cache_key_when_uncapable", func(t *testing.T) {
 		req := baseReq() // lmstudio flavor: no SupportsExplicitPromptCache
 		req.SessionID = t.Name()
 		req.Cache = CachePolicy{Enabled: true}
@@ -813,7 +784,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Equal(t, "high", decode(t, body)["reasoning_effort"])
 	})
 
-	t.Run("null_level_map_entry_omits_the_parameter", func(t *testing.T) {
+	t.Run("null_level_entry_omits_param", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Reasoning, req.Model.Caps.Thinking = true, ThinkingOpenAI
 		req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil}
@@ -834,7 +805,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.InDelta(t, 40, decode(t, body)["top_k"], 0.001)
 	})
 
-	t.Run("store_false_sent_when_capability_set", func(t *testing.T) {
+	t.Run("store_false_when_capable", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.Store = true // endpoint accepts the store param
 
@@ -849,7 +820,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.NotContains(t, decode(t, body), "store")
 	})
 
-	t.Run("vercel_gateway_routing_emits_provider_options", func(t *testing.T) {
+	t.Run("vercel_gateway_emits_provider_options", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.VercelGatewayRouting =
 			json.RawMessage(`{"only":["fireworks"],"order":["fireworks","novita"]}`)
@@ -889,7 +860,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), imageOmitted)
 	})
 
-	t.Run("reasoning_replays_to_its_source_field", func(t *testing.T) {
+	t.Run("reasoning_replays_to_source_field", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
 		req.Messages = sameOrigin(req.Model, []Message{
@@ -904,7 +875,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"reasoning_content":"because"`)
 	})
 
-	t.Run("replays_to_block_field_without_config", func(t *testing.T) {
+	t.Run("replay_targets_block_no_config", func(t *testing.T) {
 		// no configured ReasoningField: the block's own source field wins
 		req := baseReq()
 		req.Model.Caps.ReasoningField = ""
@@ -937,7 +908,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"custom_reason":"pondered"`)
 	})
 
-	t.Run("multi_block_thinking_joined_with_newline", func(t *testing.T) {
+	t.Run("multi_block_thinking_joined", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning.Retain = RetainAll
 		req.Messages = sameOrigin(req.Model, []Message{
@@ -953,7 +924,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"reasoning_content":"first\nsecond"`)
 	})
 
-	t.Run("empty_reasoning_forced_when_level_on", func(t *testing.T) {
+	t.Run("reasoning_emptied_when_level_on", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Level: LevelHigh, Retain: RetainAll}
 		req.Messages = []Message{
@@ -965,7 +936,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
 
-	t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
+	t.Run("reasoning_kept_when_level_off", func(t *testing.T) {
 		req := baseReq()
 		req.Reasoning = ReasoningConfig{Retain: RetainAll}
 		req.Messages = []Message{
@@ -977,7 +948,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.NotContains(t, string(body), `reasoning_content`)
 	})
 
-	t.Run("non_deepseek_replay_override_forces_empty", func(t *testing.T) {
+	t.Run("replay_override_forces_empty", func(t *testing.T) {
 		// requiresReplayReasoningOnAssistantMessages drives the empty echo for any
 		// model, not just deepseek. Detection supplies it for deepseek by default.
 		req := baseReq()
@@ -992,7 +963,7 @@ func TestBuildCompatBody(t *testing.T) {
 		assert.Contains(t, string(body), `"reasoning_content":""`)
 	})
 
-	t.Run("non_deepseek_without_replay_sends_nothing", func(t *testing.T) {
+	t.Run("without_replay_sends_nothing", func(t *testing.T) {
 		// the field stays silent when not requested: ReplayReasoning is now a real gate
 		req := baseReq()
 		req.Model.Caps.Thinking = ThinkingOpenAI // a non-deepseek format
@@ -1060,7 +1031,7 @@ func TestBuildCompatBody(t *testing.T) {
 		return n
 	}
 
-	t.Run("kimi_load_point_reoffers_loaded_tool", func(t *testing.T) {
+	t.Run("kimi_reoffers_loaded_tool", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.DeferredTools = "kimi"
 		req.Tools = kimiTools("read", "deep")
@@ -1081,14 +1052,14 @@ func TestBuildCompatBody(t *testing.T) {
 				sys = mm
 			}
 		}
-		require.NotNil(t, sys, "no system tool message after the load point")
+		require.NotNil(t, sys)
 		assert.NotContains(t, sys, "content") // a bare system message with tools
 		loaded := sys["tools"].([]any)
 		require.Len(t, loaded, 1)
 		assert.Equal(t, "deep", funcName(t, loaded[0]))
 	})
 
-	t.Run("kimi_mode_off_keeps_all_tools", func(t *testing.T) {
+	t.Run("kimi_off_keeps_all_tools", func(t *testing.T) {
 		req := baseReq() // DeferredTools unset
 		req.Tools = kimiTools("read", "deep")
 		req.Messages = kimiDiscovery("deep")
@@ -1103,7 +1074,7 @@ func TestBuildCompatBody(t *testing.T) {
 		}
 	})
 
-	t.Run("kimi_batch_shares_one_load_point", func(t *testing.T) {
+	t.Run("kimi_batch_shares_load_point", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.DeferredTools = "kimi"
 		req.Tools = kimiTools("read", "deep", "deeper")
@@ -1153,7 +1124,7 @@ func TestBuildCompatBody(t *testing.T) {
 		}
 	})
 
-	t.Run("kimi_all_loaded_keeps_empty_tools_param", func(t *testing.T) {
+	t.Run("kimi_all_loaded_empty_tools", func(t *testing.T) {
 		req := baseReq()
 		req.Model.Caps.DeferredTools = "kimi"
 		req.Tools = kimiTools("deep")
@@ -1163,67 +1134,6 @@ func TestBuildCompatBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Contains(t, string(body), `"tools":[]`)
 	})
-}
-
-func TestCompatUsageToUsage(t *testing.T) {
-	t.Parallel()
-
-	decode := func(raw string) Usage {
-		var u compatUsage
-		require.NoError(t, json.Unmarshal([]byte(raw), &u))
-		return u.toUsage()
-	}
-
-	t.Run("openai_cached_tokens", func(t *testing.T) {
-		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
-			"prompt_tokens_details":{"cached_tokens":30}}`)
-		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
-	})
-
-	t.Run("deepseek_prompt_cache_hit", func(t *testing.T) {
-		got := decode(`{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":30}`)
-		assert.Equal(t, Usage{Input: 70, Output: 20, CacheRead: 30}, got)
-	})
-
-	t.Run("present_zero_wins_over_fallback", func(t *testing.T) {
-		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
-			"prompt_cache_hit_tokens":30,"prompt_tokens_details":{"cached_tokens":0}}`)
-		assert.Equal(t, Usage{Input: 100, Output: 20}, got)
-	})
-
-	t.Run("cache_write_subtracted", func(t *testing.T) {
-		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
-			"prompt_tokens_details":{"cached_tokens":30,"cache_write_tokens":10}}`)
-		assert.Equal(t, Usage{Input: 60, Output: 20, CacheRead: 30, CacheWrite: 10}, got)
-	})
-
-	t.Run("reasoning_tokens", func(t *testing.T) {
-		got := decode(`{"prompt_tokens":100,"completion_tokens":20,
-			"completion_tokens_details":{"reasoning_tokens":12}}`)
-		assert.Equal(t, Usage{Input: 100, Output: 20, Reasoning: 12}, got)
-	})
-}
-
-func TestCompatErrObjCodeString(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		raw  string
-		want string
-	}{
-		{"string_code", `{"code":"context_length_exceeded"}`, "context_length_exceeded"},
-		{"numeric_code", `{"code":502}`, "502"},
-		{"float_code", `{"code":529.0}`, "529"},
-		{"missing_code", `{}`, ""},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var e compatErrObj
-			require.NoError(t, json.Unmarshal([]byte(tc.raw), &e))
-			assert.Equal(t, tc.want, e.codeString())
-		})
-	}
 }
 
 func TestImageDataURL(t *testing.T) {

@@ -90,146 +90,130 @@ func rigBranch(t *testing.T, rec *sessRec) []session.Entry {
 	return session.Branch(entries, rec.w.Head())
 }
 
-// TestAttachRewindPickerClosedByRemoteRewind pins the cancel hook the shared
-// picker arms: a branch.changed from the other surface closes this terminal's
-// open picker, so it never answers with a tree the head has left and no rewind
-// rides the stale choice.
-func TestAttachRewindPickerClosedByRemoteRewind(t *testing.T) {
-	rig := newControlRig(t, func(rec *sessRec) {
-		writeMessage(t, rec, "first prompt")
-		writeMessage(t, rec, "second prompt")
-	})
-	wireAttachRewind(t, rig)
+// TestAttachRewindPicker pins the shared picker over the attach surface: a
+// branch.changed from the other surface closes an open picker so no rewind rides
+// a stale choice, a picked prompt rewinds the remote session like a local one,
+// and abandoned forks stay listed with the editor pre-filled after the move.
+func TestAttachRewindPicker(t *testing.T) {
+	t.Run("closed_by_remote_rewind", func(t *testing.T) {
+		rig := newControlRig(t, func(rec *sessRec) {
+			writeMessage(t, rec, "first prompt")
+			writeMessage(t, rec, "second prompt")
+		})
+		wireAttachRewind(t, rig)
 
-	term, _, _ := pipeInputUI(t)
-	a := newAttachRigTerm(t, rig, term, func() string { return "" })
+		term, _, _ := pipeInputUI(t)
+		a := newAttachRigTerm(t, rig, term, func() string { return "" })
 
-	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
-	require.NoError(t, err)
+		_, err := a.conn.ClaimSeat(t.Context(), "test", false)
+		require.NoError(t, err)
 
-	before := rig.rec.w.Head()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		a.view.rewindPicker()
-	}()
-	require.Eventually(t, func() bool {
+		before := rig.rec.w.Head()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.view.rewindPicker()
+		}()
+		require.Eventually(t, func() bool {
+			a.view.mu.Lock()
+			defer a.view.mu.Unlock()
+			return a.view.pickStop != nil
+		}, ctlWait, 5*time.Millisecond)
+
+		// a rewind lands from the other surface: the head moves under the open picker
+		a.view.handle(ctl.NewEvent(ctl.EventBranchChanged, 20,
+			ctl.BranchChangedData{From: before, Head: before, Cause: rewindCauseRewind}))
+		<-done
+
 		a.view.mu.Lock()
-		defer a.view.mu.Unlock()
-		return a.view.pickStop != nil
-	}, ctlWait, 5*time.Millisecond, "picker never armed its cancel hook")
-
-	// a rewind lands from the other surface: the head moves under the open picker
-	a.view.handle(ctl.NewEvent(ctl.EventBranchChanged, 20,
-		ctl.BranchChangedData{From: before, Head: before, Cause: rewindCauseRewind}))
-	select {
-	case <-done:
-	case <-time.After(ctlWait):
-		t.Fatal("remote rewind did not close the open picker")
-	}
-
-	a.view.mu.Lock()
-	stopped := a.view.pickStop
-	a.view.mu.Unlock()
-	assert.Nil(t, stopped)                    // disarmed once the picker answered
-	assert.Equal(t, before, rig.rec.w.Head()) // nothing rode the stale choice
-}
-
-// TestAttachRewindPickerForksRemote pins the double-Esc flow over the file:
-// the picker reads this tree from the recorded transcript and a picked prompt
-// rewinds the remote session onto its parent, forked away like a local rewind.
-func TestAttachRewindPickerForksRemote(t *testing.T) {
-	rig := newControlRig(t, func(rec *sessRec) {
-		writeMessage(t, rec, "first prompt")
-		writeMessage(t, rec, "second prompt")
+		stopped := a.view.pickStop
+		a.view.mu.Unlock()
+		assert.Nil(t, stopped)                    // disarmed once the picker answered
+		assert.Equal(t, before, rig.rec.w.Head()) // nothing rode the stale choice
 	})
-	wireAttachRewind(t, rig)
 
-	term, feed, out := pipeInputUI(t)
-	a := newAttachRigTerm(t, rig, term, out)
+	// the double-Esc flow over the file: the picker reads this tree from the
+	// recorded transcript and a picked prompt rewinds the remote session onto its
+	// parent, forked away like a local rewind.
+	t.Run("forks_remote", func(t *testing.T) {
+		rig := newControlRig(t, func(rec *sessRec) {
+			writeMessage(t, rec, "first prompt")
+			writeMessage(t, rec, "second prompt")
+		})
+		wireAttachRewind(t, rig)
 
-	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
-	require.NoError(t, err)
+		term, feed, out := pipeInputUI(t)
+		a := newAttachRigTerm(t, rig, term, out)
 
-	branch := rigBranch(t, rig.rec)
-	rowID := branch[len(branch)-1].ID // the newest recorded prompt is pickable last
-	wantHead, fill, ok := session.RewindTarget(branch, rowID)
-	require.True(t, ok)
-	assert.Equal(t, "second prompt", fill)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		a.view.rewindPicker()
-	}()
-	feed("second\n") // the pick overlay reads one line as its filter in plain mode
-	select {
-	case <-done:
-	case <-time.After(ctlWait):
-		t.Fatal("rewind picker did not complete")
-	}
-	assert.Equal(t, wantHead, rig.rec.w.Head()) // the remote session forked onto it
-}
-
-// TestAttachRewindPickerShowsAbandonedFork pins whole-tree parity with a local
-// double-Esc: a fork recorded and then abandoned stays in the transcript file,
-// so the attach picker lists it shaded and rewinding onto it moves the remote
-// session off its current chain, pre-filling this editor like a local rewind.
-func TestAttachRewindPickerShowsAbandonedFork(t *testing.T) {
-	rig := newControlRig(t, func(rec *sessRec) {
-		writeMessage(t, rec, "first prompt")
-		writeMessage(t, rec, "second prompt")
-		entries, _, err := session.Read(rec.w.Path())
+		_, err := a.conn.ClaimSeat(t.Context(), "test", false)
 		require.NoError(t, err)
-		rec.w.SetHead(entries[0].ID) // fork at the root: what a rewind then re-prompt leaves
-		writeMessage(t, rec, "fork prompt")
-		main, _, err := session.Read(rec.w.Path())
+
+		branch := rigBranch(t, rig.rec)
+		rowID := branch[len(branch)-1].ID // the newest recorded prompt is pickable last
+		wantHead, fill, ok := session.RewindTarget(branch, rowID)
+		require.True(t, ok)
+		assert.Equal(t, "second prompt", fill)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.view.rewindPicker()
+		}()
+		feed("second\n") // the pick overlay reads one line as its filter in plain mode
+		<-done
+		assert.Equal(t, wantHead, rig.rec.w.Head()) // the remote session forked onto it
+	})
+
+	// whole-tree parity with a local double-Esc: a fork recorded and then
+	// abandoned stays in the transcript file, so the attach picker lists it shaded
+	// and rewinding onto it pre-fills this editor like a local rewind.
+	t.Run("shows_abandoned_fork", func(t *testing.T) {
+		rig := newControlRig(t, func(rec *sessRec) {
+			writeMessage(t, rec, "first prompt")
+			writeMessage(t, rec, "second prompt")
+			entries, _, err := session.Read(rec.w.Path())
+			require.NoError(t, err)
+			rec.w.SetHead(entries[0].ID) // fork at the root: what a rewind then re-prompt leaves
+			writeMessage(t, rec, "fork prompt")
+			main, _, err := session.Read(rec.w.Path())
+			require.NoError(t, err)
+			rec.w.SetHead(main[len(main)-2].ID) // back onto the first chain: the fork stays abandoned
+		})
+		wireAttachRewind(t, rig)
+
+		term, feed, out := ptyUI(t)
+		a := newAttachRigTerm(t, rig, term, out)
+
+		_, err := a.conn.ClaimSeat(t.Context(), "test", false)
 		require.NoError(t, err)
-		rec.w.SetHead(main[len(main)-2].ID) // back onto the first chain: the fork stays abandoned
+
+		entries, _, err := session.Read(rig.rec.w.Path())
+		require.NoError(t, err)
+		i := slices.IndexFunc(entries, func(e session.Entry) bool {
+			return session.EntryMessageText(e) == "fork prompt"
+		})
+		require.NotEqual(t, -1, i)
+		wantHead, _, ok := session.RewindTarget(entries, entries[i].ID)
+		require.True(t, ok)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			a.view.rewindPicker()
+		}()
+		// inline mode keys route live, so feed only once the overlay can take them
+		require.Eventually(t, func() bool { return strings.Contains(out(), "Rewind to") },
+			ctlWait, 5*time.Millisecond)
+		feed("fork\r") // the abandoned fork is only pickable if the whole tree was read
+		<-done
+		assert.Equal(t, wantHead, rig.rec.w.Head()) // the remote session forked onto it
+
+		// the pre-fill names the picked fork's text, not a sibling row's: rewinding
+		// onto either fork-side prompt lands on the same head, so only what the
+		// editor holds tells the right row was chosen
+		feed("\r")
+		assert.Equal(t, "fork prompt", <-term.Messages())
 	})
-	wireAttachRewind(t, rig)
-
-	term, feed, out := ptyUI(t)
-	a := newAttachRigTerm(t, rig, term, out)
-
-	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
-	require.NoError(t, err)
-
-	entries, _, err := session.Read(rig.rec.w.Path())
-	require.NoError(t, err)
-	i := slices.IndexFunc(entries, func(e session.Entry) bool {
-		return session.EntryMessageText(e) == "fork prompt"
-	})
-	require.NotEqual(t, -1, i, "fixture fork entry not found")
-	wantHead, _, ok := session.RewindTarget(entries, entries[i].ID)
-	require.True(t, ok)
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		a.view.rewindPicker()
-	}()
-	// inline mode keys route live, so feed only once the overlay can take them
-	require.Eventually(t, func() bool { return strings.Contains(out(), "Rewind to") },
-		ctlWait, 5*time.Millisecond)
-	feed("fork\r") // the abandoned fork is only pickable if the whole tree was read
-	select {
-	case <-done:
-	case <-time.After(ctlWait):
-		t.Fatal("rewind picker did not complete")
-	}
-	assert.Equal(t, wantHead, rig.rec.w.Head()) // the remote session forked onto it
-
-	// the pre-fill names the picked fork's text, not a sibling row's: rewinding
-	// onto either fork-side prompt lands on the same head, so only what the
-	// editor holds tells the right row was chosen
-	feed("\r")
-	select {
-	case line := <-term.Messages():
-		assert.Equal(t, "fork prompt", line)
-	case <-time.After(ctlWait):
-		t.Fatal("rewind did not pre-fill the editor")
-	}
 }
 
 // TestAttachRewindObserverRefused pins the refusal path: a rewind from a
@@ -273,12 +257,7 @@ func TestAttachRewindFillsEditor(t *testing.T) {
 		ctlWait, 5*time.Millisecond)
 	// ...and submitting proves what the buffer held
 	feed("\r")
-	select {
-	case line := <-term.Messages():
-		assert.Equal(t, "second prompt", line)
-	case <-time.After(ctlWait):
-		t.Fatal("rewind did not pre-fill the editor")
-	}
+	assert.Equal(t, "second prompt", <-term.Messages())
 }
 
 // TestAttachQueueRecallFillsEditor pins Alt+Up over the wire: the newest
@@ -309,12 +288,7 @@ func TestAttachQueueRecallFillsEditor(t *testing.T) {
 
 	// submitting proves what the buffer held: the edit resubmits from here
 	feed("\r")
-	select {
-	case line := <-term.Messages():
-		assert.Equal(t, "queued two", line)
-	case <-time.After(ctlWait):
-		t.Fatal("recall did not fill the editor")
-	}
+	assert.Equal(t, "queued two", <-term.Messages())
 }
 
 // TestAttachSubmitRefusedWithoutRouter pins the legible refusal: submitting to
@@ -332,61 +306,61 @@ func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {
 	assert.Equal(t, ctl.CodeUnavailable, wire.Code)
 }
 
-// TestAttachReconnectRefusesSubmits pins the offline rule: a line typed while
-// the state machine is between instances fails legibly inline with its text
-// kept in the editor, never held hostage by the retry.
-func TestAttachReconnectRefusesSubmits(t *testing.T) {
-	rig := newControlRig(t, nil)
-	term, feed, out := ptyUI(t)
-	a := newAttachRigTerm(t, rig, term, out)
+// TestAttachReconnect pins reconnectLoop's offline behavior: a line typed while
+// between instances fails legibly inline with its text kept in the editor, and
+// an offline stretch past the give-up window reports back so RunAttach can exit
+// with the distinct lost-session code instead of retrying forever.
+func TestAttachReconnect(t *testing.T) {
+	t.Run("refuses_submits", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		term, feed, out := ptyUI(t)
+		a := newAttachRigTerm(t, rig, term, out)
 
-	rig.srv.Close("test") // the registry went with it: nothing to follow
-	root, stopRoot := context.WithCancel(t.Context())
-	t.Cleanup(stopRoot)
-	quit := make(chan struct{})
+		rig.srv.Close("test") // the registry went with it: nothing to follow
+		root, stopRoot := context.WithCancel(t.Context())
+		t.Cleanup(stopRoot)
+		quit := make(chan struct{})
 
-	var ready, returned atomic.Bool
-	go func() {
-		r, _ := a.view.reconnectLoop(term, a.conn.Hello(), root, quit)
-		ready.Store(r)
-		returned.Store(true)
-	}()
+		var ready, returned atomic.Bool
+		go func() {
+			r, _ := a.view.reconnectLoop(term, a.conn.Hello(), root, quit)
+			ready.Store(r)
+			returned.Store(true)
+		}()
 
-	feed("held text\r") // the loop owes this line a legible inline refusal
-	require.Eventually(t, func() bool {
-		return strings.Contains(out(), "connection lost") &&
-			strings.Contains(out(), "not connected") &&
-			strings.Count(out(), "held text") >= 2 // typed once, restored to the editor
-	}, ctlWait, 5*time.Millisecond)
+		feed("held text\r") // the loop owes this line a legible inline refusal
+		require.Eventually(t, func() bool {
+			return strings.Contains(out(), "connection lost") &&
+				strings.Contains(out(), "not connected") &&
+				strings.Count(out(), "held text") >= 2 // typed once, restored to the editor
+		}, ctlWait, 5*time.Millisecond)
 
-	stopRoot()
-	require.Eventually(t, returned.Load, ctlWait, 5*time.Millisecond)
-	assert.False(t, ready.Load()) // the loop exited without a reconnect
-}
+		stopRoot()
+		require.Eventually(t, returned.Load, ctlWait, 5*time.Millisecond)
+		assert.False(t, ready.Load()) // the loop exited without a reconnect
+	})
 
-// TestReconnectGivesUpAfterWindow pins the loss exit path: an offline stretch
-// past the give-up window reports back, so RunAttach can exit with the distinct
-// lost-session code instead of retrying forever.
-func TestReconnectGivesUpAfterWindow(t *testing.T) {
-	rig := newControlRig(t, nil)
-	term, _, out := ptyUI(t)
-	a := newAttachRigTerm(t, rig, term, out)
+	t.Run("gives_up_after_window", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		term, _, out := ptyUI(t)
+		a := newAttachRigTerm(t, rig, term, out)
 
-	rig.srv.Close("test") // the registry went with it: nothing to follow
-	old := reconnectGiveUp
-	reconnectGiveUp = 25 * time.Millisecond
-	t.Cleanup(func() { reconnectGiveUp = old })
-	root, stopRoot := context.WithCancel(t.Context())
-	t.Cleanup(stopRoot)
-	quit := make(chan struct{})
+		rig.srv.Close("test") // the registry went with it: nothing to follow
+		old := reconnectGiveUp
+		reconnectGiveUp = 25 * time.Millisecond
+		t.Cleanup(func() { reconnectGiveUp = old })
+		root, stopRoot := context.WithCancel(t.Context())
+		t.Cleanup(stopRoot)
+		quit := make(chan struct{})
 
-	var gaveUp atomic.Bool
-	go func() {
-		_, gave := a.view.reconnectLoop(term, a.conn.Hello(), root, quit)
-		gaveUp.Store(gave)
-	}()
-	require.Eventually(t, gaveUp.Load, ctlWait, 5*time.Millisecond)
-	assert.True(t, gaveUp.Load())
+		var gaveUp atomic.Bool
+		go func() {
+			_, gave := a.view.reconnectLoop(term, a.conn.Hello(), root, quit)
+			gaveUp.Store(gave)
+		}()
+		require.Eventually(t, gaveUp.Load, ctlWait, 5*time.Millisecond)
+		assert.True(t, gaveUp.Load())
+	})
 }
 
 // captureStderr runs fn with os.Stderr swapped for a pipe, returning what it wrote.

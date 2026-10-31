@@ -319,7 +319,7 @@ func TestSteerQueue(t *testing.T) {
 		assert.Equal(t, []string{"typed", "typed two"}, fake.echoed)
 	})
 
-	t.Run("join_groups_controller_with_user_runs", func(t *testing.T) {
+	t.Run("controller_joins_user_run", func(t *testing.T) {
 		// a controller submit is a user line with an origin, never injected:
 		// it joins the same run its typed neighbours form, so grouping, echo
 		// and recall stay truthful

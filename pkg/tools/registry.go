@@ -663,7 +663,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 		if d.Action != ActionAsk {
 			return denied(d.Reason)
 		}
-		resolved := asker(ctx, c, d)
+		resolved := asker(ctx, c)
 		if resolved.Action != ActionAllow {
 			reason := resolved.Reason
 			if reason == "" { // ask treated as a denial carries the original reason

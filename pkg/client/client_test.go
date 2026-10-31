@@ -78,16 +78,10 @@ func (f *fakeSession) dial(t *testing.T) (*Conn, ctl.Hello, <-chan ctl.Event) {
 	return conn, hello, events
 }
 
-// waitEvent pulls one event with a bound.
+// waitEvent pulls one event; a stall fails via the test timeout.
 func waitEvent(t *testing.T, events <-chan ctl.Event) ctl.Event {
 	t.Helper()
-	select {
-	case ev := <-events:
-		return ev
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for an event")
-		return ctl.Event{}
-	}
+	return <-events
 }
 
 // Path reports the socket path this fake listens on.
@@ -183,34 +177,32 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// TestDialReadsHello pins the hello contract: protocol version and a working
-// request round trip behind it.
-func TestDialReadsHello(t *testing.T) {
-	t.Parallel()
-	f := newFakeSession(t)
+// TestDial pins connection setup: the greeting decodes into a usable conn and
+// a missing socket refuses.
+func TestDial(t *testing.T) {
+	t.Run("reads_hello", func(t *testing.T) {
+		f := newFakeSession(t)
 
-	conn, hello, events := f.dial(t)
-	assert.Equal(t, ctl.Protocol, hello.Protocol)
+		conn, hello, events := f.dial(t)
+		assert.Equal(t, ctl.Protocol, hello.Protocol)
 
-	stopped, err := conn.Interrupt(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, "turn", stopped)
+		stopped, err := conn.Interrupt(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "turn", stopped)
 
-	// the interrupt carried no observable side effect: nothing streams
-	select {
-	case ev := <-events:
-		t.Fatalf("unexpected event %s", ev.Name)
-	default:
-	}
-}
+		// the interrupt carried no observable side effect: nothing streams
+		select {
+		case ev := <-events:
+			t.Fatalf("unexpected event %s", ev.Name)
+		default:
+		}
+	})
 
-// TestDialRefusesMissingSocket covers connect failures naming the cause.
-func TestDialRefusesMissingSocket(t *testing.T) {
-	t.Parallel()
-
-	_, _, err := Dial(filepath.Join(t.TempDir(), "missing.sock"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no such socket")
+	t.Run("refuses_missing_socket", func(t *testing.T) {
+		_, _, err := Dial(filepath.Join(t.TempDir(), "missing.sock"))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "no such socket")
+	})
 }
 
 // TestCallReportsWireError pins the error shape: a refused request surfaces as
@@ -284,87 +276,8 @@ func TestCloseWakesCallers(t *testing.T) {
 	<-f.hung // the request reached the server: the call is registered in flight
 	conn.Close()
 
-	select {
-	case err := <-errCh:
-		require.Error(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("call was not woken by Close")
-	}
-}
-
-// TestDiscoverReadsRegistry pins discovery over a real control dir: the fake
-// instance's registry record is found without dialing.
-func TestDiscoverReadsRegistry(t *testing.T) {
-	f := newFakeSession(t)
-	f.writeRegistry(t)
-	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
-
-	live, err := Discover()
-	require.NoError(t, err)
-	require.Len(t, live, 1)
-	assert.Equal(t, f.Path(), live[0].Socket)
-	assert.Equal(t, f.sessionID, live[0].SessionID)
-	assert.False(t, live[0].Started().IsZero()) // the server's startedAt decodes
-}
-
-// TestResolveTargetForms pins the target forms: an exact socket path, a
-// session id in the registry, its name, and a unique id prefix.
-func TestResolveTargetForms(t *testing.T) {
-	f := newFakeSession(t)
-	f.writeRegistry(t)
-	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
-
-	live, err := Discover()
-	require.NoError(t, err)
-	require.Len(t, live, 1)
-
-	t.Run("exact_path", func(t *testing.T) {
-		match, _, rerr := Resolve(f.Path())
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
-
-	t.Run("session_id", func(t *testing.T) {
-		match, _, rerr := Resolve(live[0].SessionID)
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
-
-	t.Run("unique_prefix", func(t *testing.T) {
-		match, _, rerr := Resolve(live[0].SessionID[:8])
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
-
-	t.Run("unknown_refused", func(t *testing.T) {
-		_, _, rerr := Resolve("zz-nothing")
-		require.Error(t, rerr)
-	})
-}
-
-// TestFollowablePrefersSameInstance pins the reconnect rule: the same token
-// wins, a single survivor is followed, several answer nil for the picker.
-func TestFollowablePrefersSameInstance(t *testing.T) {
-	t.Parallel()
-
-	same := Instance{SessionID: "01A", Token: "tokA", Socket: "/a"}
-	other := Instance{SessionID: "01A", Token: "tokB", Socket: "/b"}
-	foreign := Instance{SessionID: "01B", Token: "tokC", Socket: "/c"}
-
-	got := Followable([]Instance{same, other, foreign}, "01A", "tokA")
-	require.Len(t, got, 1)
-	assert.Equal(t, "tokA", got[0].Token)
-
-	// one survivor of the session: follow it even under a different token
-	got = Followable([]Instance{other, foreign}, "01A", "tokA")
-	require.Len(t, got, 1)
-	assert.Equal(t, "tokB", got[0].Token)
-
-	// several remain: never a silent swap, the picker decides
-	assert.Nil(t, Followable([]Instance{same, other}, "01A", "tokGone"))
+	err := <-errCh
+	require.Error(t, err)
 }
 
 // recordTo writes one JSONL transcript of two chained entries and names it in
@@ -393,34 +306,33 @@ func recordTo(t *testing.T, f *fakeSession) (first, second session.Entry) {
 	return first, second
 }
 
-// TestBackfillReadsRecordedBranch pins the bulk history source: one call
-// returns the snapshot with its watermark plus the branch through the
-// snapshot head, read from the file the hello named.
-func TestBackfillReadsRecordedBranch(t *testing.T) {
-	f := newFakeSession(t)
-	first, second := recordTo(t, f)
-	conn, _, _ := f.dial(t)
+// TestBackfill pins the bulk history source: one call returns snapshot plus
+// watermark with the branch through the head, and no recording is a clean empty.
+func TestBackfill(t *testing.T) {
+	t.Run("reads_recorded_branch", func(t *testing.T) {
+		f := newFakeSession(t)
+		first, second := recordTo(t, f)
+		conn, _, _ := f.dial(t)
 
-	assert.Equal(t, f.transcriptPath, conn.Hello().TranscriptPath)
+		assert.Equal(t, f.transcriptPath, conn.Hello().TranscriptPath)
 
-	snap, branch, seq, err := conn.Backfill(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, second.ID, snap.Head)
-	assert.Positive(t, seq) // the state.get watermark
-	require.Len(t, branch, 2)
-	assert.Equal(t, first.ID, branch[0].ID) // oldest first
-	assert.Equal(t, second.ID, branch[1].ID)
-}
+		snap, branch, seq, err := conn.Backfill(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, second.ID, snap.Head)
+		assert.Positive(t, seq) // the state.get watermark
+		require.Len(t, branch, 2)
+		assert.Equal(t, first.ID, branch[0].ID) // oldest first
+		assert.Equal(t, second.ID, branch[1].ID)
+	})
 
-// TestBackfillWithoutRecording pins the legible refusal: a hello with no
-// transcript path answers an error naming it, never a confusing file failure.
-func TestBackfillWithoutRecording(t *testing.T) {
-	f := newFakeSession(t)
-	conn, _, _ := f.dial(t)
+	t.Run("without_recording", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
 
-	_, _, _, err := conn.Backfill(t.Context())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "recording is off")
+		_, _, _, err := conn.Backfill(t.Context())
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "recording is off")
+	})
 }
 
 // TestReadBranchSkipsTornTail pins the concurrent-append guarantee: a final

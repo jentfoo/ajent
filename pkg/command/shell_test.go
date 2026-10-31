@@ -96,8 +96,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 		sink.mu.Lock()
 		defer sink.mu.Unlock()
 		return sink.starts == 2
-	}, time.Second, time.Millisecond,
-		"both staged commands must start immediately")
+	}, time.Second, time.Millisecond)
 
 	// budget clears the bash tool's 5s WaitDelay ceiling so a slow CI runner
 	// (throttled login-shell startup) doesn't flake, a genuine hang still failing.
@@ -625,22 +624,26 @@ func TestStagerTimeoutReachesBashInput(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(calls[len(calls)-1]), &p))
 	}
 
-	// the default zero ceiling runs uncapped: no timeout key at all, so the
-	// model-facing two-minute default never applies to a user's own shell
-	s.Run("echo one", false)
-	require.Eventually(t, func() bool { return len(fake.calls()) == 1 }, time.Second, time.Millisecond)
-	decodeLast()
-	assert.Equal(t, "echo one", p["command"])
-	assert.NotContains(t, p, "timeout")
-	// the user-initiated mark is what keeps the tool from applying the
-	// model-facing default on the empty timeout
-	assert.True(t, fake.sawUserInitiated())
+	t.Run("zero_ceiling_runs_uncapped", func(t *testing.T) {
+		// the default zero ceiling runs uncapped: no timeout key at all, so the
+		// model-facing two-minute default never applies to a user's own shell
+		s.Run("echo one", false)
+		require.Eventually(t, func() bool { return len(fake.calls()) == 1 }, time.Second, time.Millisecond)
+		decodeLast()
+		assert.Equal(t, "echo one", p["command"])
+		assert.NotContains(t, p, "timeout")
+		// the user-initiated mark is what keeps the tool from applying the
+		// model-facing default on the empty timeout
+		assert.True(t, fake.sawUserInitiated())
+	})
 
-	// an explicit ceiling rounds up to whole seconds
-	s.SetTimeout(1500 * time.Millisecond)
-	s.Run("echo two", false)
-	require.Eventually(t, func() bool { return len(fake.calls()) == 2 }, time.Second, time.Millisecond)
-	decodeLast()
-	assert.Equal(t, "echo two", p["command"])
-	require.InDelta(t, 2, p["timeout"], 0)
+	t.Run("explicit_ceiling_rounds_up", func(t *testing.T) {
+		// an explicit ceiling rounds up to whole seconds
+		s.SetTimeout(1500 * time.Millisecond)
+		s.Run("echo two", false)
+		require.Eventually(t, func() bool { return len(fake.calls()) == 2 }, time.Second, time.Millisecond)
+		decodeLast()
+		assert.Equal(t, "echo two", p["command"])
+		require.InDelta(t, 2, p["timeout"], 0)
+	})
 }

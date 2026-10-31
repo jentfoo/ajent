@@ -106,96 +106,86 @@ func (o rigObserver) log(ev string) {
 	o.r.events = append(o.r.events, ev)
 }
 
-// TestHubSubmitRoutesLikeTheEditor covers routing parity: each line kind
-// through Submit produces the same dispatch the editor path produces, minus
-// editor-only side effects, including `!!` exclusion.
-func TestHubSubmitRoutesLikeTheEditor(t *testing.T) {
-	t.Parallel()
+// TestHubSubmit pins submit routing through the hub: editor-shaped lines
+// dispatch like typed prompts, foreign-goroutine submits stay ordered, and a
+// full queue refuses instead of dropping.
+func TestHubSubmit(t *testing.T) {
+	t.Run("routes_like_the_editor", func(t *testing.T) {
+		submit := func(t *testing.T, line string, fromEditor bool) []pumpLine {
+			t.Helper()
+			rig := newHubRig(t)
+			if fromEditor {
+				rig.router.route(line, true)
+			} else {
+				require.NoError(t, rig.hub.Submit(line, "", "controller"))
+			}
+			return rig.recorded()
+		}
 
-	submit := func(t *testing.T, line string, fromEditor bool) []pumpLine {
-		t.Helper()
+		t.Run("prompt_queues_for_pump", func(t *testing.T) {
+			assert.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "hello world", origin: "controller"}},
+				submit(t, "hello world", false))
+			// same dispatch the editor produces, minus the origin provenance
+			editor := submit(t, "hello world", true)
+			require.Len(t, editor, 1)
+			assert.Equal(t, command.KindPrompt, editor[0].kind)
+			assert.Equal(t, "hello world", editor[0].rest)
+			assert.Empty(t, editor[0].origin)
+		})
+
+		t.Run("command_queues_for_pump", func(t *testing.T) {
+			assert.Equal(t, []pumpLine{{kind: command.KindCommand, rest: "model x"}},
+				submit(t, "/model x", false))
+			assert.Equal(t, submit(t, "/model x", false), submit(t, "/model x", true))
+		})
+
+		t.Run("shell_stages_untouched_by_source", func(t *testing.T) {
+			// `!` lines stage rather than queue: an inert stager keeps the runs idle,
+			// so only the prompt input differs between the two sources (none)
+			for _, fromEditor := range []bool{false, true} {
+				assert.Empty(t, submit(t, "!sleep 30", fromEditor))
+			}
+		})
+
+		t.Run("excluded_shell_form_parses", func(t *testing.T) {
+			// `!!` is a shell line the router hands the stager with its excluded flag;
+			// the classification is what a controller inherits, pinned through ParseLine
+			line := command.ParseLine("!!echo hidden")
+			assert.Equal(t, command.KindShell, line.Kind)
+			assert.Equal(t, "echo hidden", line.Rest)
+			assert.True(t, line.Excluded)
+			assert.Empty(t, submit(t, "!!sleep 30", false))
+		})
+	})
+
+	t.Run("foreign_goroutine", func(t *testing.T) {
 		rig := newHubRig(t)
-		if fromEditor {
-			rig.router.route(line, true)
-		} else {
-			require.NoError(t, rig.hub.Submit(line, "", "controller"))
-		}
-		return rig.recorded()
-	}
+		done := make(chan struct{})
+		var serr error
+		go func() {
+			defer close(done)
+			serr = rig.hub.Submit("from elsewhere", "", "controller")
+		}()
+		<-done
+		require.NoError(t, serr)
 
-	t.Run("prompt_queues_for_pump", func(t *testing.T) {
-		assert.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "hello world", origin: "controller"}},
-			submit(t, "hello world", false))
-		// same dispatch the editor produces, minus the origin provenance
-		editor := submit(t, "hello world", true)
-		require.Len(t, editor, 1)
-		assert.Equal(t, command.KindPrompt, editor[0].kind)
-		assert.Equal(t, "hello world", editor[0].rest)
-		assert.Empty(t, editor[0].origin)
+		require.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "from elsewhere", origin: "controller"}},
+			rig.recorded())
 	})
 
-	t.Run("command_queues_for_pump", func(t *testing.T) {
-		assert.Equal(t, []pumpLine{{kind: command.KindCommand, rest: "model x"}},
-			submit(t, "/model x", false))
-		assert.Equal(t, submit(t, "/model x", false), submit(t, "/model x", true))
+	t.Run("full_queue_refuses", func(t *testing.T) {
+		rig := newHubRig(t)
+		rig.router.trySend = func(pumpLine) bool { return false }
+
+		err := rig.hub.Submit("while wedged", "", "controller")
+		require.ErrorIs(t, err, errPromptQueueFull)
+		assert.Empty(t, rig.recorded())
+
+		// the editor path is unaffected: it rides the blocking send
+		rig.router.route("typed locally", true)
+		assert.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "typed locally"}},
+			rig.recorded())
 	})
-
-	t.Run("shell_stages_untouched_by_source", func(t *testing.T) {
-		// `!` lines stage rather than queue: an inert stager keeps the runs idle,
-		// so only the prompt input differs between the two sources (none)
-		for _, fromEditor := range []bool{false, true} {
-			assert.Empty(t, submit(t, "!sleep 30", fromEditor))
-		}
-	})
-
-	t.Run("excluded_shell_form_parses", func(t *testing.T) {
-		// `!!` is a shell line the router hands the stager with its excluded flag;
-		// the classification is what a controller inherits, pinned through ParseLine
-		line := command.ParseLine("!!echo hidden")
-		assert.Equal(t, command.KindShell, line.Kind)
-		assert.Equal(t, "echo hidden", line.Rest)
-		assert.True(t, line.Excluded)
-		assert.Empty(t, submit(t, "!!sleep 30", false))
-	})
-}
-
-// TestHubSubmitForeignGoroutine drives Submit from a non-driver goroutine,
-// race-enabled, proving the submit surface is safe from any goroutine.
-func TestHubSubmitForeignGoroutine(t *testing.T) {
-	t.Parallel()
-
-	rig := newHubRig(t)
-	done := make(chan struct{})
-	var serr error
-	go func() {
-		defer close(done)
-		serr = rig.hub.Submit("from elsewhere", "", "controller")
-	}()
-	<-done
-	require.NoError(t, serr)
-
-	require.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "from elsewhere", origin: "controller"}},
-		rig.recorded())
-}
-
-// TestHubSubmitFullQueueRefuses pins the lane-safety rule: a remote submit
-// never blocks on a full pump queue, it reports errPromptQueueFull so the wire
-// can refuse busy and the priority interrupt lane stays live. The editor path
-// keeps its blocking send.
-func TestHubSubmitFullQueueRefuses(t *testing.T) {
-	t.Parallel()
-
-	rig := newHubRig(t)
-	rig.router.trySend = func(pumpLine) bool { return false }
-
-	err := rig.hub.Submit("while wedged", "", "controller")
-	require.ErrorIs(t, err, errPromptQueueFull)
-	assert.Empty(t, rig.recorded())
-
-	// the editor path is unaffected: it rides the blocking send
-	rig.router.route("typed locally", true)
-	assert.Equal(t, []pumpLine{{kind: command.KindPrompt, rest: "typed locally"}},
-		rig.recorded())
 }
 
 // TestHubRegisterFanout drives a scripted turn through the hub sink and
@@ -325,12 +315,8 @@ func TestHubInterruptMatchesKeypress(t *testing.T) {
 	go func() { done <- hub.Interrupt() }()
 	assert.Equal(t, stopTurn, <-done)
 
-	select {
-	case err := <-errCh:
-		require.NoError(t, err) // a clean abort, never a failed turn
-	case <-time.After(5 * time.Second):
-		t.Fatal("the interrupt never stopped the turn")
-	}
+	err := <-errCh
+	require.NoError(t, err) // a clean abort, never a failed turn
 }
 
 // TestHubModeCycleMatchesKeypress cycles through the hub, asserting the mode
@@ -370,190 +356,176 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	assert.Equal(t, permit.ModeAllowRead.String(), mode)
 }
 
-// TestHubSnapshotTruth pins snapshot fields against their sources: tools from
-// the registry, usage and context from the ledger, queued from the steer
-// queue, running from the agent, permission from the barrier.
-func TestHubSnapshotTruth(t *testing.T) {
-	t.Parallel()
+// TestHubSnapshot pins the snapshot contract: at-rest truth, mid-turn
+// streaming shape, ledger swaps on model change, event coverage for every field,
+// and mutation consistency under concurrent readers.
+func TestHubSnapshot(t *testing.T) {
+	t.Run("truth", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		hub := newTestHub(term)
+		st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"},
+			Tokens: tokens.New(llm.Model{ID: "m", Provider: "p"})}
+		hub.ag = agent.New(st, agent.Options{})
 
-	term, _ := pipeUI(t)
-	hub := newTestHub(term)
-	st := &agent.State{Model: llm.Model{ID: "m", Provider: "p"},
-		Tokens: tokens.New(llm.Model{ID: "m", Provider: "p"})}
-	hub.ag = agent.New(st, agent.Options{})
+		reg := tools.New()
+		reg.Register(&stubTool{name: "alpha"}, true)
+		reg.Register(&stubTool{name: "beta"}, false)
+		reg.MarkReadOnly([]string{"alpha"})
+		hub.setToolsRegistry(reg)
 
-	reg := tools.New()
-	reg.Register(&stubTool{name: "alpha"}, true)
-	reg.Register(&stubTool{name: "beta"}, false)
-	reg.MarkReadOnly([]string{"alpha"})
-	hub.setToolsRegistry(reg)
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady, nil)
+		hub.q = q
+		q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 1)
 
-	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(hub.ui, func(int) {}, func() {}, waitReady, takeReady, nil)
-	hub.q = q
-	q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 1)
+		b := wiredBarrier(reg) // default mode allow-read, the snapshot's expectation is auto
+		hub.barrier = b
+		showPermissionIndicator(hub.ui, b)
 
-	b := wiredBarrier(reg) // default mode allow-read, the snapshot's expectation is auto
-	hub.barrier = b
-	showPermissionIndicator(hub.ui, b)
+		// spend lands on the ledger's totals, read through the hub's captured pointer
+		st.Tokens.RecordSpend("p/m", llm.Usage{Input: 120, Output: 30})
+		st.Tokens.SetBase(40)               // the context bar reads the estimate buckets
+		hub.setContext(st.Tokens.Context()) // the view model's context copy
 
-	// spend lands on the ledger's totals, read through the hub's captured pointer
-	st.Tokens.RecordSpend("p/m", llm.Usage{Input: 120, Output: 30})
-	st.Tokens.SetBase(40)               // the context bar reads the estimate buckets
-	hub.setContext(st.Tokens.Context()) // the view model's context copy
+		hub.ui.SetStatusSegment(segment(segPlan, "planning", "plan"))
+		hub.ui.SetModel("p/m", "m", 64000)
 
-	hub.ui.SetStatusSegment(segment(segPlan, "planning", "plan"))
-	hub.ui.SetModel("p/m", "m", 64000)
-
-	snap := hub.Snapshot()
-	assert.True(t, snap.Idle)
-	assert.False(t, snap.Running)
-	assert.Equal(t, 1, snap.Queued)
-	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "queued one"}}, snap.QueuedRows)
-	assert.Equal(t, "allow-read", snap.Permission)
-	assert.Equal(t, hubModel{Key: "p/m", Short: "m", Window: 64000}, snap.Model)
-	assert.Equal(t, 120, snap.Usage.Total.Input)
-	assert.Equal(t, 30, snap.Usage.Total.Output)
-	assert.Equal(t, 1, snap.Usage.Turns)
-	assert.Equal(t, 40, snap.Context.Used)
-	assert.Equal(t, []hubTool{
-		{Name: "alpha", Source: "builtin", Enabled: true, ReadOnly: true},
-		{Name: "beta", Source: "builtin"},
-	}, snap.Tools)
-	require.Len(t, snap.Status.Segments, 1)
-	assert.Equal(t, segPlan, snap.Status.Segments[0].Key)
-	assert.Equal(t, "planning", snap.Status.Segments[0].Text)
-}
-
-// TestHubSnapshotWhileStreaming pins the mid-turn read: no agent state lock
-// is taken, the cached ledger serves, and running/spinning hold.
-func TestHubSnapshotWhileStreaming(t *testing.T) {
-	t.Parallel()
-
-	term, _ := pipeUI(t)
-	hub := newTestHub(term)
-	st := &agent.State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	ag := agent.New(st, agent.Options{
-		Provider: func(llm.Model) (llm.Provider, error) {
-			return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}, nil
-		},
-		Tools: singleToolSet{tool: holdBash{release: release, entered: entered}},
-		Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
-		Sinks: []agent.Sink{hub.sink()},
+		snap := hub.Snapshot()
+		assert.True(t, snap.Idle)
+		assert.False(t, snap.Running)
+		assert.Equal(t, 1, snap.Queued)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "queued one"}}, snap.QueuedRows)
+		assert.Equal(t, "allow-read", snap.Permission)
+		assert.Equal(t, hubModel{Key: "p/m", Short: "m", Window: 64000}, snap.Model)
+		assert.Equal(t, 120, snap.Usage.Total.Input)
+		assert.Equal(t, 30, snap.Usage.Total.Output)
+		assert.Equal(t, 1, snap.Usage.Turns)
+		assert.Equal(t, 40, snap.Context.Used)
+		assert.Equal(t, []hubTool{
+			{Name: "alpha", Source: "builtin", Enabled: true, ReadOnly: true},
+			{Name: "beta", Source: "builtin"},
+		}, snap.Tools)
+		require.Len(t, snap.Status.Segments, 1)
+		assert.Equal(t, segPlan, snap.Status.Segments[0].Key)
+		assert.Equal(t, "planning", snap.Status.Segments[0].Text)
 	})
-	hub.ag = ag
 
-	go func() { _ = ag.Prompt(t.Context(), agent.Input{Text: "run"}) }()
-	<-entered
+	t.Run("while_streaming", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		hub := newTestHub(term)
+		st := &agent.State{Model: llm.Model{ID: "test"}, Tokens: tokens.New(llm.Model{ID: "test"})}
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		ag := agent.New(st, agent.Options{
+			Provider: func(llm.Model) (llm.Provider, error) {
+				return &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: mainToolTurn()}}}, nil
+			},
+			Tools: singleToolSet{tool: holdBash{release: release, entered: entered}},
+			Env:   agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+			Sinks: []agent.Sink{hub.sink()},
+		})
+		hub.ag = ag
 
-	snap := hub.Snapshot()
-	assert.True(t, snap.Running)
-	assert.True(t, snap.Spinning)
-	close(release)
+		go func() { _ = ag.Prompt(t.Context(), agent.Input{Text: "run"}) }()
+		<-entered
+
+		snap := hub.Snapshot()
+		assert.True(t, snap.Running)
+		assert.True(t, snap.Spinning)
+		close(release)
+	})
+
+	t.Run("ledger_swap", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		hub := newTestHub(term)
+		st := &agent.State{Model: llm.Model{ID: "m"}, Tokens: tokens.New(llm.Model{ID: "m"})}
+		ag := agent.New(st, agent.Options{})
+		hub.ag = ag
+
+		st.Tokens.RecordSpend("m", llm.Usage{Input: 10})
+		require.Equal(t, 10, hub.Snapshot().Usage.Total.Input)
+
+		fresh := tokens.New(llm.Model{ID: "m"})
+		fresh.RecordSpend("m", llm.Usage{Input: 99})
+		require.True(t, ag.WithState(func(s *agent.State) { s.Tokens = fresh }))
+		hub.syncLedger()
+		assert.Equal(t, 99, hub.Snapshot().Usage.Total.Input)
+	})
 }
 
-// TestHubSnapshotLedgerSwap pins the ledger capture rule: a rewind or fork
-// that replaces the ledger must be visible to the next snapshot.
-func TestHubSnapshotLedgerSwap(t *testing.T) {
-	t.Parallel()
+// TestHubHeadTracks pins setHead's two write paths: surface switches and
+// recorded appends both move the head without disturbing live state.
+func TestHubHeadTracks(t *testing.T) {
+	t.Run("tracks_switches", func(t *testing.T) {
+		w, err := session.Create(filepath.Join(t.TempDir(), "s.jsonl"),
+			session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		_, err = w.Append(session.TypeMessage,
+			session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+		require.NoError(t, err)
+		entries, _, err := session.Read(w.Path())
+		require.NoError(t, err)
+		rec := &sessRec{w: w, rec: session.NewRecorder(w), snapshot: snapshot{entries: entries}}
 
-	term, _ := pipeUI(t)
-	hub := newTestHub(term)
-	st := &agent.State{Model: llm.Model{ID: "m"}, Tokens: tokens.New(llm.Model{ID: "m"})}
-	ag := agent.New(st, agent.Options{})
-	hub.ag = ag
+		term, _ := pipeUI(t)
+		log := &emitLog{}
+		hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
+			acct: tokens.New(llm.Model{})})
+		log.attach(hub)
+		hub.bindSession(rec)
+		assert.Equal(t, w.Head(), hub.Snapshot().Head)
 
-	st.Tokens.RecordSpend("m", llm.Usage{Input: 10})
-	require.Equal(t, 10, hub.Snapshot().Usage.Total.Input)
+		// the driver's switch callback: a compaction fires it with the head unmoved
+		hub.setHead(w.Head(), rewindCauseRewind)
+		assert.Empty(t, log.named(ctl.EventBranchChanged))
 
-	fresh := tokens.New(llm.Model{ID: "m"})
-	fresh.RecordSpend("m", llm.Usage{Input: 99})
-	require.True(t, ag.WithState(func(s *agent.State) { s.Tokens = fresh }))
-	hub.syncLedger()
-	assert.Equal(t, 99, hub.Snapshot().Usage.Total.Input)
-}
+		// a rewind moves the head onto the root entry, an earlier point
+		rewound := entries[0].ID
+		w.SetHead(rewound)
+		hub.setHead(w.Head(), rewindCauseRewind)
 
-// TestHubHeadTracksSwitches pins the head surface: the open-time head seeds
-// the snapshot, a rewind or fork move emits exactly once, and an unchanged
-// head (a compaction switch) stays silent.
-func TestHubHeadTracksSwitches(t *testing.T) {
-	t.Parallel()
+		moved := log.named(ctl.EventBranchChanged)
+		require.Len(t, moved, 1)
+		var bd ctl.BranchChangedData
+		require.NoError(t, moved[0].Decode(&bd))
+		assert.Equal(t, rewound, bd.Head)
+		assert.Equal(t, rewound, hub.Snapshot().Head)
+	})
 
-	w, err := session.Create(filepath.Join(t.TempDir(), "s.jsonl"),
-		session.SessionData{Version: session.Version()})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close() })
-	_, err = w.Append(session.TypeMessage,
-		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
-	require.NoError(t, err)
-	entries, _, err := session.Read(w.Path())
-	require.NoError(t, err)
-	rec := &sessRec{w: w, rec: session.NewRecorder(w), snapshot: snapshot{entries: entries}}
+	t.Run("tracks_appends", func(t *testing.T) {
+		p := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		entries, _, err := session.Read(p)
+		require.NoError(t, err)
+		root := entries[0].ID
+		rec := &sessRec{w: w, rec: session.NewRecorder(w), snapshot: snapshot{entries: entries}}
 
-	term, _ := pipeUI(t)
-	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
-		acct: tokens.New(llm.Model{})})
-	log.attach(hub)
-	hub.bindSession(rec)
-	assert.Equal(t, w.Head(), hub.Snapshot().Head)
+		term, _ := pipeUI(t)
+		log := &emitLog{}
+		hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
+			acct: tokens.New(llm.Model{})})
+		log.attach(hub)
+		hub.bindSession(rec) // binds the root, before any append
 
-	// the driver's switch callback: a compaction fires it with the head unmoved
-	hub.setHead(w.Head(), rewindCauseRewind)
-	assert.Empty(t, log.named(ctl.EventBranchChanged))
+		e1, aerr := w.Append(session.TypeMessage,
+			session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+		require.NoError(t, aerr)
+		hub.noteAppend(e1.ID) // what entryAppended fires per append
+		assert.Equal(t, e1.ID, hub.Snapshot().Head)
 
-	// a rewind moves the head onto the root entry, an earlier point
-	rewound := entries[0].ID
-	w.SetHead(rewound)
-	hub.setHead(w.Head(), rewindCauseRewind)
-
-	moved := log.named(ctl.EventBranchChanged)
-	require.Len(t, moved, 1)
-	var bd ctl.BranchChangedData
-	require.NoError(t, moved[0].Decode(&bd))
-	assert.Equal(t, rewound, bd.Head)
-	assert.Equal(t, rewound, hub.Snapshot().Head)
-}
-
-// TestHubHeadTracksAppends pins the append side of the head surface: appends
-// advance the gate too, so rewinding back onto the pre-append head still
-// publishes branch.changed with the real from-id instead of reading as no move.
-func TestHubHeadTracksAppends(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	w, err := session.Create(p, session.SessionData{Version: session.Version()})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close() })
-	entries, _, err := session.Read(p)
-	require.NoError(t, err)
-	root := entries[0].ID
-	rec := &sessRec{w: w, rec: session.NewRecorder(w), snapshot: snapshot{entries: entries}}
-
-	term, _ := pipeUI(t)
-	log := &emitLog{}
-	hub := newSessionHub(hubDeps{ui: term, dialogs: newInteractionBroker(term, nil, nil),
-		acct: tokens.New(llm.Model{})})
-	log.attach(hub)
-	hub.bindSession(rec) // binds the root, before any append
-
-	e1, aerr := w.Append(session.TypeMessage,
-		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
-	require.NoError(t, aerr)
-	hub.noteAppend(e1.ID) // what entryAppended fires per append
-	assert.Equal(t, e1.ID, hub.Snapshot().Head)
-
-	// rewind back onto the bind-time head: a real move, must publish
-	w.SetHead(root)
-	hub.setHead(w.Head(), rewindCauseRewind)
-	moved := log.named(ctl.EventBranchChanged)
-	require.Len(t, moved, 1)
-	var bd ctl.BranchChangedData
-	require.NoError(t, moved[0].Decode(&bd))
-	assert.Equal(t, root, bd.Head)
-	assert.Equal(t, e1.ID, bd.From)
+		// rewind back onto the bind-time head: a real move, must publish
+		w.SetHead(root)
+		hub.setHead(w.Head(), rewindCauseRewind)
+		moved := log.named(ctl.EventBranchChanged)
+		require.Len(t, moved, 1)
+		var bd ctl.BranchChangedData
+		require.NoError(t, moved[0].Decode(&bd))
+		assert.Equal(t, root, bd.Head)
+		assert.Equal(t, e1.ID, bd.From)
+	})
 }
 
 // TestHubBindSession pins the identity fields: root id from the transcript,

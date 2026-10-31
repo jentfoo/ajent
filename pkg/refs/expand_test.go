@@ -332,7 +332,7 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 
 		again := x.Expand(res.Text)
-		assert.Equal(t, 1, strings.Count(again.Text, "lines"), "no double annotation")
+		assert.Equal(t, 1, strings.Count(again.Text, "lines"))
 	})
 
 	t.Run("dedupes_unchanged_file", func(t *testing.T) {
@@ -383,9 +383,8 @@ func TestExpand(t *testing.T) {
 		annotated := "see @big.go (999 lines, 9mb)"
 		res := x.Expand(annotated)
 		assert.Contains(t, res.Text, "@big.go (")
-		assert.NotContains(t, res.Text, "(999", "old annotation replaced")
-		assert.False(t, strings.Contains(res.Text, "(600 lines") && strings.Contains(res.Text, "(999"),
-			"no double annotation")
+		assert.NotContains(t, res.Text, "(999")
+		assert.False(t, strings.Contains(res.Text, "(600 lines") && strings.Contains(res.Text, "(999"))
 	})
 
 	t.Run("shrunk_file_strips_annotation", func(t *testing.T) {
@@ -400,7 +399,7 @@ func TestExpand(t *testing.T) {
 		require.Len(t, injected(t, res), 2) // a fresh read is planned for the shrunk file
 	})
 
-	t.Run("repeat_ref_strips_annotation_each_time", func(t *testing.T) {
+	t.Run("repeat_ref_restrips_annotation", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
 		x, _ := newExpander(t, dir)
@@ -419,19 +418,17 @@ func TestExpand(t *testing.T) {
 
 		res := x.Expand("@a.go and @b.txt")
 		ids := toolCallIDs(injected(t, res))
-		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-r-b.txt"}, ids,
-			"reads must land in forward document order, not reversed")
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-r-b.txt"}, ids)
 	})
 
-	t.Run("mixed_dirs_and_reads_keep_order", func(t *testing.T) {
+	t.Run("mixed_dirs_reads_keep_order", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("hi\n"), 0o600))
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand("@a.go then @sub")
-		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)),
-			"mixed read and ls references keep document order")
+		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
 	})
 
 	// a file whose written path equals "ls-" plus a directory's path would mint
@@ -447,7 +444,7 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, []string{"ref-1-ls-src", "ref-1-r-ls-src"}, toolCallIDs(injected(t, res)))
 	})
 
-	t.Run("nothing_to_inject_has_no_run", func(t *testing.T) {
+	t.Run("nothing_to_inject_no_run", func(t *testing.T) {
 		dir := t.TempDir()
 		x, _ := newExpander(t, dir)
 
@@ -495,7 +492,7 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand("see @blob.bin and @blob.bin")
-		assert.Equal(t, 1, strings.Count(res.Text, "(binary,"), "no duplicate annotation")
+		assert.Equal(t, 1, strings.Count(res.Text, "(binary,"))
 	})
 
 	// a file too large to inject still dedupes its per-file refusal: a repeated
@@ -545,7 +542,7 @@ func TestExpand(t *testing.T) {
 		require.NotNil(t, second.Run)
 
 		assert.Len(t, injected(t, first), 2)
-		assert.Empty(t, injected(t, second), "the first item's read already landed")
+		assert.Empty(t, injected(t, second))
 	})
 
 	t.Run("cancelled_context_stops_the_batch", func(t *testing.T) {
@@ -574,7 +571,7 @@ func TestExpand(t *testing.T) {
 
 		require.Len(t, first, 1)
 		require.Len(t, second, 1)
-		assert.NotEqual(t, first[0], second[0], "a re-read of the same path needs a fresh call id")
+		assert.NotEqual(t, first[0], second[0])
 	})
 
 	// an unchanged directory already listed is not re-listed by @
@@ -674,7 +671,7 @@ func TestInjectedIDs(t *testing.T) {
 				if a == b {
 					continue
 				}
-				assert.False(t, strings.HasPrefix(a, b), "%s prefixes %s", a, b)
+				assert.False(t, strings.HasPrefix(a, b))
 			}
 		}
 	})
@@ -855,7 +852,7 @@ func writePNG(t *testing.T, dir string, name string) {
 }
 
 func TestExpandImages(t *testing.T) {
-	t.Run("vision injects image read", func(t *testing.T) {
+	t.Run("vision_injects_image_read", func(t *testing.T) {
 		dir := t.TempDir()
 		writePNG(t, dir, "pic.png")
 		x, sink := newVisionExpander(t, dir, func() bool { return true })
@@ -875,7 +872,7 @@ func TestExpandImages(t *testing.T) {
 		assert.Contains(t, sink.starts, "read pic.png")
 	})
 
-	t.Run("text only annotates", func(t *testing.T) {
+	t.Run("text_only_annotates", func(t *testing.T) {
 		dir := t.TempDir()
 		writePNG(t, dir, "pic.png")
 		x, _ := newVisionExpander(t, dir, nil) // nil vision: today's annotation
@@ -885,7 +882,7 @@ func TestExpandImages(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 	})
 
-	t.Run("repeat ref plans once", func(t *testing.T) {
+	t.Run("repeat_ref_plans_once", func(t *testing.T) {
 		dir := t.TempDir()
 		writePNG(t, dir, "pic.png")
 		x, _ := newVisionExpander(t, dir, func() bool { return true })
@@ -897,19 +894,19 @@ func TestExpandImages(t *testing.T) {
 	})
 
 	// a text-only model annotates once per path however often it is named
-	t.Run("repeat ref annotates once", func(t *testing.T) {
+	t.Run("repeat_ref_annotates_once", func(t *testing.T) {
 		dir := t.TempDir()
 		writePNG(t, dir, "pic.png")
 		x, _ := newVisionExpander(t, dir, nil)
 
 		res := x.Expand("look at @pic.png and @pic.png again")
-		assert.Equal(t, 1, strings.Count(res.Text, "(image,"), "no duplicate annotation")
+		assert.Equal(t, 1, strings.Count(res.Text, "(image,"))
 	})
 
 	// image mentions pay their nominal size against the same aggregate cap as
 	// text reads, so enough distinct references decline instead of injecting
 	// without bound (the "over the cap" outcome recorded in command-design.md)
-	t.Run("image mentions pay the total cap", func(t *testing.T) {
+	t.Run("image_mentions_pay_total_cap", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, name := range []string{"one.png", "two.png", "three.png"} {
 			writePNG(t, dir, name)

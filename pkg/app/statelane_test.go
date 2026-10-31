@@ -70,8 +70,7 @@ func TestStateLaneQuiesce(t *testing.T) {
 			lane.quiesce(time.Hour)
 			done.Store(true)
 		}()
-		require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond,
-			"quiesce must hold while a transaction owns the lane")
+		require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond)
 
 		lane.unlock()
 		require.Eventually(t, done.Load, 2*time.Second, 5*time.Millisecond)

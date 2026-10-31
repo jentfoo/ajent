@@ -114,12 +114,7 @@ func TestAttachRunSearchesHistory(t *testing.T) {
 	}, ctlWait, 5*time.Millisecond)
 
 	feed("\r\r") // accept the match into the editor, then submit it
-	select {
-	case line := <-term.Messages():
-		assert.Equal(t, "searchable prompt", line)
-	case <-time.After(ctlWait):
-		t.Fatal("history search did not fill the editor")
-	}
+	assert.Equal(t, "searchable prompt", <-term.Messages())
 }
 
 // TestAttachViewStreams pins surface parity for committed history: an echo,
@@ -242,7 +237,7 @@ func TestAttachToolResultEntryNoEcho(t *testing.T) {
 
 		require.Eventually(t, func() bool { return strings.Contains(a.out(), "next prompt") },
 			ctlWait, 5*time.Millisecond)
-		assert.NotContains(t, a.out(), "❯ \n", "tool-result entry echoed as an empty prompt row")
+		assert.NotContains(t, a.out(), "❯ \n")
 	})
 
 	t.Run("while_streaming", func(t *testing.T) {
@@ -254,7 +249,7 @@ func TestAttachToolResultEntryNoEcho(t *testing.T) {
 
 		require.Eventually(t, func() bool { return strings.Contains(a.out(), "steering line") },
 			ctlWait, 5*time.Millisecond)
-		assert.NotContains(t, a.out(), "❯ \n", "tool-result entry echoed as an empty prompt row")
+		assert.NotContains(t, a.out(), "❯ \n")
 	})
 }
 
@@ -273,8 +268,8 @@ func TestAttachReplayedInjectedDrawsBlock(t *testing.T) {
 
 	require.Eventually(t, func() bool { return strings.Contains(a.out(), "real prompt") },
 		ctlWait, 5*time.Millisecond)
-	assert.Contains(t, a.out(), "User Ran: echo hi", "replayed injected block missing from live append")
-	assert.Contains(t, a.out(), "16:00", "replayed injected body missing from live append")
+	assert.Contains(t, a.out(), "User Ran: echo hi")
+	assert.Contains(t, a.out(), "16:00")
 }
 
 // TestAttachSteeredNoteMidTurn pins the note path: a barrier note lands as an
@@ -566,7 +561,7 @@ func TestAttachSnapshotCarriesOpenDialogs(t *testing.T) {
 			}
 		})
 		a.view.waitIdle()
-		require.Len(t, ids, 1, "open dialog did not race from the snapshot")
+		require.Len(t, ids, 1)
 
 		// the raced dialog answers over the socket; its settled event retires the racer
 		_, err := a.conn.ClaimSeat(t.Context(), "attach-test", false)
@@ -593,7 +588,7 @@ func TestAttachSnapshotCarriesOpenDialogs(t *testing.T) {
 			a.view.dialogs[9] = cancel           // a racer left over from a dropped connection
 			a.view.reconcileDialogs(parent, nil) // the resnapshot lists nothing open
 			_, racing := a.view.dialogs[9]
-			assert.False(t, racing, "racer outlived its dialog")
+			assert.False(t, racing)
 			assert.ErrorIs(t, ctx.Err(), context.Canceled)
 		})
 		a.view.waitIdle()
@@ -633,11 +628,7 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 	}()
 	a.view.send(func() { a.view.settleInteraction(7) }) // the remote side answered first
 
-	select {
-	case <-done:
-	case <-time.After(ctlWait):
-		t.Fatal("settled did not cancel the local racer")
-	}
+	<-done
 }
 
 // TestAttachPendingRowsPromptOnly pins the pending-row rule: a prompt paints

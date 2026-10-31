@@ -766,7 +766,7 @@ func TestStoreFindNamed(t *testing.T) {
 		assert.Equal(t, namedID, info.ID)
 	})
 
-	t.Run("id_match_is_not_a_name", func(t *testing.T) {
+	t.Run("id_match_not_a_name", func(t *testing.T) {
 		_, _, ferr := s.FindNamed(ws, plainID)
 		assert.ErrorContains(t, ferr, "matches session id")
 	})

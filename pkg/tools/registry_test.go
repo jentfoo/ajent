@@ -488,7 +488,7 @@ func TestGuardedToolPreviewOrdering(t *testing.T) {
 		r.Register(&editTool{policy: e.policy, tracker: e.tracker}, true)
 		r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision {
 			return Decision{Action: ActionAsk, Reason: "approval"}
-		}}, func(context.Context, agent.ToolCall, Decision) Decision {
+		}}, func(context.Context, agent.ToolCall) Decision {
 			return Decision{Action: ActionAsk}
 		})
 		tool, ok := r.Get("edit")

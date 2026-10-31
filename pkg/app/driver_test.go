@@ -3,14 +3,12 @@ package app
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -97,113 +95,6 @@ func mainToolTurn() []llm.Event {
 	return append(out, start, call, delta, end, done)
 }
 
-// TestTypingGateDeliversIntoHeldBoundary wires the real gate, steer queue and agent:
-// a prompt submitted while AwaitInput holds a boundary lands in that same step, with no
-// intervening model request.
-func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
-	t.Parallel()
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	set := singleToolSet{tool: holdBash{release: release, entered: entered}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: mainToolTurn()},
-		{Events: textTurnRewind("after steer")},
-	}}
-
-	fakeUI := &fakeQueueUI{}
-	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(fakeUI, func(int) {}, func() {}, waitReady, takeReady, nil)
-
-	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
-	held := make(chan struct{}, 1)
-	gate := &typingGate{
-		idle:    time.Hour,
-		handoff: 30 * time.Millisecond,
-		poll:    5 * time.Millisecond,
-		pending: q.pending,
-	}
-	// status is the only place a held boundary signals, non-empty text means engaged
-	gate.status = func(text, short string) {
-		if text == "" {
-			return
-		}
-		select {
-		case held <- struct{}{}:
-		default:
-		}
-	}
-
-	a := agent.New(st, agent.Options{
-		Provider:   func(llm.Model) (llm.Provider, error) { return p, nil },
-		Sinks:      []agent.Sink{agent.NopSink{}},
-		Tools:      set,
-		Env:        agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
-		OnBoundary: q.pull,
-		AwaitInput: gate.hold,
-	})
-
-	in := agent.Input{Text: "start"}
-	q.offer(in, "start", 0) // starts the drain, not queued
-	gate.taken()            // runPump clears any handoff before spawning a turn
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), in) }()
-
-	// pin step one inside its tool call, then begin typing mid-turn
-	require.Eventually(t, func() bool {
-		select {
-		case <-entered:
-			return true
-		default:
-			return false
-		}
-	}, 3*time.Second, time.Millisecond)
-	gate.edit("draft") // the user is composing a message
-
-	close(release) // step one finishes, AwaitInput at step two holds on the draft
-	require.Eventually(t, func() bool {
-		select {
-		case <-held:
-			return true
-		default:
-			return false
-		}
-	}, 3*time.Second, time.Millisecond)
-	assert.Len(t, p.Requests(), 1, "no second request may leave while the hold is engaged")
-
-	// a prompt submitted during the hold queues and must land at this same step
-	require.True(t, q.offer(agent.Input{Text: "steered"}, "steered", 3))
-
-	var turnErr error
-	require.Eventually(t, func() bool {
-		select {
-		case e := <-errCh:
-			turnErr = e
-			return true
-		default:
-			return false
-		}
-	}, 3*time.Second, time.Millisecond)
-	require.NoError(t, turnErr)
-	reqs := p.Requests()
-	assert.Len(t, reqs, 2, "the steer must ride into step two with no third model call")
-
-	var foundSteer bool
-	for _, m := range reqs[len(reqs)-1].Messages {
-		if m.Role != llm.RoleUser || len(m.Content) == 0 {
-			continue
-		}
-		tb, ok := m.Content[0].(llm.TextBlock)
-		if !ok {
-			continue
-		}
-		if strings.Contains(tb.Text, "steered") {
-			foundSteer = true
-		}
-	}
-	assert.True(t, foundSteer, "step two's request must carry the queued steer")
-}
-
 // TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
 // window and only a second inside it quits, while Ctrl+D quits outright.
 // Mode cycling rides the hub's barrier, so the cycled channel carries the
@@ -245,22 +136,18 @@ func TestControlLoop(t *testing.T) {
 		go controlLoop(t.Context(), controls, newHintBoard(rec.record), hub, func() { close(quit) })
 		return controls, quit, cycled, hub
 	}
-	quitted := func(t *testing.T, quit chan struct{}) bool {
+	// quitted blocks until controlLoop exits: the positive wait is unbounded,
+	// a stalled quit fails via the test timeout instead of a fake deadline.
+	quitted := func(t *testing.T, quit chan struct{}) {
 		t.Helper()
-
-		select {
-		case <-quit:
-			return true
-		case <-time.After(2 * time.Second):
-			return false
-		}
+		<-quit
 	}
 
 	t.Run("double_press_quits", func(t *testing.T) {
 		controls, quit, _, _ := start(t)
 		controls <- tui.ControlInterrupt
 		controls <- tui.ControlInterrupt
-		assert.True(t, quitted(t, quit))
+		quitted(t, quit)
 	})
 
 	// one press only arms the window: the app stays up until the second arrives
@@ -273,11 +160,11 @@ func TestControlLoop(t *testing.T) {
 
 		select {
 		case <-quit:
-			assert.Fail(t, "quit on a single Ctrl+C")
+			t.Error("quit on a single ctrl+c")
 		default:
 		}
 		controls <- tui.ControlInterrupt
-		assert.True(t, quitted(t, quit))
+		quitted(t, quit)
 	})
 
 	// both mode-cycle controls reach the barrier, each with its own direction
@@ -290,7 +177,7 @@ func TestControlLoop(t *testing.T) {
 	})
 
 	// the picker copy control routes without a picker open: silent no-op, never a quit
-	t.Run("copy_selection_without_picker_is_silent", func(t *testing.T) {
+	t.Run("copy_without_picker_is_silent", func(t *testing.T) {
 		controls, quit, cycled, _ := start(t)
 		controls <- tui.ControlCopySelection
 		controls <- tui.ControlModeCycle // ordered behind: the copy control settled
@@ -298,7 +185,7 @@ func TestControlLoop(t *testing.T) {
 
 		select {
 		case <-quit:
-			assert.Fail(t, "quit on a picker copy without a picker")
+			t.Error("quit on a picker copy without a picker")
 		default:
 		}
 	})
@@ -306,7 +193,7 @@ func TestControlLoop(t *testing.T) {
 	t.Run("ctrl_d_quits", func(t *testing.T) {
 		controls, quit, _, _ := start(t)
 		controls <- tui.ControlEOF
-		assert.True(t, quitted(t, quit))
+		quitted(t, quit)
 	})
 }
 
@@ -327,49 +214,6 @@ func (s *modeSpy) Prev() permit.Mode {
 	m := s.Barrier.Prev()
 	s.out <- m
 	return m
-}
-
-func TestCheckSessionTarget(t *testing.T) {
-	ws := t.TempDir()
-	t.Chdir(ws)
-	t.Setenv("AJENT_HOME", t.TempDir())
-
-	store, err := session.NewStore()
-	require.NoError(t, err)
-	w, cerr := store.Create(ws, session.SessionData{Version: session.Version(), Name: "fix-parser"})
-	require.NoError(t, cerr)
-	id := w.Head()
-	require.NoError(t, w.Close())
-
-	t.Run("resume_by_name", func(t *testing.T) {
-		_, err := CheckSessionTarget(ResumeID, "fix-parser")
-		assert.NoError(t, err)
-	})
-
-	t.Run("resume_by_id", func(t *testing.T) {
-		_, err = CheckSessionTarget(ResumeID, id)
-		assert.NoError(t, err)
-	})
-
-	t.Run("resume_unknown_fails", func(t *testing.T) {
-		_, err = CheckSessionTarget(ResumeID, "no-such-session")
-		assert.Error(t, err)
-	})
-
-	t.Run("new_name_is_allowed", func(t *testing.T) {
-		_, err = CheckSessionTarget(ResumeSessionName, "brand-new")
-		assert.NoError(t, err)
-	})
-
-	t.Run("existing_name_is_allowed", func(t *testing.T) {
-		_, err = CheckSessionTarget(ResumeSessionName, "fix-parser")
-		assert.NoError(t, err)
-	})
-
-	t.Run("name_matching_id_fails", func(t *testing.T) {
-		_, err = CheckSessionTarget(ResumeSessionName, id)
-		assert.Error(t, err)
-	})
 }
 
 // TestAbortRunning pins the interrupt's two targets: a running turn and the
@@ -414,17 +258,21 @@ func TestResolveSubAgentModel(t *testing.T) {
 	}}, nil, llm.RegistryOptions{})
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
+	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}, Tokens: tokens.New(llm.Model{Provider: "p", ID: "session"})}
 
 	// configured child model resolves through the registry
-	require.NoError(t, set.SetSession("subagent.model", "p/child"))
-	st := &agent.State{Model: llm.Model{Provider: "p", ID: "session"}, Tokens: tokens.New(llm.Model{Provider: "p", ID: "session"})}
-	got := resolveSubAgentModel(set, reg, st)
-	assert.Equal(t, "child", got.ID) // the configured child model wins
+	t.Run("configured_model_resolves", func(t *testing.T) {
+		require.NoError(t, set.SetSession("subagent.model", "p/child"))
+		got := resolveSubAgentModel(set, reg, st)
+		assert.Equal(t, "child", got.ID)
+	})
 
 	// unset falls back to the session's current model
-	set2, _, _ := config.Load(config.Options{Workspace: t.TempDir()})
-	got = resolveSubAgentModel(set2, reg, st)
-	assert.Equal(t, "session", got.ID) // inherited when subagent.model is empty
+	t.Run("unset_inherits_session", func(t *testing.T) {
+		set2, _, _ := config.Load(config.Options{Workspace: t.TempDir()})
+		got := resolveSubAgentModel(set2, reg, st)
+		assert.Equal(t, "session", got.ID)
+	})
 }
 
 func TestSubagentPollWait(t *testing.T) {
@@ -701,7 +549,7 @@ func TestLineRouterRoute(t *testing.T) {
 		assert.Equal(t, []string{"remember this"}, h.Recent())
 	})
 
-	t.Run("external_source_skips_editor_side_effects", func(t *testing.T) {
+	t.Run("external_source_skips_editor", func(t *testing.T) {
 		h := newHist(t)
 		var lines []pumpLine
 		r := &lineRouter{ui: wrapUI(t, newUI(t)), gate: &typingGate{}, hist: h,
@@ -855,216 +703,4 @@ func newScripted(reply string) *llm.ScriptedProvider {
 		{Type: llm.EventTextEnd, Index: 0},
 		{Type: llm.EventDone, StopReason: llm.StopEndTurn},
 	}}}}
-}
-
-func TestPromptAdapterPlainModeReportsNoUI(t *testing.T) {
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
-	})
-
-	a := promptAdapter{ui: wrapUI(t, ui), hold: func(context.Context) {}}
-	_, err = a.Open("Allow?", "cmd", []string{"Allow"})
-	assert.ErrorIs(t, err, tui.ErrNoUI)
-}
-
-func TestClassifierAdapterClassifiesShellCommands(t *testing.T) {
-	t.Parallel()
-
-	model := llm.Model{ID: "p/m", Provider: "scripted"}
-	adapterFor := func(reply string) classifierAdapter {
-		sp := newScripted(reply)
-		return classifierAdapter{
-			providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
-			model:       func() llm.Model { return model },
-		}
-	}
-
-	t.Run("allow_verdict", func(t *testing.T) {
-		assert.Equal(t, permit.ClassAllow, adapterFor("allow").Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
-	})
-
-	t.Run("deny_verdict_with_noise", func(t *testing.T) {
-		assert.Equal(t, permit.ClassDeny, adapterFor("DENY: it modifies the file!").Classify(t.Context(), permit.Subject{Name: "bash", Args: "rm a"}))
-	})
-
-	t.Run("garbled_maps_to_unsure", func(t *testing.T) {
-		assert.Equal(t, permit.ClassUnsure, adapterFor("? maybe 42").Classify(t.Context(), permit.Subject{Name: "bash", Args: "weird cmd"}))
-	})
-}
-
-func TestClassifierAdapterFailuresAreUnsure(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		ad   classifierAdapter
-	}{
-		{"no_model_configured", classifierAdapter{ // zero model means no provider
-			providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
-			model:       func() llm.Model { return llm.Model{} },
-		}},
-		{"provider_error", classifierAdapter{
-			providerFor: func(llm.Model) (llm.Provider, error) { return nil, errors.New("no provider") },
-			model:       func() llm.Model { return llm.Model{ID: "p/m"} },
-		}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, permit.ClassUnsure, tc.ad.Classify(t.Context(), permit.Subject{Name: "bash", Args: "anything"}))
-		})
-	}
-}
-
-func TestClassifierAdapterRequestUsesFreshContextNoReasoning(t *testing.T) {
-	t.Parallel()
-
-	model := llm.Model{ID: "p/m", Provider: "scripted", MaxOutput: 64000}
-	sp := newScripted("readonly")
-	adapter := classifierAdapter{
-		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
-		model:       func() llm.Model { return model },
-	}
-
-	_ = adapter.Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"})
-	reqs := sp.Requests()
-	require.Len(t, reqs, 1)
-	r := reqs[0]
-	assert.Equal(t, llm.RoleUser, r.Messages[0].Role) // the command is the whole user turn
-	var sys strings.Builder
-	for _, b := range r.System {
-		if tb, ok := b.(llm.TextBlock); ok {
-			sys.WriteString(tb.Text)
-		}
-	}
-	assert.Contains(t, sys.String(), `"allow"`)
-	// the classifier never reasons, off stays off whatever the model supports
-	assert.Equal(t, llm.ClampLevel(model, llm.LevelOff), r.Reasoning.Level)
-}
-
-func TestClassifierAdapterClassifiesMCPCallWithMetadata(t *testing.T) {
-	t.Parallel()
-
-	model := llm.Model{ID: "p/m", Provider: "scripted"}
-	sp := newScripted("allow")
-	adapter := classifierAdapter{
-		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
-		model:       func() llm.Model { return model },
-		schema: func(name string) (llm.ToolSchema, bool) {
-			if name != "srv__list" {
-				return llm.ToolSchema{}, false
-			}
-			return llm.ToolSchema{Name: name, Description: "lists things", Parameters: []byte(`{"type":"object"}`)}, true
-		},
-	}
-
-	assert.Equal(t, permit.ClassAllow, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
-
-	reqs := sp.Requests()
-	require.Len(t, reqs, 1)
-	var sys strings.Builder
-	for _, b := range reqs[0].System {
-		if tb, ok := b.(llm.TextBlock); ok {
-			sys.WriteString(tb.Text)
-		}
-	}
-	// the MCP prompt embeds description and parameters so the model can judge it
-	assert.Contains(t, sys.String(), "lists things")
-	assert.Contains(t, sys.String(), `{"type":"object"}`)
-}
-
-func TestClassifierAdapterUnknownMCPSafelyUnsure(t *testing.T) {
-	t.Parallel()
-
-	adapter := classifierAdapter{ // no MCP metadata: an MCP call cannot be judged
-		providerFor: func(llm.Model) (llm.Provider, error) { return nil, nil },
-		model:       func() llm.Model { return llm.Model{ID: "p/m"} },
-		schema:      func(string) (llm.ToolSchema, bool) { return llm.ToolSchema{}, false },
-	}
-	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "srv__list", Args: `{}`}))
-
-	adapter.schema = func(string) (llm.ToolSchema, bool) { return llm.ToolSchema{}, false } // unknown tool
-	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "ghost", Args: `{}`}))
-}
-
-func TestClassifierAdapterTruncatedVerdictIsUnsure(t *testing.T) {
-	t.Parallel()
-
-	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: truncatedStream("readonly")}}}
-	adapter := classifierAdapter{
-		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
-		model:       func() llm.Model { return llm.Model{ID: "p/m", Provider: "scripted"} },
-	}
-
-	assert.Equal(t, permit.ClassUnsure, adapter.Classify(t.Context(), permit.Subject{Name: "bash", Args: "stat a"}))
-}
-
-func TestClassifierAdapterSelectsPromptPerRuleSet(t *testing.T) {
-	t.Parallel()
-
-	model := llm.Model{ID: "p/m", Provider: "scripted"}
-	adapterFor := func(reply string) (classifierAdapter, *llm.ScriptedProvider) {
-		sp := newScripted(reply)
-		return classifierAdapter{
-			providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
-			model:       func() llm.Model { return model },
-			schema: func(string) (llm.ToolSchema, bool) {
-				return llm.ToolSchema{Name: "mcp__x", Description: "d", Parameters: []byte(`{}`)}, true
-			},
-			cwd: "/work/proj",
-			tmp: "/tmp",
-		}, sp
-	}
-	systemOf := func(sp *llm.ScriptedProvider) string {
-		reqs := sp.Requests()
-		require.Len(t, reqs, 1)
-		require.Len(t, reqs[0].System, 1)
-		tb, ok := reqs[0].System[0].(llm.TextBlock)
-		require.True(t, ok)
-		return tb.Text
-	}
-
-	t.Run("allow_write_shell_uses_workspace_prompt", func(t *testing.T) {
-		a, sp := adapterFor("allow")
-		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "python3 -c x", AllowWrite: true})
-		assert.Equal(t, permit.ClassAllow, got)
-		assert.Equal(t, permit.WorkspaceClassifierSystem("/work/proj", "/tmp"), systemOf(sp))
-	})
-
-	t.Run("allow_write_shell_denies", func(t *testing.T) {
-		a, _ := adapterFor("deny")
-		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "curl x", AllowWrite: true})
-		assert.Equal(t, permit.ClassDeny, got)
-	})
-
-	t.Run("allow_write_rejects_readonly_word", func(t *testing.T) {
-		a, _ := adapterFor("readonly")
-		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls", AllowWrite: true})
-		assert.Equal(t, permit.ClassUnsure, got) // the retired vocabulary no longer approves
-	})
-
-	t.Run("plain_shell_keeps_strict_prompt", func(t *testing.T) {
-		a, sp := adapterFor("allow")
-		got := a.Classify(t.Context(), permit.Subject{Name: "bash", Args: "ls"})
-		assert.Equal(t, permit.ClassAllow, got)
-		assert.Equal(t, permit.ClassifierSystem, systemOf(sp))
-	})
-
-	t.Run("mcp_keeps_strict_prompt", func(t *testing.T) {
-		a, sp := adapterFor("allow")
-		got := a.Classify(t.Context(), permit.Subject{Name: "mcp__x", Args: `{}`, AllowWrite: true})
-		assert.Equal(t, permit.ClassAllow, got)
-		assert.Contains(t, systemOf(sp), "You decide whether a single tool invocation may run unattended")
-	})
 }

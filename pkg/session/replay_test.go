@@ -186,7 +186,7 @@ func TestReplay(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_result_renders_header_and_body", func(t *testing.T) {
+	t.Run("tool_result_header_and_body", func(t *testing.T) {
 		cases := []struct {
 			name string
 			res  Entry
@@ -216,7 +216,7 @@ func TestReplay(t *testing.T) {
 		}
 	})
 
-	t.Run("parallel_calls_interleave_headers_and_bodies", func(t *testing.T) {
+	t.Run("parallel_calls_interleave_parts", func(t *testing.T) {
 		s := &replaySink{}
 		Replay(parallelBranch(), s, ReplayOptions{})
 

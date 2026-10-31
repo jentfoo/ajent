@@ -303,11 +303,7 @@ func TestControlSubmit(t *testing.T) {
 		// the first submit drives a turn pinned inside its tool call
 		rp := c.call("s1", ctl.MethodSubmit, map[string]any{"line": "first"})
 		require.Nil(t, rp.Error)
-		select {
-		case <-entered:
-		case <-time.After(ctlWait):
-			t.Fatal("the submitted prompt never started its turn")
-		}
+		<-entered // the first submit drives a turn pinned inside its tool call
 
 		// a second submit queues: the queued event echoes its correlation, never
 		// a silent drop

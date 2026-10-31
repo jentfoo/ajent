@@ -14,7 +14,7 @@ import (
 )
 
 // gateAsk always allows, standing in for the asker every installed gate carries.
-func gateAsk(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }
+func gateAsk(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }
 
 func TestGuardVerdict(t *testing.T) {
 	t.Parallel()
@@ -120,10 +120,10 @@ func TestMustSerialize(t *testing.T) {
 		asker  Asker
 		want   bool
 	}{
-		{"no guards", nil, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
-		{"allow only with asker", []Guard{allow}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
-		{"ask with asker serializes", []Guard{ask}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, true},
-		{"deny resolves without prompting", []Guard{deny}, func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }, false},
+		{"no guards", nil, func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }, false},
+		{"allow only with asker", []Guard{allow}, func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }, false},
+		{"ask with asker serializes", []Guard{ask}, func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }, true},
+		{"deny resolves without prompting", []Guard{deny}, func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -158,7 +158,7 @@ func TestMustSerializeAnyPromptingCall(t *testing.T) {
 func TestMustSerializeDenyThenAsk(t *testing.T) {
 	t.Parallel()
 
-	asker := func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) }
+	asker := func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) }
 	ask := func(context.Context, agent.ToolCall) Decision {
 		return Decision{Action: ActionAsk, Reason: "needs approval"}
 	}

@@ -185,7 +185,7 @@ func TestWriterHeadSlot(t *testing.T) {
 	})
 
 	// Sync alone must record the appended head at a turn boundary
-	t.Run("sync_persists_head_at_turn_boundary", func(t *testing.T) {
+	t.Run("sync_persists_head_per_turn", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -268,7 +268,7 @@ func TestWriterHeadSlot(t *testing.T) {
 	})
 
 	// a reopen resumes the persisted branch rather than the file tail
-	t.Run("open_recovers_persisted_branch_not_tail", func(t *testing.T) {
+	t.Run("open_recovers_branch_not_tail", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -493,7 +493,7 @@ func TestWriterOpenRepairsTornTail(t *testing.T) {
 	})
 
 	// a torn tail longer than the scan window falls back to the full backward scan
-	t.Run("open_repairs_torn_tail_beyond_window", func(t *testing.T) {
+	t.Run("torn_tail_repaired_past_window", func(t *testing.T) {
 		for _, n := range []int{tornScanWindow + 1, tornScanWindow + 77, 2*tornScanWindow + 13} {
 			t.Run(fmt.Sprintf("junk_%d", n), func(t *testing.T) {
 				p := filepath.Join(t.TempDir(), "s.jsonl")

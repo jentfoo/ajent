@@ -230,7 +230,7 @@ func withMode(o Options, m Mode) Options {
 // runAsk drives the asker for one call and returns its decision.
 func runAsk(b *Barrier, ctx context.Context, name string, input []byte) tools.Decision {
 	ask := b.Asker()
-	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input}, tools.Decision{Action: tools.ActionAsk})
+	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input})
 }
 
 func TestGuardModeMatrix(t *testing.T) {

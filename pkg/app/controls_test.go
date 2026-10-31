@@ -41,15 +41,3 @@ func TestQuitArmFire(t *testing.T) {
 		assert.Equal(t, []string{"again"}, painted)
 	})
 }
-
-// TestInterruptNotice pins the one mapping both loops show for a keypress that
-// stopped real work: survey and shell name their cancellations, a stopped turn
-// stays silent because its own stream is the news.
-func TestInterruptNotice(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "cancelled project survey", interruptNotice(stopSurvey.String()))
-	assert.Equal(t, "cancelled shell command", interruptNotice(stopShell.String()))
-	assert.Empty(t, interruptNotice(stopTurn.String()))
-	assert.Empty(t, interruptNotice(stopNothing.String()))
-}

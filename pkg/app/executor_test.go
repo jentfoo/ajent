@@ -91,8 +91,7 @@ func TestControlExecutorQuiesce(t *testing.T) {
 			e.quiesce(time.Hour)
 			done.Store(true)
 		}()
-		require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond,
-			"quiesce must hold while a verb owns the lane")
+		require.Never(t, done.Load, 50*time.Millisecond, 5*time.Millisecond)
 
 		close(release)
 		require.Eventually(t, done.Load, 2*time.Second, 5*time.Millisecond)

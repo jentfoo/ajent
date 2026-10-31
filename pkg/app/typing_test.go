@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,6 +10,10 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // statusRecorder records the segment texts a gate publishes, safe for concurrent use.
@@ -427,4 +432,111 @@ func TestTypingGateHoldDialog(t *testing.T) {
 		assert.Contains(t, rec.first(), "approval ")
 		assert.Empty(t, rec.last()) // the countdown segment is cleared on release
 	})
+}
+
+// TestTypingGateDeliversIntoHeldBoundary wires the real gate, steer queue and agent:
+// a prompt submitted while AwaitInput holds a boundary lands in that same step, with no
+// intervening model request.
+func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
+	t.Parallel()
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	set := singleToolSet{tool: holdBash{release: release, entered: entered}}
+	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: mainToolTurn()},
+		{Events: textTurnRewind("after steer")},
+	}}
+
+	fakeUI := &fakeQueueUI{}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fakeUI, func(int) {}, func() {}, waitReady, takeReady, nil)
+
+	st := &agent.State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}, Tokens: tokens.New(llm.Model{ID: "test"})}
+	held := make(chan struct{}, 1)
+	gate := &typingGate{
+		idle:    time.Hour,
+		handoff: 30 * time.Millisecond,
+		poll:    5 * time.Millisecond,
+		pending: q.pending,
+	}
+	// status is the only place a held boundary signals, non-empty text means engaged
+	gate.status = func(text, short string) {
+		if text == "" {
+			return
+		}
+		select {
+		case held <- struct{}{}:
+		default:
+		}
+	}
+
+	a := agent.New(st, agent.Options{
+		Provider:   func(llm.Model) (llm.Provider, error) { return p, nil },
+		Sinks:      []agent.Sink{agent.NopSink{}},
+		Tools:      set,
+		Env:        agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnBoundary: q.pull,
+		AwaitInput: gate.hold,
+	})
+
+	in := agent.Input{Text: "start"}
+	q.offer(in, "start", 0) // starts the drain, not queued
+	gate.taken()            // runPump clears any handoff before spawning a turn
+	errCh := make(chan error, 1)
+	go func() { errCh <- a.Prompt(t.Context(), in) }()
+
+	// pin step one inside its tool call, then begin typing mid-turn
+	require.Eventually(t, func() bool {
+		select {
+		case <-entered:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
+	gate.edit("draft") // the user is composing a message
+
+	close(release) // step one finishes, AwaitInput at step two holds on the draft
+	require.Eventually(t, func() bool {
+		select {
+		case <-held:
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
+	assert.Len(t, p.Requests(), 1, "no second request may leave while the hold is engaged")
+
+	// a prompt submitted during the hold queues and must land at this same step
+	require.True(t, q.offer(agent.Input{Text: "steered"}, "steered", 3))
+
+	var turnErr error
+	require.Eventually(t, func() bool {
+		select {
+		case e := <-errCh:
+			turnErr = e
+			return true
+		default:
+			return false
+		}
+	}, 3*time.Second, time.Millisecond)
+	require.NoError(t, turnErr)
+	reqs := p.Requests()
+	assert.Len(t, reqs, 2, "the steer must ride into step two with no third model call")
+
+	var foundSteer bool
+	for _, m := range reqs[len(reqs)-1].Messages {
+		if m.Role != llm.RoleUser || len(m.Content) == 0 {
+			continue
+		}
+		tb, ok := m.Content[0].(llm.TextBlock)
+		if !ok {
+			continue
+		}
+		if strings.Contains(tb.Text, "steered") {
+			foundSteer = true
+		}
+	}
+	assert.True(t, foundSteer, "step two's request must carry the queued steer")
 }

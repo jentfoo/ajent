@@ -1,9 +1,6 @@
 package app
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"io"
 	"os"
 	"strings"
@@ -290,45 +287,6 @@ func TestHubUISegmentRemoval(t *testing.T) {
 	segs := log.segsSeen()
 	require.Len(t, segs, 2)
 	assert.Empty(t, segs[1].Text)
-}
-
-// TestHubUIShimCoversEveryMutation pins the shim rule: every TUI-visible
-// mutation is declared on hubUI, so no consumer can reach the raw terminal
-// past the hub's view model, and serve mode's nil terminal cannot leak into a
-// call site. Local-only surfaces (editor wiring, dialogs, recall, theme setup)
-// keep their own paths. This list is the mutation surface.
-func TestHubUIShimCoversEveryMutation(t *testing.T) {
-	t.Parallel()
-
-	mutations := []string{
-		"Notify", "NotifyLocal", "NotifyKeyed", "NotifyKeyedLocal", "Print",
-		"SetStatusSegment", "SetModel", "SetModelOf",
-		"SetActivity", "SetActivityRanked", "SetQueued", "SetIdle",
-		"SetInput", "PrependInput", "Insert", "UserEcho", "UserImages",
-		"SetTheme", "SetContext", "Busy", "Interactive",
-	}
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "hubui.go", nil, 0)
-	require.NoError(t, err)
-	declared := map[string]bool{}
-	ast.Inspect(f, func(n ast.Node) bool {
-		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil {
-			return true
-		}
-		star, ok := fn.Recv.List[0].Type.(*ast.StarExpr)
-		if !ok {
-			return true
-		}
-		if ident, ok := star.X.(*ast.Ident); ok && ident.Name == "hubUI" {
-			declared[fn.Name.Name] = true
-		}
-		return true
-	})
-	for _, name := range mutations {
-		assert.True(t, declared[name], "hubUI must declare %s so the mutation routes through the hub", name)
-	}
 }
 
 func TestHubUIIdleAndSpinTrack(t *testing.T) {

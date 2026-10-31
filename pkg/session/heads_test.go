@@ -82,7 +82,7 @@ func TestHeadForEntries(t *testing.T) {
 		assert.Empty(t, headForEntries(p, entries, true))
 	})
 
-	t.Run("live_slot_adopts_head_when_implicit", func(t *testing.T) {
+	t.Run("live_slot_adopts_implicit", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		s := slotEntries(t, p, "live", "a", 5, len(entries))
 		s.Active = true
@@ -93,7 +93,7 @@ func TestHeadForEntries(t *testing.T) {
 	// an empty live head is a mid-fork or fresh writer with no branch to adopt:
 	// adoption falls through to the next newest live peer instead of forking a
 	// rootless sibling
-	t.Run("live_empty_head_skipped_for_next_peer", func(t *testing.T) {
+	t.Run("empty_head_skips_next_peer", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		s := slotEntries(t, p, "concrete", "a", 5, len(entries))
 		s.Active = true
@@ -129,7 +129,7 @@ func TestHeadForEntries(t *testing.T) {
 func TestMigrateLegacyHead(t *testing.T) {
 	t.Parallel()
 
-	t.Run("seeds_dead_slot_and_removes_cursor", func(t *testing.T) {
+	t.Run("seeds_dead_slot_removes_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		require.NoError(t, os.WriteFile(p+legacyHeadSuffix, []byte(`{"id":"a","n":3}`), 0o600))
 
@@ -191,7 +191,7 @@ func TestLiveWriters(t *testing.T) {
 		assert.Equal(t, 1, LiveWriters(p))
 	})
 
-	t.Run("inactive_and_stale_do_not_count", func(t *testing.T) {
+	t.Run("inactive_stale_do_not_count", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		slotEntries(t, p, "dead", "a", 5, 3) // written inactive: a clean exit
 		assert.Equal(t, 0, LiveWriters(p))
@@ -212,9 +212,17 @@ func TestSlotLive(t *testing.T) {
 	fresh := now.Add(-time.Second)
 	stale := now.Add(-2 * slotStaleAfter)
 
-	assert.True(t, slotLive(headSlot{Active: true}, fresh, now))
-	assert.False(t, slotLive(headSlot{Active: false}, fresh, now)) // a clean exit
-	assert.False(t, slotLive(headSlot{Active: true}, stale, now))  // a crashed writer
+	t.Run("active_is_live", func(t *testing.T) {
+		assert.True(t, slotLive(headSlot{Active: true}, fresh, now))
+	})
+
+	t.Run("clean_exit_dead", func(t *testing.T) {
+		assert.False(t, slotLive(headSlot{Active: false}, fresh, now))
+	})
+
+	t.Run("crashed_writer_stale", func(t *testing.T) {
+		assert.False(t, slotLive(headSlot{Active: true}, stale, now))
+	})
 }
 
 func TestGcStaleSlots(t *testing.T) {

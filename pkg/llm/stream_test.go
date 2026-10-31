@@ -108,7 +108,7 @@ func TestAccumulate(t *testing.T) {
 		assert.JSONEq(t, `{}`, string(call.Input)) // unparseable partial is not passed on
 	})
 
-	t.Run("scrambled_ends_assemble_in_stream_order", func(t *testing.T) {
+	t.Run("scrambled_ends_keep_stream_order", func(t *testing.T) {
 		// parallel tool calls can finish streaming out of order; the message must
 		// still read as the model emitted it, or dispatch pairs results by race
 		msg, _, err := Accumulate(&SliceStream{Events: []Event{
