@@ -226,6 +226,7 @@ The top-level blocks:
   * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default, and `/settings` can flip it for the session, while `AJENT_IMAGES_BLOCK=true` sets it for a single run.
   * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.
   * `ui.color` - color depth: `auto` (default), `none`, `basic`, `256` or `true`. `auto` reads `TERM` and `COLORTERM`. Any other value names the depth outright. That is the way out if your terminal is classified badly, since `256` turns on syntax highlighting where detection was too conservative and `none` turns color off entirely. `AJENT_UI_COLOR=none` sets it for a single run.
+  * `ui.keymap` - which keys submit the prompt and which insert a newline. Defaults to `submit: ["enter"]` and `newline: ["ctrl+j", "alt+enter"]`. To make Enter insert a newline and Alt+Enter send, set `keymap: { "submit": ["alt+enter"], "newline": ["enter"] }`. An unknown key name or a key bound to both actions warns and falls back to the defaults at startup.
   * `disableUpdateCheck` - turn off the startup update-available notice. Off by default, and a fork install or an offline machine that does not want to nag can set this once in the user layer.
 
 ### Command-line options

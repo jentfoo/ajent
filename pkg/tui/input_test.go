@@ -23,8 +23,8 @@ func TestDecodeKey(t *testing.T) {
 	}{
 		{"ascii_rune", "a", key{typ: keyRune, text: "a"}, 1},
 		{"multibyte_rune", "é", key{typ: keyRune, text: "é"}, 2},
-		{"enter", "\r", key{typ: keyEnter}, 1},
-		{"ctrl_j_newline", "\n", key{typ: keyNewline}, 1},
+		{"enter", "\r", key{typ: keyEnter, phys: "enter"}, 1},
+		{"ctrl_j_newline", "\n", key{typ: keyNewline, phys: "ctrl+j"}, 1},
 		{"backspace", "\x7f", key{typ: keyBackspace}, 1},
 		{"ctrl_c", "\x03", key{typ: keyInterrupt}, 1},
 		{"ctrl_d", "\x04", key{typ: keyEOF}, 1},
@@ -56,7 +56,7 @@ func TestDecodeKey(t *testing.T) {
 		{"application_arrow", "\x1bOC", key{typ: keyRight}, 3},
 		{"ss3_home", "\x1bOH", key{typ: keyHome}, 3},
 		{"ss3_end", "\x1bOF", key{typ: keyEnd}, 3},
-		{"ss3_keypad_enter", "\x1bOM", key{typ: keyEnter}, 3},
+		{"ss3_keypad_enter", "\x1bOM", key{typ: keyEnter, phys: "enter"}, 3},
 		{"ss3_f1_ignored", "\x1bOP", key{typ: keyIgnore}, 3},
 		{"ss3_keypad_digit_ignored", "\x1bOs", key{typ: keyIgnore}, 3},
 		{"ctrl_arrow_word", "\x1b[1;5C", key{typ: keyWordRight}, 6},
@@ -69,7 +69,7 @@ func TestDecodeKey(t *testing.T) {
 		{"shift_tab_modified", "\x1b[1;2Z", key{typ: keyBackTab}, 6},
 		{"bare_csi_r_ignored", "\x1b[R", key{typ: keyIgnore}, 3},
 		{"apc_reply_ignored", "\x1b_G0;Invalid control range\x1b\\", key{typ: keyIgnore}, 28},
-		{"alt_enter", "\x1b\r", key{typ: keyNewline}, 2},
+		{"alt_enter", "\x1b\r", key{typ: keyNewline, phys: "alt+enter"}, 2},
 		{"alt_b_word_left", "\x1bb", key{typ: keyWordLeft}, 2},
 		{"alt_f_word_right", "\x1bf", key{typ: keyWordRight}, 2},
 		{"alt_backspace", "\x1b\x7f", key{typ: keyKillWord}, 2},
@@ -168,7 +168,7 @@ func TestInputReaderRun(t *testing.T) {
 
 		assert.Equal(t, key{typ: keyRune, text: "h"}, <-r.keys)
 		assert.Equal(t, key{typ: keyRune, text: "i"}, <-r.keys)
-		assert.Equal(t, key{typ: keyEnter}, <-r.keys)
+		assert.Equal(t, key{typ: keyEnter, phys: "enter"}, <-r.keys)
 
 		require.NoError(t, pw.Close())
 		_, ok := <-r.keys // stream end emits no editing keystroke, just a channel close
@@ -487,8 +487,8 @@ func TestInputReaderBulkCoalesce(t *testing.T) {
 		_, err := io.WriteString(pw, "hi\r\nthere")
 		require.NoError(t, err)
 		for _, k := range []key{
-			{typ: keyRune, text: "h"}, {typ: keyRune, text: "i"}, {typ: keyEnter},
-			{typ: keyNewline}, {typ: keyRune, text: "t"}, {typ: keyRune, text: "h"},
+			{typ: keyRune, text: "h"}, {typ: keyRune, text: "i"}, {typ: keyEnter, phys: "enter"},
+			{typ: keyNewline, phys: "ctrl+j"}, {typ: keyRune, text: "t"}, {typ: keyRune, text: "h"},
 			{typ: keyRune, text: "e"}, {typ: keyRune, text: "r"}, {typ: keyRune, text: "e"},
 		} {
 			assert.Equal(t, k, <-r.keys)
@@ -538,7 +538,7 @@ func TestInputReaderBounded(t *testing.T) {
 		_, err := io.WriteString(pw, "\x1b["+filler+"\r")
 		require.NoError(t, err)
 
-		assert.Equal(t, key{typ: keyEnter}, <-r.keys) // only Enter lands, filler is ignored
+		assert.Equal(t, key{typ: keyEnter, phys: "enter"}, <-r.keys) // only Enter lands, filler is ignored
 	})
 }
 

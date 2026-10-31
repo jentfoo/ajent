@@ -99,6 +99,15 @@ type UI struct {
 	Color  string `json:"color,omitempty"`  // tui.ColorProfile name
 	Theme  string `json:"theme,omitempty"`  // tui.Palette name
 	Images string `json:"images,omitempty"` // tui.ImageProtocol name: auto, kitty, iterm2, none
+	Keymap Keymap `json:"keymap,omitzero"`  // editor submit/newline key bindings
+}
+
+// Keymap names the keys that submit a prompt and those that insert a newline.
+// Names are tui keymap identifiers; an empty list leaves that action at its
+// default. A key bound to both is rejected at startup.
+type Keymap struct {
+	Submit  []string `json:"submit,omitempty"`
+	Newline []string `json:"newline,omitempty"`
 }
 
 // Images configures how image blocks flow to providers and the terminal.

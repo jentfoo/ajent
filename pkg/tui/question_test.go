@@ -678,3 +678,26 @@ func TestQuestionReplyCompletion(t *testing.T) {
 		assert.Equal(t, "@main", (<-result).Text)
 	})
 }
+
+func TestQuestionStateKeymap(t *testing.T) {
+	t.Parallel()
+
+	km, err := ParseKeymap([]string{"alt+enter"}, []string{"enter"})
+	require.NoError(t, err)
+	resolved, err := km.resolve()
+	require.NoError(t, err)
+
+	s := &questionState{keymap: resolved, text: "Note:"}
+	s.answer.SetValue("hi")
+
+	// a remapped Enter inserts a newline, it does not submit
+	done, err := s.key(key{typ: keyEnter, phys: "enter"})
+	require.NoError(t, err)
+	assert.False(t, done)
+	assert.Equal(t, "hi\n", s.answer.Value())
+
+	// Alt+Enter submits
+	done, err = s.key(key{typ: keyNewline, phys: "alt+enter"})
+	require.NoError(t, err)
+	assert.True(t, done)
+}

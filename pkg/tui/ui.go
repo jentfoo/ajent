@@ -86,6 +86,9 @@ type Options struct {
 	// "" to detect from the environment. Detection is conservative: multiplexers
 	// and unknown terminals report none and every image renders as a placeholder.
 	Images string
+	// Keymap configures which keys submit the prompt and which insert a newline.
+	// The zero value uses the defaults (Enter submits, Ctrl+J/Alt+Enter newline).
+	Keymap Keymap
 }
 
 // UI is the terminal front end: committed history above a live block holding the
@@ -97,6 +100,8 @@ type UI struct {
 	mode   Mode
 	editor editor
 	status Status
+
+	keymap keymap // resolves configurable submit/newline keys (see Keymap)
 
 	in       io.Reader
 	inFd     int
@@ -277,6 +282,11 @@ func New(opts Options) (*UI, error) {
 		return u, nil
 	}
 
+	km, err := opts.Keymap.resolve()
+	if err != nil {
+		return nil, err
+	}
+	u.keymap = km
 	u.reader = newInputReader(in)
 	// Type-ahead decodes and handles as soon as these start, so from here New
 	// holds the lock like every public method (invariant 4): the startup frame
@@ -1568,6 +1578,9 @@ func (u *UI) inputRows() int {
 	return max(1, (h-1)/maxInputRatio)
 }
 
+// keyRole resolves a configurable line-ending key to its semantic action.
+func (u *UI) keyRole(k key) keyRole { return resolveKeyRole(u.keymap, k) }
+
 // applyKey mutates the editor for one key and reports whether it changed any
 // rendered state. Caller holds the lock.
 func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
@@ -1666,16 +1679,21 @@ func (u *UI) applyKey(k key) (submit *string, dirty bool, quit bool) {
 		} else {
 			u.editor.Insert(text)
 		}
-	case keyNewline:
-		u.cancelRewindLocked()
-		u.editor.Insert("\n")
-	case keyEnter:
-		u.completion = nil // a listing never holds a send hostage
-		v := u.editor.Submit()
-		u.resetPromptNavLocked() // submitted or discarded, browsing never survives
-		if strings.TrimSpace(v) != "" {
-			e := u.expandPastes(v)
-			return &e, true, false
+	case keyNewline, keyEnter:
+		// the keymap decides which physical line-ending key submits and which
+		// inserts a newline; the decoded type is only the default role
+		switch u.keyRole(k) {
+		case roleNewline:
+			u.cancelRewindLocked()
+			u.editor.Insert("\n")
+		case roleSubmit:
+			u.completion = nil // a listing never holds a send hostage
+			v := u.editor.Submit()
+			u.resetPromptNavLocked() // submitted or discarded, browsing never survives
+			if strings.TrimSpace(v) != "" {
+				e := u.expandPastes(v)
+				return &e, true, false
+			}
 		}
 	case keyBackspace:
 		u.editor.Backspace()
