@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // writeAt creates a session holding one message whose entry timestamps and file
@@ -42,6 +44,30 @@ func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
 	require.NoError(t, err)
 	restore()
 	require.NoError(t, os.Chtimes(w.Path(), at, at))
+}
+
+// TestNewStorePinsRoot covers the sessions root's permission policy: created
+// owner-only, and a wider existing mode tightened with a startup note.
+func TestNewStorePinsRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits are not meaningful")
+	}
+	// not parallel: AJENT_HOME pins the resolution
+	home := t.TempDir()
+	t.Setenv(paths.EnvHome, home)
+
+	store, err := NewStore()
+	require.NoError(t, err)
+	assert.Empty(t, store.Note())
+	fi, err := os.Stat(filepath.Join(home, sessionsRoot))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(paths.DirPerm), fi.Mode().Perm())
+
+	// a root that slipped wider is tightened with a note
+	require.NoError(t, os.Chmod(filepath.Join(home, sessionsRoot), 0o750))
+	store2, err := NewStore()
+	require.NoError(t, err)
+	assert.Contains(t, store2.Note(), "tightened to 0700")
 }
 
 func TestStoreDirDeterministic(t *testing.T) {
@@ -117,7 +143,7 @@ func TestStoreList(t *testing.T) {
 		hh, hherr := NewEditorHistory(s, ws, "")
 		require.NoError(t, hherr)
 		hh.Append("/model")
-		require.NoError(t, writeHead(w.Path(), txID, 0)) // the branch cursor sidecar
+		slotEntries(t, w.Path(), "t1", txID, 0, 0) // the branch slot sidecar
 
 		list, lerr := s.List(ws)
 		require.NoError(t, lerr)
@@ -230,10 +256,9 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	require.NoError(t, w2.Sync())
 	require.NoError(t, w2.Close())
 
-	_, ok := readHead(w2.Path())
-	require.True(t, ok) // each session carries its own cursor
+	require.NotEmpty(t, readSlots(w2.Path())) // each session carries its own slots
 
-	// removing the empty w2 takes its file and cursor, leaving w1 whole
+	// removing the empty w2 takes its file and slots, leaving w1 whole
 	rerr := s.Remove(w2.Path())
 	require.NoError(t, rerr)
 
@@ -242,10 +267,8 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	assert.Len(t, list, 1)
 	assert.NotEqual(t, removedID, list[0].ID)
 
-	_, ok = readHead(w2.Path())
-	assert.False(t, ok)
-	_, ok = readHead(w1.Path())
-	assert.True(t, ok) // the sibling's cursor is untouched
+	assert.Empty(t, readSlots(w2.Path()))
+	assert.NotEmpty(t, readSlots(w1.Path())) // the sibling's slots are untouched
 }
 
 func TestStoreRemoveCursorBestEffort(t *testing.T) {
@@ -263,9 +286,9 @@ func TestStoreRemoveCursorBestEffort(t *testing.T) {
 	require.NoError(t, w.Sync()) // the append's cursor sidecar
 	require.NoError(t, w.Close())
 
-	head := headPath(w.Path())
-	require.NoError(t, os.Remove(head))
-	require.NoError(t, os.Mkdir(head, sessionDirPerm))
+	head := headsDir(w.Path())
+	require.NoError(t, os.RemoveAll(head)) // the writer's own slot is inside
+	require.NoError(t, os.Mkdir(head, paths.DirPerm))
 	require.NoError(t, os.WriteFile(filepath.Join(head, "lock"), []byte("x"), 0o600))
 
 	require.NoError(t, s.Remove(w.Path()))
@@ -300,14 +323,14 @@ func TestStoreRemoveTakesTornSidecar(t *testing.T) {
 	require.NoError(t, oerr)
 	require.NoError(t, w2.Sync()) // leave the branch cursor sidecar behind too
 	require.NoError(t, w2.Close())
-	require.True(t, fileExists(headPath(w.Path())))
+	require.True(t, fileExists(headsDir(w.Path())))
 	require.True(t, fileExists(tornPath(w.Path())))
 
 	// removing the session takes every sidecar with it
 	require.NoError(t, s.Remove(w.Path()))
 
 	assert.False(t, fileExists(w.Path()))
-	assert.False(t, fileExists(headPath(w.Path())))
+	assert.False(t, fileExists(headsDir(w.Path())))
 	assert.False(t, fileExists(tornPath(w.Path())))
 }
 
@@ -743,7 +766,7 @@ func TestStoreFindNamed(t *testing.T) {
 		assert.Equal(t, namedID, info.ID)
 	})
 
-	t.Run("id_match_is_not_a_name", func(t *testing.T) {
+	t.Run("id_match_not_a_name", func(t *testing.T) {
 		_, _, ferr := s.FindNamed(ws, plainID)
 		assert.ErrorContains(t, ferr, "matches session id")
 	})
@@ -1054,7 +1077,7 @@ func TestStoreFindByPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, w.Close())
 
-		for _, p := range []string{headPath(w.Path()), tornPath(w.Path())} {
+		for _, p := range []string{headsDir(w.Path()), tornPath(w.Path())} {
 			_, ferr := s.Find(ws, p) // only .jsonl transcripts resolve by path
 			assert.ErrorIs(t, ferr, ErrNotFound)
 		}

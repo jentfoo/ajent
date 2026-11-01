@@ -23,9 +23,14 @@ type Input struct {
 	After     func(context.Context) []llm.Message // appended behind it once it lands, nil is the normal case
 	Delivered func()                              // called once the message lands, ahead of After, nil is the normal case
 	Settled   func()                              // called once After has landed too, nil is the normal case
+	Dropped   func()                              // called when an interrupt drops the input before landing, nil is the normal case
 	Injected  bool                                // system-injected context (not a typed prompt), excluded from recall
 	Echo      string                              // injected-only live echo, drawn as the message lands; empty stays silent
 	Prepared  bool                                // already expanded or host-authored, Options.NormalizeInput skips it
+	Origin    string                              // submitter of a non-typed prompt, recorded on the transcript
+	// QueueIDs are the queue-row correlations this input landed for, recorded on
+	// the committed entry so pending rows resolve by id; empty carries none.
+	QueueIDs []string
 }
 
 // State is the in-memory projection of a session. It is owned by the loop
@@ -61,8 +66,10 @@ type MessageInfo struct {
 	Message  llm.Message
 	Stop     llm.StopReason // assistant messages only
 	Usage    llm.Usage
-	Injected bool // system-injected context, excluded from prompt recall
-	Replayed bool // injected context that still belongs in restored scrollback
+	Injected bool     // system-injected context, excluded from prompt recall
+	Replayed bool     // injected context that still belongs in restored scrollback
+	Origin   string   // submitter of a non-typed prompt, empty when typed locally
+	QueueIDs []string // queue-row correlations the message landed for
 }
 
 // BeforeMessages returns the bare messages of infos, in order.

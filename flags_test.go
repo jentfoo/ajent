@@ -57,6 +57,34 @@ func TestParseFlags(t *testing.T) {
 		assert.False(t, f.promptGiven)
 	})
 
+	t.Run("attach_target", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach", "shared"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Equal(t, "shared", f.attach)
+	})
+
+	// bare --attach opens the live-session picker, never pflag's missing-value error
+	t.Run("attach_bare", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Empty(t, f.attach)
+
+		f, err = parseFlags([]string{"--attach", "--render", "plain"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven) // the next token is a flag, so the target stays empty
+		assert.Empty(t, f.attach)
+		assert.Equal(t, "plain", f.render)
+	})
+
+	t.Run("attach_equals_form", func(t *testing.T) {
+		f, err := parseFlags([]string{"--attach=01ABC"})
+		require.NoError(t, err)
+		assert.True(t, f.attachGiven)
+		assert.Equal(t, "01ABC", f.attach)
+	})
+
 	t.Run("output_and_scopes", func(t *testing.T) {
 		f, err := parseFlags([]string{"-p", "x", "-o", "json", "--read-only"})
 		require.NoError(t, err)
@@ -167,6 +195,7 @@ func TestWriteUsage(t *testing.T) {
 	assert.Equal(t, "ajent version "+version.Version, strings.SplitN(out, "\n", 2)[0])
 	assert.Contains(t, out, "usage of ")
 	assert.Contains(t, out, "--resume")
+	assert.Contains(t, out, "--attach")
 	assert.Contains(t, out, "--delete-old")
 }
 
@@ -196,8 +225,16 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"empty_session_name", []string{"--session", ""}, false},
 		{"session_name_with_space", []string{"--session", "fix parser"}, false},
 		{"delete_target", []string{"--delete", "fix-parser"}, true},
+		{"delete_with_force", []string{"--delete", "fix-parser", "--force"}, true},
+		{"attach_bare", []string{"--attach"}, true},
+		{"attach_target", []string{"--attach", "shared"}, true},
+		{"attach_with_prompt", []string{"--attach", "shared", "-p", "hi"}, false},
+		{"attach_with_positional", []string{"--attach", "shared", "extra"}, false},
+		{"attach_with_serve", []string{"--attach", "shared", "--serve"}, false},
 		{"delete_old_bare", []string{"--delete-old"}, true},
 		{"delete_old_with_days", []string{"--delete-old", "7"}, true},
+		{"delete_old_with_force", []string{"--delete-old", "--force"}, false},
+		{"force_without_delete", []string{"--force"}, false},
 		{"delete_with_model", []string{"--delete", "a", "-m", "p/m"}, true},
 		{"empty_delete_target", []string{"--delete", "  "}, false},
 		{"delete_with_delete_old", []string{"--delete", "a", "--delete-old"}, false},
@@ -221,6 +258,8 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"blank_prompt_flag", []string{"-p", "   "}, false},
 		{"empty_prompt_value", []string{"-p", ""}, false},
 		{"delete_with_blank_prompt", []string{"--delete", "a", "-p", "  "}, false},
+		{"attach_socket", []string{"--attach", "/tmp/x.sock"}, true},
+		{"attach_with_session_name", []string{"--attach=/x.sock", "--session", "fix"}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,22 +291,55 @@ func TestCliFlagsValidate(t *testing.T) {
 		require.NoError(t, err)
 		require.EqualError(t, f.validate(), "--prompt is blank; give it a prompt or drop the flag")
 	})
+
+	// --attach configures no local run: every such flag refuses rather than being ignored
+	t.Run("attach_refuses_local_run_flags", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			argv  []string
+			match string
+		}{
+			{"prompt", []string{"--attach", "/x.sock", "-p", "hi"}, "takes no prompt"},
+			{"positional_arg", []string{"--attach", "/x.sock", "extra"}, "socket path only"},
+			{"serve_exclusive", []string{"--attach", "/x.sock", "--serve"}, "mutually exclusive"},
+			{"resume_refused", []string{"--attach", "/x.sock", "--resume"}, "does not open a local one"},
+			{"continue_refused", []string{"--attach", "/x.sock", "--continue"}, "does not open a local one"},
+			{"session_refused", []string{"--attach=/x.sock", "--session", "s"}, "does not open a local one"},
+			{"allow_all_refused", []string{"--attach", "/x.sock", "--allow-all"}, "no permission barrier"},
+			{"model_refused", []string{"--attach", "/x.sock", "-m", "p/m"}, "only applies to a local run"},
+			{"system_prompt_refused", []string{"--attach", "/x.sock", "--system", "x"}, "only applies to a local run"},
+			{"output_format_refused", []string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
+			{"delete_combined", []string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f, perr := parseFlags(tc.argv)
+				require.NoError(t, perr)
+				verr := f.validate()
+				require.Error(t, verr)
+				assert.Contains(t, verr.Error(), tc.match)
+			})
+		}
+	})
 }
 
 func TestStatsFlagIsHeadlessOnly(t *testing.T) {
 	t.Parallel()
 
-	f, err := parseFlags([]string{"--stats"})
-	require.NoError(t, err)
+	t.Run("refused_without_prompt", func(t *testing.T) {
+		f, err := parseFlags([]string{"--stats"})
+		require.NoError(t, err)
 
-	err = f.validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--stats only applies with --prompt")
+		err = f.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "--stats only applies with --prompt")
+	})
 
-	f, err = parseFlags([]string{"-p", "hi", "--stats"})
-	require.NoError(t, err)
-	assert.NoError(t, f.validate())
-	assert.True(t, f.stats)
+	t.Run("allowed_with_prompt", func(t *testing.T) {
+		f, err := parseFlags([]string{"-p", "hi", "--stats"})
+		require.NoError(t, err)
+		assert.NoError(t, f.validate())
+		assert.True(t, f.stats)
+	})
 }
 
 func TestPrintVersion(t *testing.T) {
@@ -279,55 +351,105 @@ func TestPrintVersion(t *testing.T) {
 
 func TestExtractResume(t *testing.T) {
 	t.Parallel()
-	given, id, rest := extractResume([]string{"--resume", "01JXYZ"})
-	assert.True(t, given)
-	assert.Equal(t, "01JXYZ", id)
-	assert.Empty(t, rest)
 
-	given, id, rest = extractResume([]string{"--resume"})
-	assert.True(t, given)
-	assert.Empty(t, id)
-	assert.Empty(t, rest)
+	t.Run("full_id", func(t *testing.T) {
+		given, id, rest := extractResume([]string{"--resume", "01JXYZ"})
+		assert.True(t, given)
+		assert.Equal(t, "01JXYZ", id)
+		assert.Empty(t, rest)
+	})
 
-	_, id, _ = extractResume([]string{"--resume=01ABC", "--continue"})
-	assert.Equal(t, "01ABC", id)
+	t.Run("bare_flag", func(t *testing.T) {
+		given, id, rest := extractResume([]string{"--resume"})
+		assert.True(t, given)
+		assert.Empty(t, id)
+		assert.Empty(t, rest)
+	})
 
-	given, _, rest = extractResume([]string{"-m", "p/m", "hello", "world"})
-	assert.False(t, given)
-	assert.Equal(t, []string{"-m", "p/m", "hello", "world"}, rest)
+	t.Run("equals_form", func(t *testing.T) {
+		_, id, _ := extractResume([]string{"--resume=01ABC", "--continue"})
+		assert.Equal(t, "01ABC", id)
+	})
 
-	given, id, rest = extractResume([]string{"--resume", "01ZZZ", "seed"})
-	assert.True(t, given)
-	assert.Equal(t, "01ZZZ", id)
-	assert.Equal(t, []string{"seed"}, rest)
+	t.Run("absent_keeps_args", func(t *testing.T) {
+		given, _, rest := extractResume([]string{"-m", "p/m", "hello", "world"})
+		assert.False(t, given)
+		assert.Equal(t, []string{"-m", "p/m", "hello", "world"}, rest)
+	})
+
+	t.Run("id_lifted_from_args", func(t *testing.T) {
+		given, id, rest := extractResume([]string{"--resume", "01ZZZ", "seed"})
+		assert.True(t, given)
+		assert.Equal(t, "01ZZZ", id)
+		assert.Equal(t, []string{"seed"}, rest)
+	})
+}
+
+func TestExtractAttach(t *testing.T) {
+	t.Parallel()
+
+	t.Run("full_target", func(t *testing.T) {
+		given, target, rest := extractAttach([]string{"--attach", "shared"})
+		assert.True(t, given)
+		assert.Equal(t, "shared", target)
+		assert.Empty(t, rest)
+	})
+
+	t.Run("bare_flag", func(t *testing.T) {
+		given, target, rest := extractAttach([]string{"--attach"})
+		assert.True(t, given)
+		assert.Empty(t, target)
+		assert.Empty(t, rest)
+	})
+
+	t.Run("equals_form", func(t *testing.T) {
+		_, target, _ := extractAttach([]string{"--attach=01ABC", "--continue"})
+		assert.Equal(t, "01ABC", target)
+	})
+
+	t.Run("absent_keeps_args", func(t *testing.T) {
+		given, _, rest := extractAttach([]string{"-m", "p/m", "hello"})
+		assert.False(t, given)
+		assert.Equal(t, []string{"-m", "p/m", "hello"}, rest)
+	})
 }
 
 func TestExtractDeleteOld(t *testing.T) {
 	t.Parallel()
 
-	given, days, rest := extractDeleteOld([]string{"--delete-old", "14"})
-	assert.True(t, given)
-	assert.Equal(t, "14", days)
-	assert.Empty(t, rest)
+	t.Run("day_count", func(t *testing.T) {
+		given, days, rest := extractDeleteOld([]string{"--delete-old", "14"})
+		assert.True(t, given)
+		assert.Equal(t, "14", days)
+		assert.Empty(t, rest)
+	})
 
 	// bare --delete-old (no trailing token) -> the default window.
-	given, days, rest = extractDeleteOld([]string{"--delete-old"})
-	assert.True(t, given)
-	assert.Empty(t, days)
-	assert.Empty(t, rest)
+	t.Run("bare_flag_defaults", func(t *testing.T) {
+		given, days, rest := extractDeleteOld([]string{"--delete-old"})
+		assert.True(t, given)
+		assert.Empty(t, days)
+		assert.Empty(t, rest)
+	})
 
 	// only a day count is the value; anything else stays a positional the flag
 	// parser can reject.
-	given, days, rest = extractDeleteOld([]string{"--delete-old", "soon"})
-	assert.True(t, given)
-	assert.Empty(t, days)
-	assert.Equal(t, []string{"soon"}, rest)
+	t.Run("non_digit_stays_positional", func(t *testing.T) {
+		given, days, rest := extractDeleteOld([]string{"--delete-old", "soon"})
+		assert.True(t, given)
+		assert.Empty(t, days)
+		assert.Equal(t, []string{"soon"}, rest)
+	})
 
 	// the = form carries the count too.
-	_, days, _ = extractDeleteOld([]string{"--delete-old=7", "-m", "p/m"})
-	assert.Equal(t, "7", days)
+	t.Run("equals_form", func(t *testing.T) {
+		_, days, _ := extractDeleteOld([]string{"--delete-old=7", "-m", "p/m"})
+		assert.Equal(t, "7", days)
+	})
 
-	given, _, rest = extractDeleteOld([]string{"-m", "p/m"})
-	assert.False(t, given)
-	assert.Equal(t, []string{"-m", "p/m"}, rest)
+	t.Run("absent_keeps_args", func(t *testing.T) {
+		given, _, rest := extractDeleteOld([]string{"-m", "p/m"})
+		assert.False(t, given)
+		assert.Equal(t, []string{"-m", "p/m"}, rest)
+	})
 }

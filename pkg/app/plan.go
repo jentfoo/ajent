@@ -30,6 +30,10 @@ type planHooks struct {
 	parked func() bool
 }
 
+// atGate reports whether the workflow holds the next turn behind its user gate;
+// without hooks nothing parks.
+func (h planHooks) atGate() bool { return h.parked != nil && h.parked() }
+
 // turnRecorder keeps the last turn's result so a turn-boundary hook can tell a clean stop from an
 // abort or a provider error. Prompt only returns an error, and an aborted turn is not one.
 type turnRecorder struct {
@@ -60,7 +64,7 @@ type planDeps struct {
 	ag       *agent.Agent
 	reg      *llm.Registry
 	st       *agent.State
-	ui       *tui.UI
+	ui       *hubUI
 	console  *uiConsole
 	toolsReg *tools.Registry
 	q        *steerQueue
@@ -75,6 +79,10 @@ func newPlanController(d planDeps) *plan.Controller {
 	}
 	return plan.New(plan.Host{
 		PickModel: func(ctx context.Context, title string) (llm.Model, bool) {
+			if !d.ui.Interactive() {
+				// serve mode has no terminal to pick with; the embedded UI is nil
+				return llm.Model{}, false
+			}
 			if d.ui.Mode() == tui.ModePlain {
 				return llm.Model{}, false
 			}
@@ -145,7 +153,7 @@ func newPlanController(d planDeps) *plan.Controller {
 
 		SetInput: d.ui.SetInput,
 		Ask: func(ctx context.Context, q string, opts []string) (int, error) {
-			return d.ui.SelectContext(ctx, q, tuiOptions(opts))
+			return d.ui.dialogs.Select(ctx, q, tuiOptions(opts))
 		},
 		Notify: func(msg string, level agent.Level) { d.ui.Notify("plan: "+msg, tui.Level(level)) },
 		Status: func(text, short string) {
@@ -223,10 +231,15 @@ func planCommands(ctl *plan.Controller) []command.Command {
 
 // forkTo points the session and agent state at head's branch and applies m as
 // its model. An empty head starts a new root, whose first entry is the model
-// change so a resumed branch can resolve it.
-func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head string, m llm.Model) error {
+// change so a resumed branch can resolve it. The whole switch runs under the
+// state lane, the rewind transaction's rule, so a rewind or dispatch can never
+// interleave with it.
+func (r *sessRec) forkTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head string, m llm.Model) error {
+	r.lane.lock()
+	defer r.lane.unlock()
+
 	moved := head != r.w.Head() // a fork in place only records the model, nothing to divide
-	if err := r.switchState(ui, ag, reg, head, "plan: "); err != nil {
+	if err := r.switchState(ui, ag, reg, head, rewindCauseFork, "plan: "); err != nil {
 		return err
 	}
 	// record ahead of the live restore: a moved head keeps its model entry even
@@ -237,20 +250,19 @@ func (r *sessRec) forkTo(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head st
 			"/model applies it", tui.LevelWarn)
 		return err
 	}
-	if moved {
+	if moved && ui.Interactive() {
+		// serve mode renders nothing: the embedded terminal is nil there
 		ui.Divider() // phase boundaries read as breaks in scrollback
 	}
 	return nil
 }
 
-// askUser adapts the TUI onto the ask_user tool's asker. It reports declined on
-// Esc and an error when no terminal can reach the user.
-func askUser(ui *tui.UI) tools.AskFunc {
+// askUser adapts the broker onto the ask_user tool's asker. It reports declined
+// on Esc, answers in its own words when Chat is set, and holds for a remote
+// controller when no local surface can ask.
+func askUser(b *interactionBroker) tools.AskFunc {
 	return func(ctx context.Context, question string, opts []string) (int, string, bool, error) {
-		if ui == nil || ui.Mode() == tui.ModePlain {
-			return 0, "", false, tui.ErrNoUI
-		}
-		ans, err := ui.Ask(ctx, tui.Question{Text: question, Options: tuiOptions(opts)})
+		ans, err := b.Ask(ctx, tui.Question{Text: question, Options: tuiOptions(opts)})
 		if err != nil {
 			return 0, "", false, err
 		} else if ans.Chat { // replied in their own words rather than choosing

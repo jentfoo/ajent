@@ -7,6 +7,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/permit"
 	"github.com/jentfoo/ajent/pkg/session"
+	"github.com/jentfoo/ajent/pkg/tui"
 )
 
 // Exit codes a script can branch on. They are the same for text and json output.
@@ -62,7 +63,7 @@ type ResumeMode int
 const (
 	ResumeNewSession  ResumeMode = iota // no flag: always a brand-new transcript
 	ResumeContinue                      // --continue: auto-resume the most recent one
-	ResumePick                          // --resume: pick among saved roots in a terminal; with no UI (headless) it refuses, never silent fresh
+	ResumePick                          // bare --resume: terminal picker; headless refuses, never silent fresh
 	ResumeID                            // --resume <id|name>: reopen that exact saved transcript directly
 	ResumeSessionName                   // --session <name>: resume that name, creating it when new
 )
@@ -97,18 +98,47 @@ type HeadlessOptions struct {
 
 // RunOptions carries the parsed command line into app.Run.
 type RunOptions struct {
-	Model      string
-	Render     string // ui.render override, "auto" means unset
-	System     string // --system: replaces ajent's default prose guidance when non-empty
-	Prompt     string
-	Output     string // OutputText or OutputJSON
-	Stats      bool
-	Scope      ToolScope
-	AllowTools []string
-	DenyTools  []string
-	Args       []string // positional arguments, joined into a bootstrap prompt
+	Model       string
+	Render      string // ui.render override, "auto" means unset
+	System      string // --system: replaces ajent's default prose guidance when non-empty
+	Prompt      string
+	Output      string // OutputText or OutputJSON
+	Stats       bool
+	Scope       ToolScope
+	AllowTools  []string
+	DenyTools   []string
+	Args        []string // positional arguments, joined into a bootstrap prompt
+	Serve       bool     // --serve: run with the control socket as the only front end
+	Attach      string   // --attach [name|id|socket]: mirror that session's control socket
+	AttachGiven bool     // --attach was given, bare or with a target
 
 	SessMode     ResumeMode
 	SessTarget   string
 	SessResolved SessionResolution // check-time target resolution, avoids a second scan
+}
+
+// ServeOptions carries what RunServe needs; the driver derives the rest from
+// the set and registry.
+type ServeOptions struct {
+	Set          *config.Set
+	Reg          *llm.Registry
+	Active       llm.Model
+	SessMode     ResumeMode
+	SessTarget   string
+	SessResolved SessionResolution
+	Warnings     []string
+	Scope        ToolScope
+}
+
+// AttachOptions carries what RunAttach needs: the socket to follow and the
+// resolved local terminal settings. The attached run opens no transcript, so
+// session and model options do not apply.
+type AttachOptions struct {
+	Socket   string
+	Mode     tui.Mode
+	Color    tui.ColorProfile
+	Palette  tui.Palette
+	Images   string
+	Keymap   tui.Keymap
+	Warnings []string
 }

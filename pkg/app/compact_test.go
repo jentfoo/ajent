@@ -87,7 +87,7 @@ func testCompactor(t *testing.T, model llm.Model, sp llm.Provider) (*compactor, 
 	st := &agent.State{Model: model, Tokens: tokens.New(model)}
 	ag := agent.New(st, agent.Options{Sinks: []agent.Sink{agent.NopSink{}}})
 	c := &compactor{
-		rec: &sessRec{w: w}, st: st, ag: ag, reg: reg,
+		rec: &sessRec{w: w, lane: newStateLane()}, st: st, ag: ag, reg: reg,
 		sink:        agent.NopSink{},
 		notify:      func(string, agent.Level) {},
 		providerFor: func(llm.Model) (llm.Provider, error) { return sp, nil },
@@ -132,6 +132,40 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 	return out
 }
 
+// TestCompactorSwapJoinsStateLane pins the append-then-swap section: it holds
+// the state lane like a rewind does, so neither can interleave its own swap
+// with the other's. Held, the checkpoint never records; released, it lands.
+func TestCompactorSwapJoinsStateLane(t *testing.T) {
+	t.Parallel()
+
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
+	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+		{Events: textStream(fullSummary)},
+	}}
+	c, st, w := testCompactor(t, model, sp)
+	c.rec.lane = newStateLane()
+
+	appendText(t, w, llm.RoleUser, "read me a short story")
+	appendSteps(t, w, 6)
+
+	// a rewind is mid-transaction: the swap section must wait behind it
+	c.rec.lane.lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.run(t.Context(), agent.CompactManual, "")
+		done <- err
+	}()
+
+	require.Never(t, func() bool { return len(compactionEntries(t, w)) > 0 },
+		150*time.Millisecond, 10*time.Millisecond,
+		"the checkpoint must not record while a rewind holds the lane")
+
+	c.rec.lane.unlock()
+	require.NoError(t, <-done)
+	assert.Len(t, compactionEntries(t, w), 1)
+	require.Len(t, st.Messages, 3) // the swap landed behind the checkpoint
+}
+
 func TestCompactorManualSingleTurn(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 	sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
@@ -167,7 +201,7 @@ func TestCompactorReportsRebuiltContext(t *testing.T) {
 	c, st, w := testCompactor(t, model, sp)
 
 	var switched [][]llm.Message
-	c.rec.onSwitch = func(msgs []llm.Message) { switched = append(switched, msgs) }
+	c.rec.onSwitch = func(msgs []llm.Message, cause string) { switched = append(switched, msgs) }
 
 	appendText(t, w, llm.RoleUser, "read me a short story")
 	appendSteps(t, w, 6)
@@ -584,22 +618,13 @@ func TestCompactorSkipsReseedWhenTurnStarts(t *testing.T) {
 	t.Cleanup(cancel)
 	turnCh := make(chan error, 1)
 	go func() { turnCh <- ag.Prompt(turnCtx, agent.Input{Text: "meanwhile"}) }()
-	select {
-	case <-blocked.onCreate: // prompt landed, the turn is blocked mid-stream
-	case <-time.After(5 * time.Second):
-		t.Fatal("the turn never started")
-	}
+	<-blocked.onCreate // prompt landed, the turn is blocked mid-stream
 	before := len(st.Messages)
 	used := st.Tokens.Context().Used
 
 	close(gate.release) // the summary lands, the swap now races a live turn
 
-	var got res
-	select {
-	case got = <-compCh:
-	case <-time.After(5 * time.Second):
-		t.Fatal("compaction did not return")
-	}
+	got := <-compCh
 	require.NoError(t, got.err)
 	assert.False(t, got.did)                        // nothing installed live
 	assert.Len(t, compactionEntries(t, w), 1)       // the entry is recorded
@@ -641,7 +666,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 
 	// a session with nothing worth folding yet is not a session that cannot reduce:
 	// latching there would disable automatic compaction as history was still arriving.
-	t.Run("nothing_to_fold_yet_never_latches", func(t *testing.T) {
+	t.Run("nothing_to_fold_yet", func(t *testing.T) {
 		// several turns: the summariser prompt can chain across calls when the
 		// span only fits by dropping its oldest entries
 		sp := &llm.ScriptedProvider{Turns: func() []llm.ScriptedTurn {
@@ -765,7 +790,7 @@ func TestCompactorDeclineLatchesAuto(t *testing.T) {
 		did, err := c.run(t.Context(), agent.CompactManual, "")
 		require.NoError(t, err)
 		require.True(t, did)
-		assert.False(t, c.autoDisabled.Load(), "this session still reduces")
+		assert.False(t, c.autoDisabled.Load())
 	})
 
 	t.Run("resume_auto_re_arms", func(t *testing.T) {
@@ -814,6 +839,7 @@ type ctxSink struct{ last tokens.ContextState }
 func (c *ctxSink) Context(s tokens.ContextState) { c.last = s }
 func (c *ctxSink) TurnStart(agent.TurnInfo)      {}
 func (c *ctxSink) UserPrompt(string)             {}
+func (c *ctxSink) InjectContext(string)          {}
 func (c *ctxSink) Thinking(string)               {}
 func (c *ctxSink) EndThinking()                  {}
 func (c *ctxSink) Text(string)                   {}
@@ -952,50 +978,46 @@ func (p *blockingProvider) Stream(_ context.Context, _ llm.Request) (llm.Stream,
 	return s, nil
 }
 
-func TestRunSummaryCancelStopsDraining(t *testing.T) {
+// TestRunSummary pins llm.RunSummary behavior against local rigs: a cancelled
+// summariser returns context.Canceled with no partial text and closes the
+// stream, and a truncated response reads as an error.
+func TestRunSummary(t *testing.T) {
 	t.Parallel()
 
-	onClose := make(chan struct{}, 1)
-	p := &blockingProvider{
-		turn:    []llm.Event{{Type: llm.EventTextDelta, Text: "read"}}, // prefix-matches readonly
-		onClose: onClose,
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-
-	type res struct {
-		text string
-		err  error
-	}
-	resCh := make(chan res, 1)
-	go func() {
-		text, _, err := llm.RunSummary(ctx, p, llm.Request{})
-		resCh <- res{text, err}
-	}()
-
-	cancel()
-
-	var got res
-	select {
-	case got = <-resCh:
-	case <-time.After(time.Second * 3):
-		t.Fatal("runSummary did not return after cancellation")
-	}
-	require.ErrorIs(t, got.err, context.Canceled)
-	assert.Empty(t, got.text) // never partial text: "read" must not normalize to readonly
-
-	// the stream was closed so its blocked Next unblocked
-	require.Eventually(t, func() bool {
-		select {
-		case <-onClose:
-			return true
-		default:
-			return false
+	t.Run("cancel_stops_draining", func(t *testing.T) {
+		onClose := make(chan struct{}, 1)
+		p := &blockingProvider{
+			turn:    []llm.Event{{Type: llm.EventTextDelta, Text: "read"}}, // prefix-matches readonly
+			onClose: onClose,
 		}
-	}, time.Second, 10*time.Millisecond)
-}
+		ctx, cancel := context.WithCancel(t.Context())
 
-func TestRunSummaryRejectsTruncatedResponses(t *testing.T) {
-	t.Parallel()
+		type res struct {
+			text string
+			err  error
+		}
+		resCh := make(chan res, 1)
+		go func() {
+			text, _, err := llm.RunSummary(ctx, p, llm.Request{})
+			resCh <- res{text, err}
+		}()
+
+		cancel()
+
+		got := <-resCh
+		require.ErrorIs(t, got.err, context.Canceled)
+		assert.Empty(t, got.text) // never partial text: "read" must not normalize to readonly
+
+		// the stream was closed so its blocked Next unblocked
+		require.Eventually(t, func() bool {
+			select {
+			case <-onClose:
+				return true
+			default:
+				return false
+			}
+		}, time.Second, 10*time.Millisecond)
+	})
 
 	cases := []struct {
 		name string
@@ -1184,7 +1206,7 @@ func TestCompactorProviderError(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, did)
 	joined := strings.Join(notices, "\n")
-	assert.Contains(t, joined, "unavailable", "a setup failure is not a successful no-op")
+	assert.Contains(t, joined, "unavailable")
 	assert.NotContains(t, joined, "nothing to compact")
 	// nothing was appended for the failed run.
 	require.Empty(t, compactionEntries(t, w))

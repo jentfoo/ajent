@@ -5,7 +5,6 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/tokens"
 )
 
 // Recorder bridges an agent turn stream onto a Writer. The Message hook is the
@@ -29,6 +28,8 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 		Usage:    info.Usage,
 		Injected: info.Injected,
 		Replayed: info.Replayed,
+		Origin:   info.Origin,
+		QueueIDs: info.QueueIDs,
 	})
 	if err != nil && r.dropped == "" {
 		r.dropped = "failed to record message: " + err.Error()
@@ -46,7 +47,7 @@ func (r *Recorder) pullDropped() string {
 // Write failures surface as a notice through the wrapped sink rather than
 // failing the turn, so a broken disk should not end the conversation.
 func (r *Recorder) Sink(next agent.Sink) agent.Sink {
-	return &recordingSink{next: next, rec: r}
+	return &recordingSink{Sink: next, rec: r}
 }
 
 // ModelChange records a model switch by its canonical key.
@@ -81,36 +82,17 @@ func (r *Recorder) Custom(customType string, v any) error {
 }
 
 type recordingSink struct {
-	next agent.Sink
-	rec  *Recorder
-}
-
-func (s *recordingSink) TurnStart(i agent.TurnInfo) { s.next.TurnStart(i) }
-func (s *recordingSink) UserPrompt(text string)     { s.next.UserPrompt(text) }
-func (s *recordingSink) Thinking(d string)          { s.next.Thinking(d) }
-func (s *recordingSink) EndThinking()               { s.next.EndThinking() }
-func (s *recordingSink) Text(d string)              { s.next.Text(d) }
-func (s *recordingSink) EndText()                   { s.next.EndText() }
-
-func (s *recordingSink) ToolStart(call agent.ToolCall, label string, full bool) func(agent.ToolResult) {
-	return s.next.ToolStart(call, label, full)
-}
-
-func (s *recordingSink) ToolOutput(id, d string)           { s.next.ToolOutput(id, d) }
-func (s *recordingSink) ToolProgress(p agent.ToolProgress) { s.next.ToolProgress(p) }
-func (s *recordingSink) Diff(p, b, a string)               { s.next.Diff(p, b, a) }
-func (s *recordingSink) Usage(u llm.Usage)                 { s.next.Usage(u) }
-func (s *recordingSink) Context(c tokens.ContextState) {
-	s.next.Context(c)
+	agent.Sink // every event forwards to the wrapped sink unless overridden
+	rec        *Recorder
 }
 
 // Notice persists the notice then forwards it, persistence failures surfacing as
 // an error-level notice through the wrapped sink.
 func (s *recordingSink) Notice(msg string, level agent.Level) {
 	if _, err := s.rec.w.Append(TypeNotice, NoticeData{Message: msg, Level: level}); err != nil {
-		s.next.Notice("failed to persist session: "+err.Error(), agent.LevelError)
+		s.Sink.Notice("failed to persist session: "+err.Error(), agent.LevelError)
 	}
-	s.next.Notice(msg, level)
+	s.Sink.Notice(msg, level)
 }
 
 // TurnEnd reports any held message-append failure, fsyncs the transcript at a
@@ -118,10 +100,10 @@ func (s *recordingSink) Notice(msg string, level agent.Level) {
 // ending the turn.
 func (s *recordingSink) TurnEnd(r agent.TurnResult) {
 	if msg := s.rec.pullDropped(); msg != "" {
-		s.next.Notice(msg, agent.LevelError)
+		s.Sink.Notice(msg, agent.LevelError)
 	}
 	if err := s.rec.w.Sync(); err != nil {
-		s.next.Notice("failed to persist session: "+err.Error(), agent.LevelError)
+		s.Sink.Notice("failed to persist session: "+err.Error(), agent.LevelError)
 	}
-	s.next.TurnEnd(r)
+	s.Sink.TurnEnd(r)
 }

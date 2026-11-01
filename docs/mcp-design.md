@@ -88,8 +88,8 @@ closes.
   connect returned.
 - **Initialize errors are legible**: a protocol version mismatch names both our
   version and the server's rather than failing obscurely.
-- **Prefixes are owned by the surface** — client errors and warnings are bare;
-  the manager's notice sink, dial's returned error and the bridge each add
+- **Prefixes are owned by the surface** — client errors and warnings are bare.
+  The manager's notice sink, dial's returned error and the bridge each add
   `mcp <name>:` exactly once, so history never renders a doubled prefix.
 
 ### Schema fidelity
@@ -141,10 +141,11 @@ both the JSON-RPC id and the default `_meta.progressToken`, so a token always
 equals the id of the request that carried it and stays unique under concurrency.
 The raw seam sits below mcp-go's own request stamping, so it must carry
 the era itself: on a connection negotiated to protocol 2026-07-28 every request
-needs per-request `_meta` and mirrored `Mcp-*` headers (added by `applyEra`;
-legacy connections stay unstamped, matching the pre-1.0 wire), and `Ping` no-ops
-there since the RPC was removed. The version probe rides this seam too, before
-any negotiation, stamping LATEST explicitly since nothing is negotiated yet.
+needs per-request `_meta` and mirrored `Mcp-*` headers (added by `applyEra`,
+with legacy connections staying unstamped to match the pre-1.0 wire), and `Ping`
+no-ops there since the RPC was removed. The version probe rides this seam
+too, before any negotiation, stamping LATEST explicitly since nothing is
+negotiated yet.
 
 Raw request ids are seeded at `rawSeqBase` rather than from one: both the raw
 seam and mcp-go's typed calls share the transport's single response map keyed by
@@ -217,7 +218,7 @@ package stays free of `pkg/tools`.
   death or Close sweep landing mid-pass still wins, tearing the fresh
   registration back out instead of leaving tools bound to a closed client.
   A pass broken by the user's own disconnect keeps that fallout in `/mcp`
-  logs rather than warning history. Discovery covers tools only;
+  logs rather than warning history. Discovery covers tools only, and
   resources/prompts are not exposed. Notifications arrive asynchronously from
   the client (see *Notifications never block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without

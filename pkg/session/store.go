@@ -14,18 +14,16 @@ import (
 
 	"github.com/go-analyze/bulk"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 const (
-	sessionDirPerm = 0o700
-	maxSlugLen     = 64
+	sessionsRoot = "sessions"
+	maxSlugLen   = 64
 )
-
-var userHome = os.UserHomeDir // injectable for tests
 
 // ErrNoSessions is returned when a workspace has no saved sessions.
 var ErrNoSessions = errors.New("no sessions for this workspace")
@@ -52,19 +50,27 @@ var ErrNameConflict = errors.New("session name already in use")
 // directory is recognisable, the hash pinning it so a rename never collides.
 type Store struct {
 	root string
+	note string // startup caveat from pinning the root's mode, empty when clean
 }
 
-// NewStore returns the store rooted at <config dir>/sessions.
+// NewStore returns the store rooted at <config dir>/sessions, creating that
+// directory and pinning it to owner-only permissions. Note reports what the
+// pin found for callers with a user-facing surface; read-only lookups may
+// ignore it.
 func NewStore() (*Store, error) {
-	p, err := config.UserPath("sessions")
+	root, note, err := paths.SubDir(sessionsRoot)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{root: p}, nil
+	return &Store{root: root, note: note}, nil
 }
 
 // StoreAt returns a store with an explicit root, for tests.
 func StoreAt(root string) *Store { return &Store{root: root} }
+
+// Note reports the startup caveat pinning the sessions root produced, empty
+// when the directory was clean or newly created.
+func (s *Store) Note() string { return s.note }
 
 // Dir resolves the directory holding one workspace's sessions, creating it.
 func (s *Store) Dir(workspace string) (string, error) {
@@ -72,7 +78,7 @@ func (s *Store) Dir(workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	home, herr := userHome()
+	home, herr := os.UserHomeDir()
 	if herr != nil {
 		home = "" // no home to anchor against, so the path encodes absolute
 	}
@@ -82,7 +88,7 @@ func (s *Store) Dir(workspace string) (string, error) {
 		dir = hash4(abs) // the home directory itself has nothing to encode
 	}
 	d := filepath.Join(s.root, dir)
-	if err := os.MkdirAll(d, sessionDirPerm); err != nil {
+	if err := os.MkdirAll(d, paths.DirPerm); err != nil {
 		return "", err
 	}
 	return d, nil
@@ -125,20 +131,16 @@ func (s *Store) transcriptPaths(workspace string) ([]string, error) {
 		}
 		return nil, err
 	}
-	names := make([]string, 0, len(files)) // jsonl transcripts are a share of dir entries
+	tpaths := make([]string, 0, len(files)) // jsonl transcripts are a share of dir entries
 	for _, f := range files {
 		// side files (output-*.txt, editor-history.lines) are not transcripts, and only
 		// non-dir *.jsonl entries surface in the resume picker.
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".jsonl") {
-			names = append(names, f.Name())
+			tpaths = append(tpaths, filepath.Join(dir, f.Name()))
 		}
 	}
-	slices.Sort(names) // parse in name order so results land deterministic
-	paths := make([]string, len(names))
-	for i, name := range names {
-		paths[i] = filepath.Join(dir, name)
-	}
-	return paths, nil
+	slices.Sort(tpaths) // deterministic scan order
+	return tpaths, nil
 }
 
 // Find returns the session matching target: an exact name first (case
@@ -294,8 +296,7 @@ func (s *Store) scanInfos(workspace string) ([]Info, []Info, error) {
 	})
 	// newer-format rows still list (Blocked is not Damaged), unclassifiable ones
 	// carry no Path at all.
-	listed := bulk.SliceFilter(func(in Info) bool { return in.Path != "" && !in.Damaged }, rows)
-	damaged := bulk.SliceFilter(func(in Info) bool { return in.Damaged }, rows)
+	listed, damaged := bulk.SliceSplit(func(in Info) bool { return in.Path != "" && !in.Damaged }, rows)
 	// ordered on last use, with start time only as a tie break. Stable so equal
 	// clocks keep the name order above rather than the ReadDir arrival order.
 	slices.SortStableFunc(listed, func(a, b Info) int {
@@ -315,16 +316,18 @@ func (s *Store) Damaged(workspace string) ([]Info, error) {
 	return damaged, nil
 }
 
-// Remove deletes one saved transcript with its sidecars: the branch cursor and
-// any torn-tail quarantine file. Other sessions in the directory (and editor
+// Remove deletes one saved transcript with its sidecars: the writer-slot
+// directory, any torn-tail quarantine file, and a legacy pre-slot cursor an
+// older build may have left. Other sessions in the directory (and editor
 // history) are untouched. Sidecar cleanup is best effort: an error means the
 // transcript itself survived.
 func (s *Store) Remove(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	_ = removeHead(path) // a session whose transcript is gone must not report as kept
+	removeSlots(path) // a session whose transcript is gone must not report as kept
 	_ = os.Remove(tornPath(path))
+	_ = os.Remove(path + legacyHeadSuffix)
 	return nil
 }
 
@@ -383,7 +386,7 @@ func readInfo(path string) (Info, bool) {
 		return info, true
 	}
 	info.ID, info.Started, info.Model = facts.id, facts.started, facts.model
-	for _, e := range Branch(entries, headFor(path, entries)) {
+	for _, e := range Branch(entries, headForEntries(path, entries, true)) {
 		if e.Type != TypeMessage {
 			continue
 		}

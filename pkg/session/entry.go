@@ -64,6 +64,10 @@ type MessageData struct {
 	Usage    llm.Usage      `json:"usage,omitzero"`
 	Injected bool           `json:"injected,omitempty"` // system context excluded from prompt recall
 	Replayed bool           `json:"replayed,omitempty"` // injected context that still belongs in restored scrollback
+	Origin   string         `json:"origin,omitempty"`   // submitter of a non-typed prompt, "controller" today
+	// QueueIDs names the queue rows this message landed for; attached surfaces
+	// resolve their pending rows by it. Render ignores it.
+	QueueIDs []string `json:"queueIds,omitempty"`
 }
 
 // CompactionData records a context reduction without deleting anything.

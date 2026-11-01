@@ -70,7 +70,7 @@ func RunHeadless(o HeadlessOptions) int {
 	// recording keeps -p composable: a follow-up --continue rejoins this transcript
 	// sessResolved carries the check-time resolution so the open skips a second
 	// workspace scan; zero for implicit modes and every interactive picker run.
-	rec, serr := newSession(nil, o.SessMode, o.SessTarget, o.Active.Key(), o.SessResolved)
+	rec, serr := newSession(nil, nil, o.SessMode, o.SessTarget, o.Active.Key(), o.SessResolved)
 	if serr != nil && o.SessMode != ResumeNewSession {
 		// an explicit resume target, or a bare --resume with no picker, must not
 		// silently start fresh
@@ -88,7 +88,7 @@ func RunHeadless(o HeadlessOptions) int {
 		notify(rec.note, agent.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
 
-	// ask_user has nobody to ask, so it is left without an Ask func and excluded from every scope below
+	// ask_user has nobody to ask: no Ask func, excluded from every scope below
 	toolsReg, terr := builtinTools(o.Set, o.Reg, nil, func(msg string) {
 		_, _ = fmt.Fprintln(errw, msg)
 	})
@@ -272,6 +272,7 @@ func RunHeadless(o HeadlessOptions) int {
 	st.Tokens.SetBase(ag.BaseEstimate(true))
 
 	if rec != nil {
+		rec.lane = newStateLane() // serializes the compaction transaction; headless never swaps a branch
 		comp = &compactor{
 			rec: rec, st: st, ag: ag, reg: o.Reg,
 			sink:        opts.Sinks[0],

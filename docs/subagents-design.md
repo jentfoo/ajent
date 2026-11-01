@@ -60,9 +60,15 @@ Concurrency model:
   directly), and an ordered dispatcher over a slot count capped to
   `MaxConcurrent`. Jobs register as queued at `start` under the registry lock,
   and slots are granted to waiters in job-number order, so a fan-out activates
-  sub-1, sub-2, ... however the parallel start goroutines raced. A job's cancel
-  always fires when it reaches a terminal state, so the root holds no
-  finished-job registrations.
+  sub-1, sub-2, ... however the parallel start goroutines raced. Granting holds
+  back behind any **unclaimed reservation of the current batch** with a lower
+  number: claiming races registration (sub-2's start can land after sub-3's),
+  so without this sub-1 and sub-3 could start while sub-2 stayed queued. Jobs
+  registered before the batch are never held, since no future claim can precede
+  their number, and a short expiry window lapses the hold when a claim never
+  lands (an interrupted turn or refused args), so a dead reservation cannot
+  stall activation. A job's cancel always fires when it reaches a terminal
+  state, so the root holds no finished-job registrations.
 - The waitgroup add happens **under the registry lock before** the spawn
   goroutine launches, so shutdown's wait never races a pending add. Each
   goroutine finishes with its done signal and cleanup in one place.
@@ -190,8 +196,8 @@ committed history:
   thinking/idle row) once the last in-flight call ends.
 - `Thinking(delta)` and `Text(delta)` both accumulate streaming per-token deltas
   into the current in-progress line, publishing only its head. Most sub-agent
-  activity is reasoning, so chain-of-thought is surfaced rather than collapsed;
-  the row scrolls past completed lines per newline instead of appending prose onto
+  activity is reasoning, so chain-of-thought is surfaced rather than collapsed.
+  The row scrolls past completed lines per newline instead of appending prose onto
   leftover text, and switching streams (thinking → text) starts fresh on the new
   content so empty streaming never flashes. Deltas coalesce to a bounded rate so
   a response does not repaint per token.
@@ -357,7 +363,7 @@ The `subagent` block lives in `config-design.md`: `model` (empty inherits the
 session model), `maxConcurrent` and `maxPollWait` (compiled-in defaults from
 `pkg/config`, the latter a Go duration string sizing how long one `agent_poll`
 blocks before reporting still-running), all bound for free through env
-reflection. Here the first two size the manager's semaphore and poll timeout;
+reflection. Here the first two size the manager's semaphore and poll timeout.
 `/settings` edits `model` and `maxConcurrent`, while `maxPollWait` is
 startup-time like `agent.maxSteps` because the manager is built once.
 
@@ -418,10 +424,10 @@ structural tool filter (a child resolves no `bash`/`write`/`edit`, still gets
 disabled-in-parent `find`/`grep`/`ls`, and never sees `agent_start` even when
 reported read-only), the poll timeout payload, delivery confirmation with
 re-offer on interrupt, and child spend (visible in totals, never moving the
-parent's context bar). The empty-summary recovery is pinned: nudge -> summary;
-an empty nudge falls back to sizable thinking as the summary, else `StatusError`
-(`errNoSummary`). Mid-investigation tool-turn reasoning is excluded by the
-tool-call boundary. Truncation is pinned too: a partial text with
+parent's context bar). The empty-summary recovery is pinned: nudge -> summary,
+with an empty nudge falling back to sizable thinking as the summary, else
+`StatusError` (`errNoSummary`). Mid-investigation tool-turn reasoning is excluded
+by the tool-call boundary. Truncation is pinned too: a partial text with
 `StopMaxTokens` is nudged (not reported done), and a retry that hits the cap
 again fails with `errTruncated`.
 

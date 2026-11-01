@@ -79,7 +79,7 @@ tolerates a redacted block's absence but not its corruption.
 ```
 Request
   -> Prepare(req)                                one normalization pass (see below)
-  -> build body                                  pure, no network; calls Prepare itself
+  -> build body                                  pure, no network (calls Prepare itself)
   -> httputil.Do                                 all retries happen here
   -> dialect stream over SSE                     synchronous pull
   -> Event...                                    normalised, same for every vendor
@@ -197,7 +197,12 @@ one shared ladder across dialects, so the rule cannot drift between them.
 `Index` is the content block index, pairing a start with its deltas and its end.
 An `Accumulator` builds the final `Message`, falling back to concatenating
 deltas for a block whose end never arrived, so an aborted stream still yields
-what was received.
+what was received. Content assembles in **stream order (by event index)**,
+never end-event arrival order: parallel tool calls can finish streaming out of
+order, and everything downstream (result pairing, `OnToolBatch`, sub-agent id
+reservation) reads the list as the order the model emitted the calls in.
+Indexes are unique per block within one response, so a stable sort by index is
+the reconstruction of what was sent.
 
 `ScriptedProvider` and `SliceStream` are exported for exactly this reason: the
 agent loop's tests and compaction all need a fake provider, and several packages
@@ -386,7 +391,7 @@ ports over cleanly:
 
 Deliberate choices in this loader:
 
-- **`api` and `flavor` are separate.** `api` names the wire protocol to speak;
+- **`api` and `flavor` are separate.** `api` names the wire protocol to speak.
   `flavor` selects discovery and quirk defaults. `flavor` defaults to the
   provider key when that names a known one, so a bare provider key needs no
   `flavor` field, but an OpenAI-compatible proxy in front of a known server can
@@ -803,8 +808,8 @@ handed to an injected `sleep`, and timeout paths fire through injected timers
 ordered against the read with no polling.
 
 **Cross-dialect parity** is pinned separately, in `contract_test.go`. The
-per-dialect suites above each prove one adapter reads its own vendor correctly;
-none of them prove the three agree. The contract matrix does:
+per-dialect suites above each prove one adapter reads its own vendor correctly,
+but none of them prove the three agree. The contract matrix does:
 `testdata/contract/` holds each dialect's encoding of the *same* logical
 exchange, and every scenario asserts the normalised outcome (accumulated text,
 thinking, tool name and decoded arguments, stop reason, input, output and

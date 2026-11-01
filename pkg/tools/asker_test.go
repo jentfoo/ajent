@@ -26,17 +26,17 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 	}{
 		{
 			name:    "allow lets tool run",
-			asker:   func(context.Context, agent.ToolCall, Decision) Decision { return Allow(callWith(nil)) },
+			asker:   func(context.Context, agent.ToolCall) Decision { return Allow(callWith(nil)) },
 			wantRun: true,
 		},
 		{
 			name:           "deny refuses with reason",
-			asker:          func(_ context.Context, _ agent.ToolCall, _ Decision) Decision { return Deny("user said no") },
+			asker:          func(_ context.Context, _ agent.ToolCall) Decision { return Deny("user said no") },
 			wantDenyReason: "user said no",
 		},
 		{
 			name:           "re-ask treated as denial",
-			asker:          func(context.Context, agent.ToolCall, Decision) Decision { return Decision{Action: ActionAsk} },
+			asker:          func(context.Context, agent.ToolCall) Decision { return Decision{Action: ActionAsk} },
 			wantRun:        false,
 			wantDenyReason: "needs approval", // original guard reason survives
 		},
@@ -66,18 +66,16 @@ func TestGuardedToolExecuteWithAsker(t *testing.T) {
 	}
 }
 
-func TestAskerReceivesGuardDecision(t *testing.T) {
+func TestAskerReceivesCall(t *testing.T) {
 	t.Parallel()
 
 	var gotCall agent.ToolCall
-	var gotDec Decision
 	r := New()
 	r.Register(&recordingTool{}, true)
 	r.InstallGate([]Guard{func(context.Context, agent.ToolCall) Decision {
 		return Decision{Action: ActionAsk, Reason: "approval"}
-	}}, func(_ context.Context, call agent.ToolCall, d Decision) Decision {
+	}}, func(_ context.Context, call agent.ToolCall) Decision {
 		gotCall = call
-		gotDec = d
 		return Allow(callWith(nil))
 	})
 
@@ -89,8 +87,6 @@ func TestAskerReceivesGuardDecision(t *testing.T) {
 
 	assert.False(t, res.IsError) // guard asked but asker overrode to allow
 	assert.Equal(t, "c1", gotCall.ID)
-	assert.Equal(t, ActionAsk, gotDec.Action)
-	assert.Equal(t, "approval", gotDec.Reason)
 }
 
 func TestInstallGateReplacesPrevious(t *testing.T) {
@@ -102,8 +98,8 @@ func TestInstallGateReplacesPrevious(t *testing.T) {
 	ask := func(context.Context, agent.ToolCall) Decision {
 		return Decision{Action: ActionAsk, Reason: "needs approval"}
 	}
-	r.InstallGate([]Guard{ask}, func(context.Context, agent.ToolCall, Decision) Decision { return Deny("first asker") })
-	r.InstallGate([]Guard{ask}, func(_ context.Context, _ agent.ToolCall, _ Decision) Decision { return Allow(callWith(nil)) })
+	r.InstallGate([]Guard{ask}, func(context.Context, agent.ToolCall) Decision { return Deny("first asker") })
+	r.InstallGate([]Guard{ask}, func(_ context.Context, _ agent.ToolCall) Decision { return Allow(callWith(nil)) })
 
 	tool, ok := r.Get("bash")
 	require.True(t, ok)

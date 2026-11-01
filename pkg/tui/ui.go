@@ -53,6 +53,15 @@ const (
 // clockwise frames, with ⠦ (bottom-left) leading so idle rests at bottom-left
 var spinnerFrames = []string{"⠦", "⠧", "⠇", "⠏", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴"}
 
+// SpinnerFrame returns the status glyph a working (true) or resting (false)
+// turn shows, the same frames the status line animates from.
+func SpinnerFrame(working bool) string {
+	if !working {
+		return spinnerFrames[0]
+	}
+	return spinnerFrames[1]
+}
+
 // Control is an out-of-band key the caller decides the meaning of. The editor
 // does not consume these, and the TUI front end maps them onto agent control calls.
 type Control uint8
@@ -180,7 +189,8 @@ type UI struct {
 	stashP      string   // live draft held aside while browsing recorded prompts
 	promptSeq   uint64   // generation counter, each armed list load adopts the next value
 	promptLoad  uint64   // the in-flight load's generation, 0 when idle
-	promptEmpty bool     // last load resolved empty: no re-arm until reset
+	promptEmpty bool     // last load resolved empty: no re-arm until reset or a retire
+	promptStale bool     // a prompt echoed that the cached list predates: retire when able
 
 	pastes   []pasteEntry // large pastes in arrival order, expanded at submit
 	pasteSeq int          // numbers each placeholder so they stay unique
@@ -556,6 +566,14 @@ func (u *UI) SetInput(text string) {
 	u.repaint()
 }
 
+// Queued returns the pending-prompt rows shown above the input, oldest first.
+func (u *UI) Queued() []string {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return slices.Clone(u.queued)
+}
+
 // SetQueued replaces the dimmed pending-prompt rows shown above the input,
 // oldest first. The driver (steer queue) owns the list, and empty clears.
 func (u *UI) SetQueued(texts []string) {
@@ -592,6 +610,7 @@ func (u *UI) UserEcho(text string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	u.retirePromptNavLocked() // the prompt this paints is one the cached list cannot hold
 	u.gap()
 	// flowReflow, not flowWrap: pre-wrapping it here would freeze the message at
 	// the width it was sent at, and the terminal could never reflow it again.
@@ -1430,8 +1449,8 @@ const promptLoadKey = "history"
 // result leaves prompts nil, and arrows fall back to editor history
 // navigation. Caller holds the lock.
 func (u *UI) ensurePromptNavLocked() {
-	if u.prompts != nil || u.promptLoad != 0 || u.promptEmpty {
-		return // list cached, a load in flight, or the last one already came back empty
+	if u.prompts != nil || u.promptLoad != 0 || (u.promptEmpty && !u.promptStale) {
+		return // list cached, a load in flight, or an empty scope nothing retired
 	}
 	arrowFn, searchFn := u.promptHistory, u.historySearch
 	if arrowFn == nil && searchFn == nil {
@@ -1464,7 +1483,7 @@ func loadPromptNav(arrowFn func() []string, searchFn func() []SearchItem) []stri
 // deliverPromptNav stores the loaded list when its generation still owns the
 // slot; a reset or re-arm while it was in flight drops it instead. An empty
 // result arms no reload until resetPromptNavLocked, so an empty scope never
-// re-scans per arrow press.
+// re-scans per arrow press, unless a retire marked that scope stale.
 func (u *UI) deliverPromptNav(gen uint64, ps []string) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -1484,7 +1503,11 @@ func (u *UI) deliverPromptNav(gen uint64, ps []string) {
 		u.prompts = ps
 		u.promptIdx = -1 // at the live buffer, first ↑ recalls the newest prompt
 	} else {
-		u.promptEmpty = true
+		u.promptEmpty = !u.promptStale // stale keeps the reload armed: the scope grew
+	}
+	if u.promptStale {
+		// the load predates a prompt that already echoed, so its list is born old
+		u.retirePromptNavNowLocked()
 	}
 }
 
@@ -1513,6 +1536,9 @@ func (u *UI) promptNext() bool {
 	if u.promptIdx < 0 { // reached the live buffer: bring the draft back
 		u.editor.SetValue(u.stashP)
 		u.stashP = ""
+		if u.promptStale {
+			u.retirePromptNavNowLocked() // the episode ends on a scope that grew
+		}
 	} else {
 		u.editor.SetValue(u.prompts[u.promptIdx])
 	}
@@ -1535,6 +1561,7 @@ func (u *UI) resetPromptNavLocked() {
 	u.promptIdx = -1
 	u.stashP = ""
 	u.promptEmpty = false
+	u.promptStale = false
 	u.cancelPromptLoadLocked()
 	u.editor.ResetHistory()
 }
@@ -1546,6 +1573,28 @@ func (u *UI) cancelPromptLoadLocked() {
 	}
 	u.promptLoad = 0
 	u.setSegmentLocked(Segment{Key: promptLoadKey}) // empty Text removes the slot
+}
+
+// retirePromptNavLocked marks the cached ↑/↓ list stale because a prompt
+// echoed that it cannot hold yet: whichever surface submitted, the transcript
+// the list is scoped to changed. A browse in progress keeps its list until the
+// episode ends, so a recalled prompt never jumps under the user's thumbs; the
+// flag then retires it at the episode's edge or the in-flight load's delivery.
+// Caller holds the lock.
+func (u *UI) retirePromptNavLocked() {
+	u.promptStale = true
+	if u.browsingPrompts() || u.promptLoad != 0 {
+		return // the browse or the load resolves it, see promptNext/deliverPromptNav
+	}
+	u.retirePromptNavNowLocked()
+}
+
+// retirePromptNavNowLocked drops the cached list and its empty-scope latch,
+// keeping the next ↑ reload armed. Caller holds the lock.
+func (u *UI) retirePromptNavNowLocked() {
+	u.prompts = nil
+	u.promptEmpty = false
+	u.promptStale = false
 }
 
 // deliverSearch stores the provider's results if the overlay is still open.

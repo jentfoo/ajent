@@ -20,6 +20,7 @@ type captureSink struct {
 
 func (c *captureSink) TurnStart(agent.TurnInfo) {}
 func (c *captureSink) UserPrompt(string)        {}
+func (c *captureSink) InjectContext(string)     {}
 func (c *captureSink) Thinking(string)          {}
 func (c *captureSink) EndThinking()             {}
 func (c *captureSink) Text(string)              {}
@@ -62,6 +63,34 @@ func TestRecorderOneEntryPerMessage(t *testing.T) {
 		r.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hi"), Stop: llm.StopEndTurn})
 	}
 	assert.Equal(t, 3, countMessages(t, p))
+}
+
+// TestRecorderMessagePersistsOrigin pins the provenance annotation: a
+// non-editor submitter's origin lands on its message entry, absent when typed
+// locally, so a resume or audit reads who said what.
+func TestRecorderMessagePersistsOrigin(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	r := NewRecorder(w)
+
+	r.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "typed")})
+	r.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "remote"), Origin: "controller"})
+
+	entries, _, err := Read(p)
+	require.NoError(t, err)
+	var origins []string
+	for _, e := range entries {
+		if e.Type != TypeMessage {
+			continue
+		}
+		var md MessageData
+		require.NoError(t, e.Decode(&md))
+		origins = append(origins, md.Origin)
+	}
+	assert.Equal(t, []string{"", "controller"}, origins)
 }
 
 func TestRecorderSinkPersistsNoticesAndSyncsOnTurnEnd(t *testing.T) {

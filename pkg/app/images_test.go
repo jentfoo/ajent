@@ -196,13 +196,13 @@ func TestImageToken(t *testing.T) {
 func TestRestoredLabel(t *testing.T) {
 	t.Run("plain label untouched", func(t *testing.T) {
 		it := steerItem{label: "plain text"}
-		assert.Equal(t, "plain text", restoredLabel(it))
+		assert.Equal(t, "plain text", refiledLabel(it.label, it.input.Blocks))
 	})
 
 	t.Run("blocks get a fresh token", func(t *testing.T) {
 		blocks := llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}}
 		it := steerItem{label: "what is this", input: agent.Input{Blocks: blocks}}
-		label := restoredLabel(it)
+		label := refiledLabel(it.label, it.input.Blocks)
 		assert.True(t, strings.HasPrefix(label, "[image #"))
 		assert.Contains(t, label, "what is this")
 	})
@@ -256,7 +256,7 @@ func TestResumeAppliesImagesBlock(t *testing.T) {
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	toolsReg, err := tools.Builtins(tools.Options{SessionID: t.TempDir()})
 	require.NoError(t, err)
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	assert.False(t, tools.ImagesEnabled())
 }

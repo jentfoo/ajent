@@ -5,7 +5,6 @@ import (
 	"context"
 	"image"
 	"image/png"
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tui"
@@ -27,25 +27,40 @@ func stagePair(t *testing.T) (func(context.Context), func() []agent.MessageInfo)
 	return stager.WaitReady, stager.TakeReady
 }
 
+// noopDrop stands in for the hub's drop seam, which production wiring always supplies.
+func noopDrop(string, []ctl.QueueRow) {}
+
 // fakeQueueUI records every call the steer queue makes, so tests assert on what reached the TUI.
 type fakeQueueUI struct {
-	queued    [][]string
+	queued    [][]ctl.QueueRow
 	echoed    []string
 	prepended []string
 	set       []string
 	images    [][]tui.Image
+	headless  bool // Interactive reports false, the serve-mode shape
 }
 
-func (f *fakeQueueUI) SetQueued(texts []string) { f.queued = append(f.queued, slices.Clone(texts)) }
-func (f *fakeQueueUI) PrependInput(t string)    { f.prepended = append(f.prepended, t) }
-func (f *fakeQueueUI) SetInput(t string)        { f.set = append(f.set, t) }
-func (f *fakeQueueUI) UserEcho(t string)        { f.echoed = append(f.echoed, t) }
+func (f *fakeQueueUI) SetQueued(rows []ctl.QueueRow) { f.queued = append(f.queued, rows) }
+func (f *fakeQueueUI) PrependInput(t string)         { f.prepended = append(f.prepended, t) }
+func (f *fakeQueueUI) SetInput(t string)             { f.set = append(f.set, t) }
+func (f *fakeQueueUI) Interactive() bool             { return !f.headless }
+func (f *fakeQueueUI) UserEcho(t string)             { f.echoed = append(f.echoed, t) }
 func (f *fakeQueueUI) UserImages(imgs []tui.Image) {
 	f.images = append(f.images, imgs)
 }
 
-// lastQueued returns the most recent queued-rows snapshot.
+// lastQueued returns the texts of the most recent queued-rows snapshot.
 func (f *fakeQueueUI) lastQueued() []string {
+	rows := f.lastRows()
+	texts := make([]string, len(rows))
+	for i, r := range rows {
+		texts[i] = r.Text
+	}
+	return texts
+}
+
+// lastRows returns the most recent queued-rows snapshot whole.
+func (f *fakeQueueUI) lastRows() []ctl.QueueRow {
 	if len(f.queued) == 0 {
 		return nil
 	}
@@ -57,7 +72,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("drain_live", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		assert.False(t, q.drainLive())
 		q.offer(agent.Input{Text: "a"}, "a", 0) // marks draining, like the pump
@@ -76,7 +91,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("idle_restored_when_current", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		var writes []bool
 		q.settleIdle(q.nextGen(), func(idle bool) { writes = append(writes, idle) })
@@ -86,7 +101,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("idle_skipped_after_newer", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		stale := q.nextGen()
 		q.nextGen() // a newer dispatch stamps before its own SetIdle(false)
@@ -99,7 +114,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("restore_holds_queue_lock", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		gen := q.nextGen()
 		entered := make(chan struct{})
@@ -120,7 +135,7 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var subs []int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, waitReady, takeReady, noopDrop)
 
 		assert.False(t, q.offer(agent.Input{Text: "a"}, "alpha", 5))
 		require.Empty(t, fake.queued)
@@ -133,7 +148,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("pending_counts", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		assert.Equal(t, 0, q.pending())
 		q.offer(agent.Input{Text: "seed"}, "one", 1) // starts the drain, not queued
@@ -152,7 +167,11 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(est int) {
+			if est == 0 {
+				cleared++
+			}
+		}, waitReady, takeReady, noopDrop)
 
 		inA := agent.Input{Text: "first", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleUser}}}}
 		inB := agent.Input{Text: "second", Before: []agent.MessageInfo{{Message: llm.Message{Role: llm.RoleAssistant}}}}
@@ -162,20 +181,45 @@ func TestSteerQueue(t *testing.T) {
 
 		out := q.pull()
 		require.Len(t, out, 1)
-		assert.Equal(t, "first\nsecond", out[0].Text)
+		assert.Equal(t, "first\n\nsecond", out[0].Text)
 		assert.Len(t, out[0].Before, 2)
 		assert.Nil(t, out[0].After)
 
 		out[0].Delivered() // fires once the batch lands
-		assert.Contains(t, fake.echoed, "label one\nlabel two")
+		assert.Contains(t, fake.echoed, "label one\n\nlabel two")
 		require.GreaterOrEqual(t, cleared, 1)
+	})
+
+	t.Run("delivered_merge_records_recall", func(t *testing.T) {
+		// the joined run is one user message the way it was sent: its combined
+		// text reaches recall history at delivery, while a single item already
+		// recorded at submit does not record again
+		var recorded []string
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
+		q.record = func(text string) { recorded = append(recorded, text) }
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(agent.Input{Text: "alpha"}, "alpha", 1))
+		out := q.pull()
+		require.Len(t, out, 1)
+		out[0].Delivered() // single item: submit-time record already covers it
+		assert.Empty(t, recorded)
+
+		require.True(t, q.offer(agent.Input{Text: "beta"}, "beta", 1))
+		require.True(t, q.offer(agent.Input{Text: "gamma"}, "gamma", 1))
+		out = q.pull()
+		require.Len(t, out, 1)
+		assert.Equal(t, "beta\n\ngamma", out[0].Text)
+		out[0].Delivered() // the merged shape is what recall offers
+		assert.Equal(t, []string{"beta\n\ngamma"}, recorded)
 	})
 
 	t.Run("hold_queues_without_drain", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var subs []int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(e int) { subs = append(subs, e) }, waitReady, takeReady, noopDrop)
 
 		// the pump offers before it knows the input is held, so hold must undo that
 		// drain mark: a queued row with no drain running, tokens still reserved
@@ -201,7 +245,7 @@ func TestSteerQueue(t *testing.T) {
 
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
 
 		in := agent.Input{
 			Text:   "look",
@@ -222,7 +266,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("image_only_row_placeholder", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
 
 		// an image-only submission has no typed line: the placeholder names it in rows
 		png, wide := slotPNG(t), slotSizedPNG(t, 8, 2)
@@ -240,7 +284,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("delivered_image_only_visible", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
 
 		in := agent.Input{
 			Blocks: llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}},
@@ -261,7 +305,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("join_splits_provenance", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "user text"}, "typed", 1))
@@ -282,9 +326,30 @@ func TestSteerQueue(t *testing.T) {
 		assert.Equal(t, []string{"typed", "typed two"}, fake.echoed)
 	})
 
+	t.Run("controller_joins_user_run", func(t *testing.T) {
+		// a controller submit is a user line with an origin, never injected:
+		// it joins the same run its typed neighbours form, so grouping, echo
+		// and recall stay truthful
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
+		require.True(t, q.offer(agent.Input{Text: "typed"}, "typed", 1))
+		require.True(t, q.offer(agent.Input{Text: "remote", Origin: "controller"}, "remote", 1))
+
+		runs := q.pull()
+		require.Len(t, runs, 1)
+		assert.False(t, runs[0].Injected)
+		assert.Equal(t, "typed\n\nremote", runs[0].Text)
+
+		runs[0].Delivered()
+		assert.Equal(t, []string{"typed\n\nremote"}, fake.echoed)
+	})
+
 	t.Run("join_chains_afters_per_run", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 		after := func(text string) func(context.Context) []llm.Message {
 			return func(context.Context) []llm.Message {
 				return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}
@@ -307,7 +372,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("join_preserves_prepared", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		// every queued item is pump-expanded (Prepared), and the runs must stay so the
 		// append seam never re-expands an annotate-only reference at delivery
@@ -323,7 +388,7 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("join_mixed_prepared", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		// a run is prepared only when every item in it is, so raw text still expands
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
@@ -333,12 +398,12 @@ func TestSteerQueue(t *testing.T) {
 		runs := q.pull()
 		require.Len(t, runs, 1)
 		assert.False(t, runs[0].Prepared)
-		assert.Equal(t, "expanded\nraw @a.go", runs[0].Text)
+		assert.Equal(t, "expanded\n\nraw @a.go", runs[0].Text)
 	})
 
 	t.Run("take_joins_batch", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		require.True(t, q.draining)
@@ -348,7 +413,7 @@ func TestSteerQueue(t *testing.T) {
 		ins, ok := q.take(t.Context())
 		require.True(t, ok)
 		require.Len(t, ins, 1)
-		assert.Equal(t, "a\nb", ins[0].Text)
+		assert.Equal(t, "a\n\nb", ins[0].Text)
 
 		_, ok = q.take(t.Context()) // empty now: clears draining so a later offer starts fresh
 		assert.False(t, ok)
@@ -358,7 +423,7 @@ func TestSteerQueue(t *testing.T) {
 	t.Run("stop_drain_keeps_items", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain
 		require.True(t, q.draining)
@@ -371,11 +436,47 @@ func TestSteerQueue(t *testing.T) {
 		assert.Len(t, fake.lastQueued(), 1)
 	})
 
+	t.Run("cancel_drain_releases_wait", func(t *testing.T) {
+		// the armed cancel is what an interrupt between turns reaches: it ends
+		// the drain's staged-command wait, a disarm never disarms a newer drain,
+		// and no drain armed means a no-op
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
+
+		released := make(chan struct{}, 2)
+		arm := func() (disarm func()) {
+			ctx, cancel := context.WithCancel(t.Context())
+			disarm = q.armDrain(cancel)
+			go func() {
+				<-ctx.Done()
+				released <- struct{}{}
+			}()
+			t.Cleanup(cancel)
+			return disarm
+		}
+
+		q.cancelDrain() // nothing armed: a no-op
+		select {
+		case <-released:
+			t.Fatal("cancel reached nothing")
+		default:
+		}
+
+		stale := arm()
+		fresh := arm() // a newer drain took the release over
+		stale()        // its exit must not drop what the newer drain armed
+		q.cancelDrain()
+		<-released
+
+		fresh()
+		assert.Nil(t, q.drainWait) // armed then disarmed: nothing left to release
+	})
+
 	t.Run("recall_pops_lifo", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var refreshes int // submit-bucket updates on each pop
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) { refreshes++ }, func() {}, waitReady, takeReady)
+		q := newSteerQueue(fake, func(int) { refreshes++ }, waitReady, takeReady, noopDrop)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 5))
@@ -393,11 +494,87 @@ func TestSteerQueue(t *testing.T) {
 		require.GreaterOrEqual(t, refreshes, 2)
 	})
 
+	t.Run("recall_announces_removal", func(t *testing.T) {
+		// every recall names its row on the drop seam with the correlation it
+		// queued under, so attached surfaces resolve the pending row by id
+		fake := &fakeQueueUI{}
+		var drops [][]ctl.QueueRow
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady,
+			func(cause string, rows []ctl.QueueRow) {
+				drops = append(drops, rows)
+			})
+
+		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 2))
+
+		require.True(t, q.recall())
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-b", Text: "beta"}}, drops[0])
+		assert.Empty(t, fake.lastQueued())
+	})
+
+	t.Run("recall_into_serves_wire", func(t *testing.T) {
+		// the remote surface gets the text and no editor is touched; rows,
+		// accounting and the removal notice update exactly like the keyboard path
+		fake := &fakeQueueUI{}
+		var drops [][]ctl.QueueRow
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady,
+			func(cause string, rows []ctl.QueueRow) {
+				drops = append(drops, rows)
+			})
+
+		_, text, err := q.recallInto()
+		require.NoError(t, err)
+		assert.Empty(t, text) // nothing queued: an empty result, no error
+
+		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Text: "remote work", QueueIDs: []string{"row-r"}}, "remote row", 2))
+
+		id, text, err := q.recallInto()
+		require.NoError(t, err)
+		assert.Equal(t, "row-r", id)        // the row's correlation travels with the text
+		assert.Equal(t, "remote row", text) // the typed line, restored for the caller's draft
+		assert.Empty(t, fake.prepended)     // no host editor fill: the text travels instead
+		assert.Empty(t, fake.lastQueued())  // rows refresh like any other recall
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-r", Text: "remote row"}}, drops[0])
+	})
+
+	t.Run("recall_into_refuses_payloads", func(t *testing.T) {
+		// an item whose payload cannot cross the wire refuses in place and stays
+		// queued; a secret's text never rides it and images have no local slot
+		var pngBuf bytes.Buffer
+		require.NoError(t, png.Encode(&pngBuf, image.NewRGBA(image.Rect(0, 0, 4, 4))))
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+
+		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
+		assert.True(t, q.offer(agent.Input{Blocks: llm.BlockList{
+			llm.ImageBlock{MediaType: "image/png", Data: pngBuf.Bytes()}},
+		}, "", 2))
+		_, _, err := q.recallInto()
+		require.ErrorIs(t, err, errImageQueued)
+		require.Len(t, fake.lastQueued(), 1) // still queued
+
+		q.recall() // the image row leaves by keyboard recall
+		assert.True(t, q.offer(agent.Input{Text: "secret work"}, "secret: hunter2", 2))
+		_, _, err = q.recallInto()
+		require.ErrorIs(t, err, errSecretQueued)
+		require.Len(t, fake.lastQueued(), 1) // still queued
+	})
+
 	t.Run("abort_recovers_all", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(est int) {
+			if est == 0 {
+				cleared++
+			}
+		}, waitReady, takeReady, noopDrop)
 
 		q.offer(agent.Input{Text: "first"}, "one", 0) // starts the drain, not queued
 		assert.True(t, q.offer(agent.Input{Text: "b"}, "beta", 2))
@@ -414,7 +591,11 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var cleared int
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() { cleared++ }, waitReady, takeReady)
+		q := newSteerQueue(fake, func(est int) {
+			if est == 0 {
+				cleared++
+			}
+		}, waitReady, takeReady, noopDrop)
 
 		// a direct dispatch: offer only marked the drain, nothing queued, and the
 		// pump reserved the estimate itself before the turn parked in the hold
@@ -427,15 +608,32 @@ func TestSteerQueue(t *testing.T) {
 		require.GreaterOrEqual(t, cleared, 1) // the submit reserve releases anyway
 	})
 
+	t.Run("abort_drops_when_headless", func(t *testing.T) {
+		// pins the serve rule: an interrupt with no editor to recover into drops
+		// the queued prompts instead of pretending a recall happened
+		waitReady, takeReady := stagePair(t)
+		fake := &fakeQueueUI{headless: true}
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+		q.draining = true
+		q.offer(agent.Input{Text: "held work"}, "held work", 0)
+		require.Equal(t, 1, q.pending())
+
+		q.abort()
+
+		assert.Equal(t, 0, q.pending())
+		assert.Empty(t, fake.prepended)    // nothing recovered: no editor exists
+		assert.Empty(t, fake.lastQueued()) // rows cleared
+	})
+
 	t.Run("take_attaches_staged", func(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var consumed int
 		waitReady, _ := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady,
+		q := newSteerQueue(fake, func(int) {}, waitReady,
 			func() []agent.MessageInfo {
 				consumed++
 				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			})
+			}, noopDrop)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "why did it fail"}, "why did it fail", 1))
@@ -451,10 +649,10 @@ func TestSteerQueue(t *testing.T) {
 
 	t.Run("pull_attaches_staged", func(t *testing.T) {
 		waitReady, _ := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady,
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady,
 			func() []agent.MessageInfo {
 				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			})
+			}, noopDrop)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "and then?"}, "and then?", 1))
@@ -469,11 +667,11 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var consumed bool
 		waitReady, _ := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady,
+		q := newSteerQueue(fake, func(int) {}, waitReady,
 			func() []agent.MessageInfo {
 				consumed = true
 				return nil
-			})
+			}, noopDrop)
 
 		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "late"}, "late", 1))
@@ -508,11 +706,11 @@ func TestSteerQueue(t *testing.T) {
 		fake := &fakeQueueUI{}
 		var consumed bool
 		waitReady, _ := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, func() {}, waitReady,
+		q := newSteerQueue(fake, func(int) {}, waitReady,
 			func() []agent.MessageInfo {
 				consumed = true
 				return nil
-			})
+			}, noopDrop)
 
 		// a queued /init survey carries its own Before; abort recovers the label only
 		in := agent.Input{Text: "", Before: []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "survey pair")}}}
@@ -522,6 +720,73 @@ func TestSteerQueue(t *testing.T) {
 		q.abort()
 		assert.False(t, consumed) // staged shell output is the stager's until delivery
 		assert.Equal(t, []string{"/init"}, fake.prepended)
+	})
+
+	t.Run("offer_stamps_row_id", func(t *testing.T) {
+		// every queued row carries a stable correlation: pump-submitted prompts
+		// bring one from submit time, anything else gets minted at offer and
+		// never changes while queued
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "a"}, "alpha", 1))     // no id: minted
+		first := fake.lastRows()
+		require.Len(t, first, 1)
+		assert.NotEmpty(t, first[0].ID)
+
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 1))
+		rows := fake.lastRows()
+		require.Len(t, rows, 2)
+		assert.Equal(t, first[0].ID, rows[0].ID) // stable while queued
+		assert.Equal(t, "row-b", rows[1].ID)     // a submitted correlation is kept
+	})
+
+	t.Run("abort_names_rows_with_ids", func(t *testing.T) {
+		// an interrupt drop carries every row's correlation, so a serve-mode
+		// controller resolves its secret row too: the id never redacts
+		fake := &fakeQueueUI{}
+		var drops [][]ctl.QueueRow
+		waitReady, takeReady := stagePair(t)
+		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady,
+			func(cause string, rows []ctl.QueueRow) { drops = append(drops, rows) })
+		fake.headless = true // serve mode: the interrupt drops instead of recovering
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "work", QueueIDs: []string{"row-w"}}, "secret: hunter2", 1))
+
+		q.abort()
+
+		require.Len(t, drops, 1)
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-w", Text: "secret: hunter2"}}, drops[0])
+	})
+
+	t.Run("clear_for_rewind_one_window", func(t *testing.T) {
+		// the rewind's drop and the emptied rows publish inside one queue
+		// critical section: while the drop fires, no offer can interleave, so a
+		// prompt re-offered after the clear keeps its fresh pending row
+		fake := &fakeQueueUI{}
+		waitReady, takeReady := stagePair(t)
+		var q *steerQueue
+		dropped := func(string, []ctl.QueueRow) {
+			if q.mu.TryLock() { // must still be held by clearForRewind here
+				q.mu.Unlock()
+				t.Error("the rewind drop published outside the queue critical section")
+			}
+		}
+		q = newSteerQueue(fake, func(int) {}, waitReady, takeReady, dropped)
+
+		require.False(t, q.offer(agent.Input{Text: "seed"}, "seed", 0)) // starts the drain
+		assert.True(t, q.offer(agent.Input{Text: "a", QueueIDs: []string{"row-a"}}, "alpha", 1))
+
+		labels := q.clearForRewind()
+		assert.Equal(t, []string{"alpha"}, labels) // the notice entry's names
+		assert.Empty(t, fake.lastQueued())
+
+		// a re-offer after the clear publishes fresh rows no late drop removes
+		assert.True(t, q.offer(agent.Input{Text: "b", QueueIDs: []string{"row-b"}}, "beta", 1))
+		assert.Equal(t, []ctl.QueueRow{{ID: "row-b", Text: "beta"}}, fake.lastRows())
 	})
 }
 
@@ -534,7 +799,7 @@ func TestJoinAfter(t *testing.T) {
 
 	t.Run("chains_in_submit_order", func(t *testing.T) {
 		waitReady, takeReady := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 		after := func(text string) func(context.Context) []llm.Message {
 			return func(context.Context) []llm.Message {
 				return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: text}}}}

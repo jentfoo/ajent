@@ -109,7 +109,7 @@ func New(state *State, opts Options) *Agent {
 	case 1:
 		a.sink = opts.Sinks[0]
 	default:
-		a.sink = &fanoutSink{sinks: opts.Sinks}
+		a.sink = Fanout(func() []Sink { return opts.Sinks })
 	}
 	return a
 }

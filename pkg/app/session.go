@@ -7,7 +7,10 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/go-analyze/bulk"
 
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/config"
@@ -43,18 +46,36 @@ type sessRec struct {
 	// hint is the transcript's root id, cached on first read and stable for the
 	// process lifetime.
 	hint string
+	// lane serializes the branch-swap transactions (rewind, fork, the
+	// compactor's append-then-swap) against turn dispatch. The driver sets it
+	// alongside bindSession, before any surface can drive a swap.
+	lane *stateLane
+	// busy reports dispatched-but-unsettled work a rewind must refuse against: a
+	// running turn or a drain that owns the next one between turns.
+	busy func() bool
 	// onSwitch reports a rebuilt context (rewind, fork or compaction) so read tracking
-	// and @ reference ids stop describing what it replaced. Nil until main wires it.
-	onSwitch func([]llm.Message)
+	// and @ reference ids stop describing what it replaced. cause names why the
+	// head moved, for the branch.changed event. Nil until main wires it.
+	onSwitch func(msgs []llm.Message, cause string)
 	// starts is the driver's dispatch state, shared so a rewind seeds its base
 	// with the same committed rule the pump uses. Nil until main wires it.
 	starts *startState
 	// discardStaged drops shell results staged against the branch a rewind leaves,
 	// so they never ride the new branch's first prompt. Nil until main wires it.
 	discardStaged func()
+	// clearQueued drops prompts queued for the branch just left, returning the
+	// labels it cleared; the rewind records the notice naming them. Nil until
+	// main wires it.
+	clearQueued func() []string
 	// resumeAuto re-arms automatic compaction: a shorter branch may reduce where
 	// the one it left could not. Nil until main wires it.
 	resumeAuto func()
+
+	// pickMu guards pickStop, the cancel of the rewind picker the keyboard
+	// holds open: a rewind from the other surface fires it, so a tree-dependent
+	// picker never outlives the head it was drawn from.
+	pickMu   sync.Mutex
+	pickStop func()
 }
 
 func sessionHint(r *sessRec) string {
@@ -90,21 +111,27 @@ func rootID(entries []session.Entry) string {
 
 // exitLabel ends the run's recording, reporting "" so no resume hint names a
 // dropped transcript. Any other transcript returns the label a `--resume`
-// command takes.
+// command takes. Closing the writer first marks the slot inactive, so this exit
+// never blocks a concurrent --delete, and the empty-session cleanup only fires
+// when no peer still holds the file live.
 func (r *sessRec) exitLabel() string {
 	if r == nil || r.w == nil {
 		return ""
 	}
+	_ = r.w.Close()
 	entries, ok := sessionEntries(r)
 	if !ok {
 		return "" // unreadable: neither dropped nor advertised
 	}
 	if r.store != nil && session.NameOf(entries) == "" &&
 		!slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage }) {
-		// unnamed and holding no message: removed with its head cursor so it never
-		// becomes a dead picker row or steals "most recent"
-		_ = r.store.Remove(r.w.Path())
-		return ""
+		// unnamed and holding no message: removed with its sidecars so it never
+		// becomes a dead picker row or steals "most recent" -- but a live peer's
+		// open beats this exit's cleanup
+		if r.w.LivePeers() == 0 {
+			_ = r.store.Remove(r.w.Path())
+			return ""
+		}
 	}
 	return labelOf(entries)
 }
@@ -149,6 +176,15 @@ func skipNewerNote(skipped int, newest session.Info) string {
 	return fmt.Sprintf("skipping %d sessions (newest %s): newer session format", skipped, newest.Label())
 }
 
+// stderrNote carries a store warning on stderr; the CLI paths printing it run
+// before any front end exists.
+func stderrNote(w string) {
+	if w == "" {
+		return
+	}
+	_, _ = fmt.Fprintln(os.Stderr, "ajent: "+w)
+}
+
 // CheckSessionTarget verifies that a requested session exists before the TUI
 // opens, so an id or name fails fast rather than silently starting fresh. It
 // returns the resolution for the open to adopt as a locator; a zero Info
@@ -165,6 +201,9 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 	if err != nil {
 		return session.Info{}, err
 	}
+	// a pre-flight lookup runs before any front end exists, so its pin warning
+	// surfaces on stderr directly; the open-time store sees a clean mode after.
+	stderrNote(store.Note())
 	cwd := config.Cwd()
 	if mode == ResumeSessionName {
 		info, found, ferr := store.FindNamed(cwd, target)
@@ -191,7 +230,7 @@ func CheckSessionTarget(mode ResumeMode, target string) (session.Info, error) {
 // error is an open failure the caller must surface, never a fall-back-to-fresh
 // signal; implicit modes that legitimately start fresh return a writer with a
 // nil error.
-func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string, pre session.Info) (*sessRec, error) {
+func newSession(ui *tui.UI, dialogs *interactionBroker, mode ResumeMode, target, modelKey string, pre session.Info) (*sessRec, error) {
 	store, err := session.NewStore()
 	if err != nil {
 		return nil, err
@@ -199,12 +238,14 @@ func newSession(ui *tui.UI, mode ResumeMode, target, modelKey string, pre sessio
 	cwd := config.Cwd()
 	var pick func([]session.Info) (int, error)
 	if ui != nil && mode == ResumePick {
-		pick = func(list []session.Info) (int, error) { return pickSessionRoot(ui, list) }
+		pick = func(list []session.Info) (int, error) { return pickSessionRoot(dialogs, list) }
 	}
 	w, snap, note, err := openSession(store, mode, cwd, target, modelKey, pick, pre)
 	if err != nil {
 		return nil, err
 	}
+	// startup caveats join into the one line sessRec.note carries
+	note = joinNotes(store.Note(), note)
 	r := &sessRec{store: store, w: w, rec: session.NewRecorder(w), note: note, snapshot: snap}
 	r.hint = rootID(snap.entries)
 	return r, nil
@@ -226,6 +267,19 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		}
 		w, err := store.Create(cwd, sd)
 		return w, snapshot{}, "", err
+	}
+	// freshNamed is fresh plus the create-race check: a second --session <name>
+	// losing the race suffix-renames itself before its first prompt, so exactly
+	// one session carries the name (the older session id, ULIDs sort by time).
+	freshNamed := func(name string) (*session.Writer, snapshot, string, error) {
+		w, snap, note, err := fresh(name)
+		if err != nil || w == nil {
+			return w, snap, note, err
+		}
+		if renamed := renameRaceLoser(store, cwd, name, w); renamed != "" {
+			note = joinNotes(note, renamed)
+		}
+		return w, snap, note, err
 	}
 
 	switch mode {
@@ -251,7 +305,9 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 			w, _, _, ferr := fresh("")
 			return w, snapshot{}, skipNewerNote(len(list), list[0]), ferr
 		}
-		w, snap, err := openSnapshot(list[i].Path)
+		// implicit resume: a live peer's slot head is adopted, so a second
+		// --continue forks from the running tip and diverges independently
+		w, snap, err := openSnapshotMode(list[i].Path, session.OpenEntriesImplicit)
 		var note string
 		if err == nil && i > 0 {
 			note = skipNewerNote(i, list[0]) // rows sorting above the resumed one are all blocked
@@ -286,7 +342,7 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		if ferr != nil {
 			return nil, snapshot{}, "", ferr
 		} else if !found {
-			return fresh(target) // first run under this name
+			return freshNamed(target) // first run under this name
 		} else if info.Blocked { // the held name is refused, never re-minted as a fresh transcript
 			return nil, snapshot{}, "", refuseNewer(info)
 		}
@@ -322,17 +378,117 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 
 // openSnapshot opens a transcript for append and returns its open-time parse
 // with the size and mtime stamped before the read, so a later rebuild can
-// detect concurrent appends.
+// detect concurrent appends. The open counts as explicit: a named target never
+// adopts a live peer's head.
 func openSnapshot(path string) (*session.Writer, snapshot, error) {
+	return openSnapshotMode(path, session.OpenEntries)
+}
+
+func openSnapshotMode(path string, open func(string) (*session.Writer, []session.Entry, []string, error)) (*session.Writer, snapshot, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
 		return nil, snapshot{}, err
 	}
-	w, entries, warns, oerr := session.OpenEntries(path)
+	w, entries, warns, oerr := open(path)
 	if oerr != nil {
 		return nil, snapshot{}, oerr
 	}
 	return w, snapshot{entries: entries, warns: warns, size: fi.Size(), mod: fi.ModTime()}, nil
+}
+
+// joinNotes merges note strings into the one line callers render, dropping
+// empties.
+func joinNotes(notes ...string) string {
+	return strings.Join(bulk.SliceFilter(func(s string) bool { return s != "" }, notes), "; ")
+}
+
+// nameRivals lists other recorded sessions answering to the same name,
+// case insensitive, beside the one at selfPath.
+func nameRivals(listed []session.Info, name, selfPath string) []session.Info {
+	return bulk.SliceFilter(func(in session.Info) bool {
+		return strings.EqualFold(in.Name, name) && in.Path != selfPath
+	}, listed)
+}
+
+// renameRaceLoser settles a --session <name> create race: the older session id
+// (ULIDs sort by time) keeps the name, the younger suffix-renames to name-2,
+// -3, ... until nothing matches, recorded as a session_name entry so
+// SessionData stays untouched. Deterministic, so both racers cannot rename.
+// It returns the notice naming the rename, empty when this run won or raced
+// nobody.
+func renameRaceLoser(store *session.Store, cwd, name string, w *session.Writer) string {
+	// the root entry id is the head right after Create, and it sorts by creation
+	mine := w.Head()
+	listed, err := store.List(cwd)
+	if err != nil {
+		return "" // unreadable listing: keep the created name rather than guess
+	}
+	rivals := nameRivals(listed, name, w.Path())
+	if len(rivals) == 0 {
+		return "" // the name reaches nothing but this session
+	}
+	oldest := slices.MinFunc(rivals, func(a, b session.Info) int { return strings.Compare(a.ID, b.ID) })
+	if oldest.ID < mine {
+		// a rival is older: it keeps the name, this one suffix-renames
+		if candidate, ok := freeNameSuffix(name, listed); ok {
+			if _, aerr := w.Append(session.TypeSessionName, session.NameData{Name: candidate}); aerr != nil {
+				return "" // the rename could not be recorded; SessionData still carries the name
+			}
+			return fmt.Sprintf("another session claimed the name %s; this one is %s", name, candidate)
+		}
+	}
+	return "" // every rival is younger: they rename, this session keeps the name
+}
+
+// renameSettle settles a rename that raced another claimant, the same rule the
+// create race uses: an older rival keeps the name and this session
+// suffix-renames with a notice. A younger rival leaves the name here and says
+// so, since no process may reach into the rival's transcript to fix it. It
+// returns the effective name (the rename target unless it moved) and the
+// notice to render, empty when nobody raced.
+func renameSettle(store *session.Store, cwd, name, selfPath string, rec *session.Recorder) (string, string) {
+	listed, err := store.List(cwd)
+	if err != nil {
+		return name, "" // unreadable listing: keep the rename rather than guess
+	}
+	rivals := nameRivals(listed, name, selfPath)
+	if len(rivals) == 0 {
+		return name, "" // the rename landed uncontested
+	}
+	mine := slices.IndexFunc(listed, func(in session.Info) bool { return in.Path == selfPath })
+	if mine < 0 {
+		return name, "" // this session did not list: nothing to order against
+	}
+	oldest := slices.MinFunc(rivals, func(a, b session.Info) int { return strings.Compare(a.ID, b.ID) })
+	if oldest.ID > listed[mine].ID {
+		return name, fmt.Sprintf(
+			"another new session also claimed the name %s; rename it, or the name stays ambiguous", name)
+	}
+	if candidate, ok := freeNameSuffix(name, listed); ok {
+		if err := rec.Rename(candidate); err == nil {
+			return candidate, fmt.Sprintf("another session claimed the name %s; this one is %s", name, candidate)
+		}
+	}
+	return name, "" // the suffix rename could not be recorded: the rename stands
+}
+
+// freeNameSuffix returns name-2, -3, ... past the first suffix no listed row
+// reaches, by its name or its id.
+func freeNameSuffix(name string, listed []session.Info) (string, bool) {
+	taken := func(candidate string) bool {
+		return slices.ContainsFunc(listed, func(in session.Info) bool {
+			return strings.EqualFold(in.Name, candidate) || in.ID == candidate
+		})
+	}
+	for i := 2; ; i++ {
+		candidate, err := session.ValidateName(fmt.Sprintf("%s-%d", name, i))
+		if err != nil {
+			return "", false // cannot form a legal suffix; better a duplicate than a broken name
+		}
+		if !taken(candidate) {
+			return candidate, true
+		}
+	}
 }
 
 // preAdoptable reports whether pre may serve as the open's locator: resolved,
@@ -399,7 +555,7 @@ func roleTag(kind session.RowKind) (string, tui.ItemMark) {
 	}
 }
 
-func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
+func pickSessionRoot(dialogs *interactionBroker, list []session.Info) (int, error) {
 	items := make([]tui.PickItem, len(list))
 	for i, in := range list {
 		label := in.First
@@ -424,8 +580,8 @@ func pickSessionRoot(ui *tui.UI, list []session.Info) (int, error) {
 			items[i].Disabled = true
 		}
 	}
-	return ui.PickContext(context.Background(), "Resume session", items,
-		tui.PickOptions{Placeholder: "filter"})
+	return dialogs.Pick(context.Background(), "Resume session", items,
+		tui.PickOptions{Placeholder: pickFilterPlaceholder})
 }
 
 // restoreState rebuilds resumed state into st from the transcript's branch,
@@ -474,12 +630,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	// manager's connect-time restore, so the resumed frame's tools survive
 	st.Tools = rebuilt.Tools
 	if _, ok := llm.ParseLevel(resumed.Reasoning.Level); ok || resumed.Reasoning.Retain != "" {
-		st.Reasoning = llm.ReasoningFrom(config.Reasoning{
-			Level:  resumed.Reasoning.Level,
-			Retain: resumed.Reasoning.Retain,
-			Hide:   resumed.Reasoning.Hide,
-			Budget: resumed.Reasoning.Budget,
-		}, st.Model)
+		st.Reasoning = llm.ReasoningFrom(resumed.Reasoning, st.Model)
 	}
 	// a recorded empty set disables everything registered; unrecorded keeps the
 	// config default. Tri-state survives the transcript: JSON [] unmarshals non-nil.
@@ -490,7 +641,7 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	return branch, append(rwarns, warns...)
 }
 
-func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
+func (r *sessRec) rebuild(set *config.Set, ui *hubUI, reg *llm.Registry, st *agent.State, toolsReg *tools.Registry) {
 	branch, warns := r.restoreState(set, reg, st, toolsReg)
 	for _, wmsg := range warns {
 		ui.Notify("resume: "+wmsg, tui.LevelWarn)
@@ -512,21 +663,16 @@ func (r *sessRec) rebuild(set *config.Set, ui *tui.UI, reg *llm.Registry, st *ag
 	session.Replay(branch, replaySink(ui), session.ReplayOptions{})
 }
 
-func (r *sessRec) bindRewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
-	if ui == nil || ag == nil {
-		return
-	}
-	ui.SetOnRewind(func() { r.rewind(ui, ag, reg) })
-}
-
 // errTurnRunning reports a refused state swap: a turn claimed the loop between
 // the caller's idle check and the swap attempt.
 var errTurnRunning = errors.New("a turn is running")
 
 // switchState points the writer and live agent state at head's branch, an empty
-// head starting a new root, firing the switch callbacks once both moved. It
-// reports errTurnRunning when a turn claims the loop first, with nothing moved.
-func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, head, prefix string) error {
+// head starting a new root, firing the switch callbacks once both moved. cause
+// names the move for the branch.changed event. It reports errTurnRunning when a
+// turn claims the loop first, with nothing moved. Callers hold the state lane
+// (rewindTo, forkTo), so the swap cannot interleave with another transaction.
+func (r *sessRec) switchState(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause, prefix string) error {
 	var rebuilt agent.State
 	if head != "" {
 		// rebuild before moving HEAD, so a failed read leaves writer and state in step
@@ -565,7 +711,7 @@ func (r *sessRec) switchState(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, he
 	}
 	r.w.SetHead(head)
 	if r.onSwitch != nil {
-		r.onSwitch(rebuilt.Messages)
+		r.onSwitch(rebuilt.Messages, cause)
 	}
 	if r.resumeAuto != nil {
 		r.resumeAuto()
@@ -591,7 +737,7 @@ func (r *sessRec) baseEstimate(ag *agent.Agent) int {
 	return ag.BaseEstimate(committed)
 }
 
-func pushSwitchedContext(ui *tui.UI, t *tokens.Accounting) {
+func pushSwitchedContext(ui *hubUI, t *tokens.Accounting) {
 	if ui == nil {
 		return
 	}
@@ -611,18 +757,22 @@ func (r *sessRec) liveModel(ag *agent.Agent) (llm.Model, bool) {
 	return save, true
 }
 
-func syncModelUI(ui *tui.UI, reg *llm.Registry, m llm.Model) {
+func syncModelUI(ui *hubUI, reg *llm.Registry, m llm.Model) {
 	reg.SetActive(m)
 	if ui == nil {
 		return
 	}
-	ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+	ui.SetModelOf(m)
 }
 
 // replaySink builds the sink a rewind or resume replay drives: tool images
-// render as text, since the drawings already sit in scrollback above.
-func replaySink(ui *tui.UI) agent.Sink {
-	s := tuisink.New(ui)
+// render as text, since the drawings already sit in scrollback above. No
+// terminal (serve mode) replays nowhere: the transcript is the client's view.
+func replaySink(ui *hubUI) agent.Sink {
+	if ui.UI == nil {
+		return agent.NopSink{}
+	}
+	s := tuisink.New(ui.UI)
 	s.SetImages(false)
 	return s
 }
@@ -631,7 +781,7 @@ func replaySink(ui *tui.UI) agent.Sink {
 // reseeding the ledger against it. It reports errTurnRunning when a turn claims
 // the loop first, leaving the model as the switch left it. The caller owns the
 // refusal notice.
-func (r *sessRec) restoreForkModel(ui *tui.UI, ag *agent.Agent, reg *llm.Registry, m llm.Model) error {
+func (r *sessRec) restoreForkModel(ui *hubUI, ag *agent.Agent, reg *llm.Registry, m llm.Model) error {
 	if m.ID == "" || ag == nil {
 		return nil
 	}
@@ -677,22 +827,43 @@ func initialRow(tree []session.TreeRow, head string) int {
 
 const rewindDeferThreshold = 300
 
-func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
+// rewindSurface is the terminal face the shared rewind picker needs: a notice,
+// the deferred-history toggle and the picker itself. *tui.UI satisfies it
+// directly; hubUI routes the picker through the broker so a dialog never
+// fights it for the surface.
+type rewindSurface interface {
+	Notify(msg string, level tui.Level)
+	SetDeferHistory(bool)
+	PickContext(ctx context.Context, title string, items []tui.PickItem, opts tui.PickOptions) (int, error)
+}
+
+// pickRewind opens the context-tree picker and reports the chosen entry id,
+// false when cancelled or nothing is rewindable.
+func (r *sessRec) pickRewind(ui *hubUI) (string, bool) {
 	// a failed re-read is not the same as nothing recorded yet
 	entries, _, err := session.Read(r.w.Path())
 	if err != nil {
 		ui.Notify("rewind: "+err.Error(), tui.LevelWarn)
-		return
+		return "", false
 	}
 	if len(entries) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
-		return
+		return "", false
 	}
-	head := resumeHead(r.w.Head(), entries)
+	return rewindPick(ui, entries, resumeHead(r.w.Head(), entries), r.armPick)
+}
+
+// rewindPick builds and runs the one context-tree picker both front ends open:
+// rows from the whole recorded tree, copy payloads verbatim from the
+// transcript, deferred history on large trees, the head preselected. arm
+// installs the cancel hook a rewind from another surface trips (nil clears
+// it), so the picker never shows a tree the head has left. Reports the chosen
+// entry id, false when cancelled or nothing is rewindable.
+func rewindPick(ui rewindSurface, entries []session.Entry, head string, arm func(context.CancelFunc)) (string, bool) {
 	tree := session.TreeRows(entries, head)
 	if len(tree) == 0 {
 		ui.Notify("nothing to rewind onto yet", tui.LevelInfo)
-		return
+		return "", false
 	}
 
 	// one payload per row, verbatim from the transcript so a ctrl+x copy is
@@ -706,8 +877,8 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	items := make([]tui.PickItem, len(tree))
 	for i, row := range tree {
 		tag, mark := roleTag(row.Kind)
-		// Guide draws the branch ("├──", "└──", continuation bars), but a flat trunk has none.
-		// Off shades the rows no longer in context, so an abandoned fork recedes.
+		// Guide draws branches ("├──", "└──"); a flat trunk has none.
+		// Off shades rows no longer in context, so an abandoned fork recedes.
 		items[i] = tui.PickItem{
 			Label: row.Guide + rewindBody(row),
 			Tag:   tag,
@@ -722,16 +893,84 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.SetDeferHistory(true)
 		defer ui.SetDeferHistory(false)
 	}
-	picked, err := ui.PickContext(context.Background(), "Rewind to", items,
-		tui.PickOptions{Placeholder: "filter", Initial: initialRow(tree, head)})
+	pickCtx, stop := context.WithCancel(context.Background())
+	arm(stop)
+	defer func() {
+		arm(nil)
+		stop() // release either way; a raced close already ran this cancel
+	}()
+	picked, err := ui.PickContext(pickCtx, "Rewind to", items,
+		tui.PickOptions{Placeholder: pickFilterPlaceholder, Initial: initialRow(tree, head)})
 	if err != nil {
-		return // cancelled
+		return "", false // cancelled
 	}
+	return tree[picked].ID, true
+}
 
-	newHead, fillText, ok := session.RewindTarget(entries, tree[picked].ID)
+// armPick installs or clears the open rewind picker's cancel hook.
+func (r *sessRec) armPick(stop context.CancelFunc) {
+	r.pickMu.Lock()
+	r.pickStop = stop
+	r.pickMu.Unlock()
+}
+
+// closePick cancels the rewind picker another surface still holds open,
+// reporting whether there was one. The caller owns the closing notice.
+func (r *sessRec) closePick() bool {
+	r.pickMu.Lock()
+	stop := r.pickStop
+	r.pickStop = nil
+	r.pickMu.Unlock()
+	if stop == nil {
+		return false
+	}
+	stop()
+	return true
+}
+
+// errUnknownHead names a rewind target absent from the transcript, so callers
+// can answer it as not-found rather than a generic failure.
+var errUnknownHead = errors.New("unknown head")
+
+// pickFilterPlaceholder is the one filter placeholder every session picker uses.
+const pickFilterPlaceholder = "filter"
+
+// Causes a head move carries on branch.changed. No other event may move a head.
+const (
+	rewindCauseRewind  = "rewind"
+	rewindCauseFork    = "fork"
+	rewindCauseCompact = "compact"
+)
+
+// rewindTo switches onto head's branch, the double-Esc operation minus its
+// picker: rebuild state, move the writer, keep the live model, discard staged
+// output meant for the branch left behind. The whole transaction runs under the
+// state lane and refuses while dispatched work may still claim the loop, so a
+// dispatched prompt never appends from a head the rewind is moving. An
+// interactive run redraws to the restored context; a serve run has nothing to
+// redraw. It reports the new head entry id. Notifications for mid-operation
+// failures stay inside (they render locally and reach observers as notice
+// events); the returned error is the caller's machine-readable copy.
+func (r *sessRec) rewindTo(ui *hubUI, ag *agent.Agent, reg *llm.Registry, head, cause string) (string, error) {
+	r.lane.lock()
+	defer r.lane.unlock()
+
+	// guards revalidate at execution: a drain that owns turns (running or
+	// between them) will append under this rewind otherwise
+	if r.busy() {
+		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
+		return "", errTurnRunning
+	}
+	entries, _, err := session.Read(r.w.Path())
+	if err != nil {
+		return "", err
+	}
+	newHead, fillText, ok := session.RewindTarget(entries, head)
 	if !ok || newHead == "" {
-		ui.Notify("cannot rewind onto that entry", tui.LevelWarn)
-		return
+		if !slices.ContainsFunc(entries, func(e session.Entry) bool { return e.ID == head }) {
+			return "", fmt.Errorf("%w %q", errUnknownHead, head)
+		}
+		return "", errors.New("cannot rewind onto that entry")
 	}
 	// keep the current model across a fork: rebuilding from an earlier point
 	// would otherwise revert to whatever model was active there, silently undoing
@@ -740,14 +979,46 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 	if !ok {
 		// a refused capture means a turn owns the loop, nothing may move
 		ui.Notify("rewind: "+errTurnRunning.Error(), tui.LevelWarn)
-		return
+		return "", errTurnRunning
 	}
-	if err := r.switchState(ui, ag, reg, newHead, "rewind: "); err != nil {
-		return
+	if err := r.switchState(ui, ag, reg, newHead, cause, "rewind: "); err != nil {
+		return "", err
+	}
+	if r.closePick() {
+		// a failed switch left the head alone, so the picker only closes once
+		// the session really moved under it
+		ui.Notify("rewind picker closed: the session moved under it", tui.LevelWarn)
 	}
 	if r.discardStaged != nil {
 		r.discardStaged() // staged against the branch just left, not this one's to carry
 	}
+	// cleanup for the branch just left runs before any step that can refuse:
+	// a model restore that hits a running turn must not leave prompts queued for
+	// the abandoned branch or staged output riding the new one
+	if r.clearQueued != nil {
+		if labels := r.clearQueued(); len(labels) > 0 {
+			// secret rows stay out of the record like every surface: a dropped
+			// prompt was never delivered, so the transcript holds no other copy
+			shown := bulk.SliceFilter(func(text string) bool {
+				return !session.HasSecretPrefix(secretPrefix, text)
+			}, labels)
+			msg := "queued prompts cleared by rewind"
+			if len(shown) > 0 {
+				msg += ": " + strings.Join(shown, "; ")
+			}
+			if _, err := r.w.Append(session.TypeNotice, session.NoticeData{
+				Message: msg,
+				Level:   agent.LevelWarn,
+			}); err != nil {
+				ui.Notify("could not record the queue-clear notice: "+err.Error(), tui.LevelWarn)
+			}
+			ui.NotifyLocal("queued prompts cleared by the rewind; up-arrow recalls them", tui.LevelWarn)
+		}
+	}
+	// buffered pump lines queued before this rewind age out: the pump returns
+	// them to the editor instead of landing them on the new branch
+	r.lane.bump()
+
 	// a turn claiming the loop here runs against the switched state, so the redraw
 	// below would wipe its live output: leave the screen to it
 	if err := r.restoreForkModel(ui, ag, reg, saveModel); err != nil {
@@ -755,16 +1026,19 @@ func (r *sessRec) rewind(ui *tui.UI, ag *agent.Agent, reg *llm.Registry) {
 		ui.Notify(fmt.Sprintf(
 			"rewind: branch switched but a turn is running, model %s not kept, /model re-applies it",
 			saveModel.Key()), tui.LevelWarn)
-		return
+		return newHead, err
 	}
 
 	// redraw to just the restored context, then drop the picked text into the
 	// prompt so it can be edited or re-sent as this branch's first message.
-	ui.Reset()
-	// mark where restored history begins so it reads clearly in scrollback
-	ui.Divider()
-	session.Replay(session.Branch(entries, newHead), replaySink(ui), session.ReplayOptions{})
-	if fillText != "" {
-		ui.SetInput(fillText)
+	if ui.Interactive() {
+		ui.Reset()
+		// mark where restored history begins so it reads clearly in scrollback
+		ui.Divider()
+		session.Replay(session.Branch(entries, newHead), replaySink(ui), session.ReplayOptions{})
+		if fillText != "" {
+			ui.SetInput(fillText)
+		}
 	}
+	return newHead, nil
 }

@@ -230,7 +230,7 @@ func withMode(o Options, m Mode) Options {
 // runAsk drives the asker for one call and returns its decision.
 func runAsk(b *Barrier, ctx context.Context, name string, input []byte) tools.Decision {
 	ask := b.Asker()
-	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input}, tools.Decision{Action: tools.ActionAsk})
+	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input})
 }
 
 func TestGuardModeMatrix(t *testing.T) {
@@ -753,7 +753,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
 		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify})
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		d := runAsk(b, ctx, "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -1322,8 +1322,10 @@ func TestAskerAuto(t *testing.T) {
 
 	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
+		entered := make(chan context.Context, 1)
 		cancelled := make(chan struct{})
 		classify := func(ctx context.Context, _ Subject) Class {
+			entered <- ctx // announce the in-flight call carrying this context
 			<-ctx.Done()
 			close(cancelled)
 			return ClassUnsure
@@ -1335,18 +1337,22 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		waitDialog(t, p).answer(int(optDeny)) // the user answers before classification returns
+		dlg := waitDialog(t, p)
+		select { // the classifier is in flight before answering, so a cancel that
+		// wins the scheduling race legitimately skips the call entirely
+		case <-entered:
+		case <-t.Context().Done():
+			t.Fatal("classification never started")
+		}
+		dlg.answer(int(optDeny)) // the user answers before classification returns
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
-		require.Eventually(t, func() bool {
-			select {
-			case <-cancelled:
-				return true
-			default:
-				return false
-			}
-		}, time.Second, 10*time.Millisecond)
+		select { // deterministic: the answer path cancels before runAsk returns
+		case <-cancelled:
+		case <-t.Context().Done():
+			t.Fatal("answering did not cancel the in-flight classification")
+		}
 	})
 
 	// auto also classifies MCP/extension calls
@@ -1896,6 +1902,32 @@ func TestPrevResolvesOpenDialog(t *testing.T) {
 	<-done
 
 	assert.Equal(t, tools.ActionAllow, got.Action)
+}
+
+// TestCycleBlockAllBackToAllowAll pins the externally reported sequence: cycle
+// right into block-all, step back to allow-all, and the gate must stop asking.
+func TestCycleBlockAllBackToAllowAll(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p) // default allow-read
+
+	for range 4 { // allow-read -> auto -> auto+write -> allow-all -> block-all
+		b.Cycle()
+	}
+	require.Equal(t, ModeBlockAll, b.Mode())
+
+	// premise: block-all asks even for a read
+	asked := b.Guard()(t.Context(), call("read", `{}`))
+	require.Equal(t, tools.ActionAsk, asked.Action)
+
+	// step back once: block-all -> allow-all, the reported display state
+	require.Equal(t, ModeAllowAll, b.Prev())
+	require.Equal(t, ModeAllowAll, b.Mode())
+
+	assert.Equal(t, tools.ActionAllow, b.Guard()(t.Context(), call("write", `{}`)).Action)
+	assert.Equal(t, tools.ActionAllow, runAsk(b, t.Context(), "write", []byte(`{}`)).Action)
+	assert.Equal(t, 0, p.count(), "no dialog may open in allow-all")
 }
 
 func TestPrevResetsSessionAllows(t *testing.T) {

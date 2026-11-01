@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // ServerConfig is one server declaration from mcp.json. Exactly one of Command
@@ -60,12 +61,12 @@ func LoadConfig(workspace string) (map[string]ServerConfig, []string, error) {
 	var warnings []string
 
 	// user config first, then project: merge order means project wins
-	var paths []string
-	if dir, err := config.Dir(); err == nil {
-		paths = append(paths, filepath.Join(dir, "mcp.json"))
+	var files []string
+	if dir, err := paths.Dir(); err == nil {
+		files = append(files, filepath.Join(dir, "mcp.json"))
 	}
-	paths = append(paths, filepath.Join(config.ProjectDir(workspace), "mcp.json"))
-	for _, path := range paths {
+	files = append(files, filepath.Join(config.ProjectDir(workspace), "mcp.json"))
+	for _, path := range files {
 		servers, warns, err := loadOne(path)
 		if err != nil {
 			return nil, warnings, err

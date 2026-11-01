@@ -15,7 +15,7 @@ request, and compaction intercepted so the cut point stays inside a phase.
 ## Phases are branches, not projections
 
 The transcript is already a tree. `session.Branch(entries, head)` walks
-`ParentID` to the root and is the only read path;
+`ParentID` to the root and is the only read path.
 `session.State(branch, resolve)` rebuilds `agent.State` from it. So a phase
 switch is a **head switch**:
 
@@ -81,7 +81,7 @@ user sees. An empty head starts a new root.
 |---|---|---|---|
 | — | `/plan` | Planning | save model + tool set, register `dev_*`, fork in place onto the planner |
 | Planning | `dev_implement(plan)` | AwaitingPlan | record the plan tip, put the plan in the editor, **start no turn** |
-| AwaitingPlan | the user submits | Implementing | the submitted text is the plan of record; new root, implementor scope |
+| AwaitingPlan | the user submits | Implementing | the submitted text is the plan of record. New root, implementor scope |
 | Implementing | the turn ends, `dev_review` or not | Reviewing | fork the review tip (else the plan tip), planner scope, git state |
 | Implementing | the turn errored or hit a token/step limit | Implementing | retry a few times, then pause in place |
 | Reviewing | `dev_revise(instructions)` | Implementing | record the review tip, new root seeded with plan + instructions |
@@ -210,7 +210,7 @@ missing kickoff is re-delivered ahead of the next prompt, and a missing goal
 lets the next prompt become the goal, the re-arm recorded so a later resume
 warns once. The verdict is taken before the restore persists anything, since
 its own append lands a custom entry at the tail and would fire the repair on
-every resume; rewinding to a point before a delivery legitimately re-arms it
+every resume. Rewinding to a point before a delivery legitimately re-arms it
 there. The check reads the transcript rather than the rebuilt context, so
 compaction cannot make a delivered kickoff read as missing.
 
@@ -220,7 +220,7 @@ typed prompt (replay and provenance rules: `prompt-design.md`).
 
 Ending a workflow leaves HEAD at the review tip while the file tail is an
 implementation entry. Resume follows the live head over the tail, the same
-divergence a rewind already produces (`session-design.md`, the branch cursor).
+divergence a rewind already produces (`session-design.md`, writer slots).
 
 ## Compaction
 

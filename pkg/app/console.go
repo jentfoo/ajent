@@ -28,7 +28,8 @@ import (
 // q is the state gate: while a drain goroutine owns State, writes queue and the
 // pump applies them once it exits.
 type uiConsole struct {
-	ui       *tui.UI
+	ui       *hubUI
+	dialogs  *interactionBroker // the brokered dialog surface, nil in tests without one
 	set      *config.Set
 	reg      *llm.Registry
 	st       *agent.State
@@ -40,10 +41,15 @@ type uiConsole struct {
 	mcp      mcpAdapter      // the MCP server manager adapter, or nil
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
+	hub      *sessionHub     // control plane, rename tracking
 
-	// q gates state writes against a live drain goroutine; nil applies at once
+	// q gates state writes against a live drain goroutine
 	q *steerQueue
-	// snap is the settled transcript copy mid-turn readers use; nil reports none
+	// lane serializes applied state writes against branch swaps (rewind, fork,
+	// the compactor's swap), so a bare State write can never interleave with the
+	// transaction replacing what it writes
+	lane *stateLane
+	// snap is the settled transcript copy mid-turn readers use
 	snap *turnSnapshot
 	// deferred holds state writes queued while a turn owned State. Pump-goroutine
 	// confined: command handlers append, the dispatch and drain-exit flush drain
@@ -64,32 +70,34 @@ func (c *uiConsole) Notify(msg string, level tui.Level) { c.ui.Notify(msg, level
 func (c *uiConsole) Print(markdown string)              { c.ui.Print(markdown) }
 
 func (c *uiConsole) Pick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.PickOptions) (int, error) {
-	return c.ui.PickContext(ctx, prompt, items, opts)
+	return c.dialogs.Pick(ctx, prompt, items, opts)
 }
 
 func (c *uiConsole) MultiPick(ctx context.Context, prompt string, items []tui.PickItem, opts tui.MultiPickOptions) ([]int, error) {
-	return c.ui.MultiPickContext(ctx, prompt, items, opts)
+	return c.dialogs.MultiPick(ctx, prompt, items, opts)
 }
 
 func (c *uiConsole) Select(ctx context.Context, prompt string, options []tui.Option) (int, error) {
-	return c.ui.SelectContext(ctx, prompt, options)
+	return c.dialogs.Select(ctx, prompt, options)
 }
 
 func (c *uiConsole) Confirm(ctx context.Context, prompt string) (bool, error) {
-	return c.ui.ConfirmContext(ctx, prompt)
+	return c.dialogs.Confirm(ctx, prompt)
 }
 
 func (c *uiConsole) Input(ctx context.Context, label, placeholder string) (string, error) {
-	return c.ui.InputContext(ctx, label, placeholder)
+	return c.dialogs.Input(ctx, label, placeholder)
 }
 
 func (c *uiConsole) InputSecret(ctx context.Context, label, placeholder string) (string, error) {
-	return c.ui.InputSecretContext(ctx, label, placeholder)
+	return c.dialogs.InputSecret(ctx, label, placeholder)
 }
 
 func (c *uiConsole) ColorProfile() tui.ColorProfile { return c.ui.ColorProfile() }
 func (c *uiConsole) SetTheme(pal tui.Palette)       { c.ui.SetTheme(pal) }
 
+// DetectTone reaches the local terminal and is local-only chrome, like
+// ColorProfile: serve mode never asks, so nothing promotes past a nil UI.
 func (c *uiConsole) DetectTone() tui.Tone {
 	c.toneOnce.Do(func() { c.tone = c.ui.DetectTone() })
 	return c.tone
@@ -105,14 +113,8 @@ func (c *uiConsole) Settings() *config.Set       { return c.set }
 // SettledMessages returns the transcript for a reader that may run mid-turn:
 // the live list at rest, else the copy the last turn end settled.
 func (c *uiConsole) SettledMessages() []llm.Message {
-	if c.st == nil {
-		return nil
-	}
 	if !c.stateOwned() {
 		return c.st.Messages // at rest, the pump serializes every reader and writer
-	}
-	if c.snap == nil {
-		return nil // no snapshot wired, report nothing rather than a torn read
 	}
 	return c.snap.messages()
 }
@@ -120,7 +122,7 @@ func (c *uiConsole) SettledMessages() []llm.Message {
 // stateOwned reports whether a drain goroutine owns or is settling State, so
 // console state writes must queue behind it
 func (c *uiConsole) stateOwned() bool {
-	return c.q != nil && c.q.drainLive()
+	return c.q.drainLive()
 }
 
 // queueState runs fn now when State is at rest, else queues it for the pump to
@@ -128,26 +130,36 @@ func (c *uiConsole) stateOwned() bool {
 // applies
 func (c *uiConsole) queueState(label string, fn func()) {
 	if !c.stateOwned() {
-		fn()
+		c.applyState(fn)
 		return
 	}
 	c.deferred = append(c.deferred, fn)
-	if c.ui != nil {
-		c.ui.Notify(label+" queued; applies after this turn", tui.LevelInfo)
-	}
+	c.ui.Notify(label+" queued; applies after this turn", tui.LevelInfo)
+}
+
+// applyState runs one state write under the state lane, so a rewind or fork
+// swapping State in place cannot interleave with the bare State field writes a
+// command handler makes. Blocking is bounded by one transaction.
+func (c *uiConsole) applyState(fn func()) {
+	c.lane.lock()
+	defer c.lane.unlock()
+	fn()
 }
 
 // applyDeferred lands queued state writes; a live drain keeps them queued. The
-// pump runs this at each dispatch and at drain exit
+// pump runs this at each dispatch and at drain exit, and each landed write
+// joins the state lane like an immediate one
 func (c *uiConsole) applyDeferred() {
 	if len(c.deferred) == 0 || c.stateOwned() {
 		return
 	}
 	pending := c.deferred
 	c.deferred = nil
-	for _, fn := range pending {
-		fn()
-	}
+	c.applyState(func() {
+		for _, fn := range pending {
+			fn()
+		}
+	})
 }
 
 // Agents returns nil when no sub-agent manager was built, so /agents reports
@@ -160,16 +172,13 @@ func (c *uiConsole) Agents() command.Agents {
 }
 
 // SaveSetting delegates to the config Set, surfacing warnings and failures.
+// Save already updates the in-memory Set, so later reads see the new value.
 func (c *uiConsole) SaveSetting(layer, key string, value any) error {
 	warns, err := c.set.Save(layer, key, value)
 	for _, w := range warns {
 		c.ui.Notify(w, tui.LevelWarn)
 	}
-	if err != nil {
-		return err
-	}
-	_ = layer // Save already updated the in-memory Set for future resolution
-	return nil
+	return err
 }
 
 func (c *uiConsole) SessionName() string {
@@ -191,7 +200,18 @@ func (c *uiConsole) SetSessionName(name string) error {
 	if err := c.sess.store.NameConflict(config.Cwd(), canonical, c.sess.w.Path()); err != nil {
 		return err
 	}
-	return c.rec.Rename(canonical)
+	if err := c.rec.Rename(canonical); err != nil {
+		return err
+	}
+	// a --session create or another rename may have claimed the name between
+	// the conflict check and the entry landing. Settle it like a create race.
+	effective, note := renameSettle(c.sess.store, config.Cwd(), canonical, c.sess.w.Path(), c.rec)
+	if note != "" {
+		c.ui.Notify(note, tui.LevelWarn)
+	}
+	canonical = effective
+	c.hub.setSessionName(canonical) // snapshots report the live name
+	return nil
 }
 
 // keyPermissionMode is the dotted config key driving the live permission barrier.
@@ -267,7 +287,7 @@ func (c *uiConsole) reapplyResolved(key string) {
 		if c.mcp.m != nil {
 			c.mcp.RefreshStatus()
 		}
-		if c.starts != nil && c.starts.committed.marked() && c.refreshBase != nil {
+		if c.starts.committed.marked() {
 			c.refreshBase()
 		}
 	case key == "model":
@@ -306,8 +326,9 @@ func (c *uiConsole) reapplyReasoning() {
 	})
 }
 
-// applyCompactThreshold re-defaults the registry and refreshes the live model, so a /settings edit
-// moves the trigger, the context bar and the compaction tail together instead of waiting for a restart.
+// applyCompactThreshold re-defaults the registry and refreshes the live model,
+// so a /settings edit moves the trigger, context bar and compaction tail at once
+// instead of waiting for a restart.
 func (c *uiConsole) applyCompactThreshold(value any) {
 	f, ok := value.(float64)
 	if !ok {
@@ -354,7 +375,7 @@ func (c *uiConsole) applyModel(m llm.Model) {
 	// /model rescales the bar immediately rather than on the next turn.
 	t := c.st.Tokens
 	t.SetModel(m) // drops every context term for the new window/reserve
-	c.ui.SetModel(m.Key(), m.ShortName(), m.ContextWindow)
+	c.ui.SetModelOf(m)
 	// SetModel zeroed the ledger, so Used would read empty regardless of real
 	// occupancy. Remeasure against the actual in-memory messages: a switch to a
 	// smaller window must reflect that it now overflows, or threshold auto-compaction
@@ -402,7 +423,7 @@ func (c *uiConsole) ToolsChanged() {
 	}
 	// a wider tool block occupies context immediately, not at the next turn. Before
 	// the block is committed schemas are not in the base at all, so nothing to redo.
-	if c.starts != nil && c.starts.committed.marked() {
+	if c.starts.committed.marked() {
 		c.refreshBase()
 	}
 }
@@ -410,7 +431,7 @@ func (c *uiConsole) ToolsChanged() {
 // Dispatched reports whether this run has sent a prompt. A resumed session
 // reports false until its first prompt, keeping /tools selection free.
 func (c *uiConsole) Dispatched() bool {
-	return c.starts != nil && c.starts.dispatched.marked()
+	return c.starts.dispatched.marked()
 }
 
 // Compact reduces the session context toward the compaction threshold. An empty
@@ -425,9 +446,7 @@ func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
 }
 
 func (c *uiConsole) Exit() {
-	if c.quit != nil {
-		c.quit()
-	}
+	c.quit()
 }
 
 // turnSnapshot keeps a stable copy of the transcript as of the last turn end, the
@@ -555,7 +574,7 @@ func levelOrEmpty(rc llm.ReasoningConfig) string {
 
 // showReasoningIndicator shows the reasoning level in the status bar when it
 // differs from the resolved default, clearing it otherwise.
-func showReasoningIndicator(ui *tui.UI, set *config.Set, st *agent.State) {
+func showReasoningIndicator(ui *hubUI, set *config.Set, st *agent.State) {
 	var text string
 	if d, _, ok := set.Explain("reasoning.level"); ok && string(d) != `"medium"` {
 		text = st.Reasoning.Level.String() // an explicit config choice stays visible even when clamped

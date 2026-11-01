@@ -149,6 +149,42 @@ func TestToolStartDisplay(t *testing.T) {
 	})
 }
 
+// TestInjectContextBlockShape pins the injected-context echo: the first line
+// becomes a header label and the remainder its body, never a prompt-row echo,
+// so a steering note renders exactly what replay draws for the same entry.
+func TestInjectContextBlockShape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("label_header_body_collapsed", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("Denied with note: test\n\nsome longer body")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "Denied with note: test")
+		}, 2*time.Second, time.Millisecond)
+		assert.Contains(t, h.rendered(), "some longer body")
+	})
+
+	t.Run("single_line_note", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("Allowed with note: keep going")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "Allowed with note: keep going")
+		}, 2*time.Second, time.Millisecond)
+	})
+
+	t.Run("blank_label_paints_nothing", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("\nbody only")
+		// the UI serializes calls, so a paint that arrives after this sentinel
+		// would have carried any wrongly-emitted block ahead of it
+		h.s.UserPrompt("sentinel")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "sentinel")
+		}, 2*time.Second, time.Millisecond)
+		assert.NotContains(t, h.rendered(), "body only")
+	})
+}
+
 func TestTurnEndFlushesThinking(t *testing.T) {
 	t.Parallel()
 
