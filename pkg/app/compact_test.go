@@ -132,9 +132,6 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 	return out
 }
 
-// TestCompactorSwapJoinsStateLane pins the append-then-swap section: it holds
-// the state lane like a rewind does, so neither can interleave its own swap
-// with the other's. Held, the checkpoint never records; released, it lands.
 func TestCompactorSwapJoinsStateLane(t *testing.T) {
 	t.Parallel()
 
@@ -978,9 +975,6 @@ func (p *blockingProvider) Stream(_ context.Context, _ llm.Request) (llm.Stream,
 	return s, nil
 }
 
-// TestRunSummary pins llm.RunSummary behavior against local rigs: a cancelled
-// summariser returns context.Canceled with no partial text and closes the
-// stream, and a truncated response reads as an error.
 func TestRunSummary(t *testing.T) {
 	t.Parallel()
 

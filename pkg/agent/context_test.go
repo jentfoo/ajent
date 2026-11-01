@@ -50,10 +50,6 @@ func toolStep(id string, input int) []llm.Event {
 	}
 }
 
-// TestMultiStepTurnDoesNotMultiplyContext is the regression for the old
-// TurnResult.Usage over-report: a five-step turn must not report five times any
-// single step's context, because each response snaps back to that provider's own
-// reported input.
 func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 	t.Parallel()
 
@@ -91,10 +87,6 @@ func TestMultiStepTurnDoesNotMultiplyContext(t *testing.T) {
 	assert.Less(t, finalState.Used, 3*per)
 }
 
-// TestFirstTurnContextIncludesSystemAndTools locks in the fix for the start-of-
-// session undercount: before any exact provider report, the context bar must
-// already carry the fixed system-prompt + tool-schema overhead that rides with
-// every request, not just the appended message estimate.
 func TestFirstTurnContextIncludesSystemAndTools(t *testing.T) {
 	t.Parallel()
 

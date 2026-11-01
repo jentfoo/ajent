@@ -558,12 +558,12 @@ func attachRecallQueued(ui *tui.UI, view *attachView) {
 	}
 	rctx, rcancel := context.WithTimeout(context.Background(), client.CallWait)
 	defer rcancel()
-	text, err := conn.QueueRecall(rctx)
+	row, err := conn.QueueRecall(rctx)
 	var wire *ctl.Error
 	switch {
 	case err == nil:
-		if text != "" {
-			ui.PrependInput(text)
+		if row.Text != "" {
+			ui.PrependInput(row.Text)
 		}
 	case errors.As(err, &wire):
 		ui.Notify("recall refused: "+wire.Message, tui.LevelWarn)

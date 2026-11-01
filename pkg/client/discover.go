@@ -8,10 +8,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/paths"
+	"github.com/jentfoo/ajent/pkg/session"
 )
 
 // Instance is one live session's serving instance, read from the registry file
@@ -124,4 +127,64 @@ func Followable(live []Instance, sessionID, token string) []Instance {
 		return ofSession
 	}
 	return nil
+}
+
+// staleAfter is how old a record must be before its pid is judged, the same
+// minute the serving side's passive sweep grants a writer to finish starting.
+const staleAfter = time.Minute
+
+// InstanceDead reports whether a discovery record describes an instance no
+// longer running: the record is at least one minute old and signal zero on its
+// recorded pid proves no such process. Judged from the record alone, never by
+// dialing, so a picker costs nothing to filter. Anything undecidable reads as
+// alive (no usable pid, a permission error, a reused pid), so a caller only
+// ever drops a record on proof of death.
+func InstanceDead(in Instance) bool {
+	if time.Since(in.Started()) < staleAfter {
+		return false // fresh: its writer may still be binding
+	}
+	return pidDead(in.PID)
+}
+
+// pidDead reports whether no process with pid exists, judged with signal zero:
+// it delivers nothing, EPERM means a live process this user cannot signal (a
+// PID reuse by another user), and anything undecidable reads as alive. The os
+// layer folds ESRCH into os.ErrProcessDone, so both spellings of "no such
+// process" count.
+func pidDead(pid int) bool {
+	if pid <= 0 {
+		return false // no recorded pid: nothing to judge, leave the record
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone)
+}
+
+// DiscoverLive is Discover without the dead records: every instance whose
+// recorded pid still answers signal zero past its first minute. It never dials
+// and never collects; removing a dead record stays the serving instances'
+// passive sweep.
+func DiscoverLive() ([]Instance, error) {
+	all, err := Discover()
+	if err != nil {
+		return nil, err
+	}
+	return bulk.SliceFilterInPlace(func(in Instance) bool { return !InstanceDead(in) }, all), nil
+}
+
+// SavedSessions lists every saved session under ajent's home across all
+// workspaces, most recently used first: the store's own cross-workspace
+// listing (session.Store.ListAll), surfaced here so a controller needs no
+// other import to reach it. Each row names the workspace its transcript
+// recorded for resume targets to derive from; opening the store creates the
+// sessions root when missing.
+func SavedSessions() ([]session.Listed, error) {
+	store, err := session.NewStore()
+	if err != nil {
+		return nil, err
+	}
+	return store.ListAll()
 }

@@ -52,9 +52,6 @@ func (s *streamCallSink) ToolStart(agent.ToolCall, string, bool) func(agent.Tool
 	return func(agent.ToolResult) { s.log(ctl.EventToolResult) }
 }
 
-// TestControlStreamParity pins one-to-one stream parity: every agent sink call
-// on a scripted turn surfaces as exactly one event, in order, seq-dense,
-// tool.result included, with the json one-shot's shapes.
 func TestControlStreamParity(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -214,8 +211,6 @@ func (e echoTool) Execute(_ context.Context, _ agent.ToolCall, out agent.Output)
 	return agent.ToolResult{}, nil
 }
 
-// TestControlSurfaceParity pins surface parity: each rendered change the TUI
-// commits surfaces exactly once with the same content.
 func TestControlSurfaceParity(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -267,10 +262,6 @@ func TestControlSurfaceParity(t *testing.T) {
 	assert.Equal(t, []ctl.QueueRow{{ID: "row-a", Text: "queued a"}, {ID: "row-b", Text: "queued b"}}, qd.Rows)
 }
 
-// TestControlInjectContextStaysOffWire pins the injected-echo ownership: a
-// steering note's live echo fans to observers but never becomes an event, so
-// attached surfaces paint each committed entry exactly once through the echo
-// rule instead of doubling it with a stream copy.
 func TestControlInjectContextStaysOffWire(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -297,10 +288,6 @@ func matchEvent(t *testing.T, evs []ctl.Event, name, want string) ctl.Event {
 	return ctl.Event{}
 }
 
-// TestControlInteractionAnnouncements pins the dialog contract: a barrier
-// decision and a pick dialog each raise exactly one interaction.pending, a
-// local answer raises one interaction.settled carrying the outcome, and secret
-// inputs never echo their text.
 func TestControlInteractionAnnouncements(t *testing.T) {
 	t.Run("pick_dialog", func(t *testing.T) {
 		local := &scriptedLocal{mode: tui.ModeAlt, picks: []int{1}}
@@ -361,9 +348,6 @@ func TestControlInteractionAnnouncements(t *testing.T) {
 	})
 }
 
-// TestControlBarrierHoldsForRemote pins the serve-mode hold: with no local
-// surface, an approval dialog opens, announces and holds until a remote answer
-// or a signal resolves it.
 func TestControlBarrierHoldsForRemote(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newServeRig(t, nil)

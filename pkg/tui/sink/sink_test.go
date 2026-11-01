@@ -64,8 +64,6 @@ func (h *headlessUI) rendered() string {
 	return strings.Clone(h.out.String())
 }
 
-// TestContextInfo pins ContextInfo's field list against tokens.ContextState, so
-// a new ledger term fails here until the conversion propagates it.
 func TestContextInfo(t *testing.T) {
 	t.Parallel()
 
@@ -149,9 +147,6 @@ func TestToolStartDisplay(t *testing.T) {
 	})
 }
 
-// TestInjectContextBlockShape pins the injected-context echo: the first line
-// becomes a header label and the remainder its body, never a prompt-row echo,
-// so a steering note renders exactly what replay draws for the same entry.
 func TestInjectContextBlockShape(t *testing.T) {
 	t.Parallel()
 

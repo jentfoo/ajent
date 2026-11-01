@@ -46,8 +46,6 @@ func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
 	require.NoError(t, os.Chtimes(w.Path(), at, at))
 }
 
-// TestNewStorePinsRoot covers the sessions root's permission policy: created
-// owner-only, and a wider existing mode tightened with a startup note.
 func TestNewStorePinsRoot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("mode bits are not meaningful")
@@ -83,6 +81,67 @@ func TestStoreDirDeterministic(t *testing.T) {
 	other, err := s.Dir("/repo/Other Proj")
 	require.NoError(t, err)
 	assert.NotEqual(t, d1, other)
+}
+
+func TestStoreListAll(t *testing.T) {
+	// setClock pins like TestStoreList, so this is sequential
+
+	t.Run("across_workspaces", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws1, ws2 := t.TempDir(), t.TempDir()
+
+		writeAt(t, s, ws1, time.UnixMilli(1_700_000_000).UTC(),
+			SessionData{Version: sessionVersion, Workspace: ws1}, "older")
+		second := writeAt(t, s, ws2, time.UnixMilli(9_999_000_000).UTC(),
+			SessionData{Version: sessionVersion, Workspace: ws2}, "newer")
+
+		// rename the newest afterwards, pinned like every append above
+		at := time.UnixMilli(9_999_500_000).UTC()
+		restore := setClock(at)
+		resetIDCounter()
+		_, err := second.Append(TypeSessionName, NameData{Name: "renamed"})
+		require.NoError(t, err)
+		restore()
+		require.NoError(t, os.Chtimes(second.Path(), at, at))
+
+		writeDamaged(t, s, ws1, "") // hidden here exactly as under List
+
+		list, lerr := s.ListAll()
+		require.NoError(t, lerr)
+		require.Len(t, list, 2)
+
+		assert.Equal(t, "renamed", list[0].Name) // newest session_name wins
+		assert.Equal(t, ws2, list[0].Workspace)  // most recently used first
+		assert.Empty(t, list[1].Name)
+		assert.Equal(t, ws1, list[1].Workspace)
+	})
+
+	t.Run("newer_format_stays_visible", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		writeNewer(t, s, ws, "")
+		w, err := s.Create(ws, SessionData{Version: sessionVersion, Workspace: ws})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+
+		list, lerr := s.ListAll()
+		require.NoError(t, lerr)
+		require.Len(t, list, 2)
+
+		blockedAt := slices.IndexFunc(list, func(in Listed) bool { return in.Blocked })
+		readableAt := slices.IndexFunc(list, func(in Listed) bool { return !in.Blocked })
+		assert.GreaterOrEqual(t, blockedAt, 0)
+		assert.Empty(t, list[blockedAt].Workspace) // the newer format names no workspace
+		assert.Equal(t, ws, list[readableAt].Workspace)
+	})
+
+	t.Run("empty_store", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+
+		list, err := s.ListAll()
+		require.NoError(t, err)
+		assert.Empty(t, list)
+	})
 }
 
 func TestStoreList(t *testing.T) {
@@ -412,7 +471,7 @@ func TestStoreStale(t *testing.T) {
 func TestReadInfo(t *testing.T) {
 	t.Parallel()
 
-	// regresses the fork over-count: after a branch, readInfo must describe only
+	// regresses the fork over-count: after a branch, readRow must describe only
 	// the persisted head's chain, so resume metadata matches what resuming would rebuild.
 	t.Run("counts_active_branch_only", func(t *testing.T) {
 		dir := t.TempDir()
@@ -433,7 +492,7 @@ func TestReadInfo(t *testing.T) {
 		w.SetHead(e2.ID) // head the resume picker would actually use
 		require.NoError(t, w.Close())
 
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 
 		assert.Equal(t, 2, info.Messages) // fork messages are not counted
@@ -460,7 +519,7 @@ func TestReadInfo(t *testing.T) {
 		w.SetHead(forkA.ID) // active head is the fork start
 		require.NoError(t, w.Close())
 
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 
 		assert.Equal(t, 2, info.Messages) // root,e1,forkA: e1 + fork prompt
@@ -481,7 +540,7 @@ func TestReadInfo(t *testing.T) {
 		old := time.Now().AddDate(0, 0, -90)
 		require.NoError(t, os.Chtimes(p, old, old))
 
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 		assert.Equal(t, time.UnixMilli(last.TS).UTC(), info.Updated)
 	})
@@ -493,7 +552,7 @@ func TestReadInfo(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, w.Close())
 
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 		assert.Equal(t, "fix-parser", info.Name)
 	})
@@ -518,7 +577,7 @@ func TestReadInfo(t *testing.T) {
 		require.NoError(t, w.Close())
 
 		sessID := readEntries(t, p)[0].ID
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 
 		assert.Equal(t, sessID, info.ID) // identity comes from line 1, not the branch
@@ -528,13 +587,13 @@ func TestReadInfo(t *testing.T) {
 	})
 
 	// a zero-byte .jsonl (crash between create and first write) is not a session:
-	// readInfo returns zero Info so no listing surface shows an id-less row
+	// readRow returns zero Info so no listing surface shows an id-less row
 	t.Run("empty_file_dropped", func(t *testing.T) {
 		dir := t.TempDir()
 		empty := filepath.Join(dir, "2026-01-01T00-00-00Z-0.jsonl")
 		require.NoError(t, os.WriteFile(empty, nil, 0o600))
 
-		info, ok := readInfo(empty)
+		info, _, ok := readRow(empty)
 		assert.False(t, ok)
 		assert.Zero(t, info)
 	})
@@ -551,7 +610,7 @@ func TestReadInfo(t *testing.T) {
 		stray := filepath.Join(dir, "2026-01-01T00-00-01Z-1.jsonl")
 		require.NoError(t, os.WriteFile(stray, append(line, '\n'), 0o600))
 
-		info, ok := readInfo(stray)
+		info, _, ok := readRow(stray)
 		require.True(t, ok)
 
 		assert.True(t, info.Damaged)
@@ -569,7 +628,7 @@ func TestReadInfo(t *testing.T) {
 			`{"id":"m1","parentId":"lost","type":"notice","ts":1700000000001,"data":{"message":"kept"}}`,
 		})
 
-		info, ok := readInfo(p)
+		info, _, ok := readRow(p)
 		require.True(t, ok)
 		assert.True(t, info.Damaged)
 	})
@@ -842,7 +901,7 @@ func TestStoreNewerFormat(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		want := writeNewer(t, s, t.TempDir(), "future-work")
 
-		info, ok := readInfo(want.Path)
+		info, _, ok := readRow(want.Path)
 		require.True(t, ok)
 
 		assert.True(t, info.Blocked)
@@ -945,7 +1004,7 @@ func TestStoreDamaged(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		want := writeDamaged(t, s, t.TempDir(), "")
 
-		info, ok := readInfo(want.Path)
+		info, _, ok := readRow(want.Path)
 		require.True(t, ok)
 
 		assert.True(t, info.Damaged)
@@ -1124,7 +1183,7 @@ func TestStoreListMatchesSerial(t *testing.T) {
 		if de.IsDir() || !strings.HasSuffix(de.Name(), ".jsonl") {
 			continue
 		}
-		if info, ok := readInfo(filepath.Join(dir, de.Name())); ok {
+		if info, _, ok := readRow(filepath.Join(dir, de.Name())); ok {
 			serial = append(serial, info)
 		}
 	}

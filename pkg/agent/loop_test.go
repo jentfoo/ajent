@@ -763,9 +763,6 @@ func TestLoopSteerInjectsAtBoundary(t *testing.T) {
 	assert.Empty(t, live) // no prompt-row echo: injected context paints in its block shape
 }
 
-// appendSteer marks every injected text for replay redraw, while the live echo
-// waits for an explicit one: producers that already echoed at submit (the argv
-// prompt, /init) stay silent here.
 func TestLoopSteerReplayMarkAndEcho(t *testing.T) {
 	t.Parallel()
 
@@ -845,9 +842,6 @@ func assistantTexts(msgs []llm.Message) []string {
 	return out
 }
 
-// TestSteerLeftoverSurvivesErroredTurn: an errored turn returns without
-// draining, so a Steer accepted after its last boundary stays queued and folds
-// in behind the next prompt instead of being wiped by the next seed.
 func TestSteerLeftoverSurvivesErroredTurn(t *testing.T) {
 	t.Parallel()
 
@@ -889,8 +883,6 @@ func TestSteerLeftoverSurvivesErroredTurn(t *testing.T) {
 	assert.Equal(t, []string{"first", "second", "note"}, userTexts(reqs[1].Messages))
 }
 
-// An interrupt releasing AwaitInput either lands nothing (the held prompt ends
-// before anything appends) or delivers input accepted while the hold was open.
 func TestLoopHoldInterrupt(t *testing.T) {
 	t.Parallel()
 
@@ -948,9 +940,6 @@ func TestLoopHoldInterrupt(t *testing.T) {
 	})
 }
 
-// TestLoopStepCompactInterruptAppendsNothing: a cancel during the step
-// compaction aborts before the stream, so no partial assistant message joins a
-// boundary that never ran.
 func TestLoopStepCompactInterruptAppendsNothing(t *testing.T) {
 	t.Parallel()
 
@@ -1321,8 +1310,6 @@ func TestNormalizeInput(t *testing.T) {
 	})
 }
 
-// TestPromptBatch pins the per-input annotations that survive a batch submit:
-// injected flags and submitter origins land on their own user-message rows.
 func TestPromptBatch(t *testing.T) {
 	t.Parallel()
 

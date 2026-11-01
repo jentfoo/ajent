@@ -1477,10 +1477,6 @@ func TestUIPromptHistory(t *testing.T) {
 	})
 }
 
-// TestUIPromptHistoryEchoRetires pins cross-surface arrow recall: a prompt that
-// echoes on this terminal (typed at the other keyboard sharing the session)
-// retires the cached ↑/↓ list, so the next navigation episode recalls it instead
-// of the snapshot taken before it landed.
 func TestUIPromptHistoryEchoRetires(t *testing.T) {
 	t.Parallel()
 
@@ -2902,9 +2898,6 @@ func TestUICommittedTableCellsSanitized(t *testing.T) {
 	assert.Contains(t, screen, "│ ab    c │")
 }
 
-// TestUIClosedDropsWrites covers the post-close sink guards: after Close
-// restored the terminal, late events from a drain still landing must write
-// nothing and re-arm no spinner.
 func TestUIClosedDropsWrites(t *testing.T) {
 	t.Parallel()
 

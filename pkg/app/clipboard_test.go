@@ -45,8 +45,6 @@ func TestCopyText(t *testing.T) {
 	})
 }
 
-// TestCopySelectionNoPicker pins the silent no-op: a ctrl+x that outlived its
-// picker copies nothing and reports nothing.
 func TestCopySelectionNoPicker(t *testing.T) {
 	t.Parallel()
 

@@ -288,6 +288,14 @@ func (c *Conn) ModeCycle(ctx context.Context, back bool) (string, error) {
 	return res.Mode, err
 }
 
+// InputSet prefills the served session's editor buffer under local typing
+// semantics, so text simply sits there during an active turn. Serve mode
+// refuses with unavailable: it has no editor.
+func (c *Conn) InputSet(ctx context.Context, text string) error {
+	_, err := c.Call(ctx, ctl.MethodInputSet, ctl.InputSetParams{Text: text}, nil)
+	return err
+}
+
 // Rewind forks onto an earlier transcript entry and reports the new head.
 func (c *Conn) Rewind(ctx context.Context, head string) (string, error) {
 	var res ctl.RewindResult
@@ -296,17 +304,27 @@ func (c *Conn) Rewind(ctx context.Context, head string) (string, error) {
 }
 
 // QueueRecall pops the newest queued prompt for this surface's editor, Alt+Up
-// over the wire. Empty text means nothing was queued; a refused recall errors,
-// leaving the item queued.
-func (c *Conn) QueueRecall(ctx context.Context) (string, error) {
+// over the wire. The whole row comes back, so a controller tracking pending
+// rows resolves its own by id even where the reply's watermark supersedes that
+// row's queue.dropped event. A zero result means nothing was queued; a refused
+// recall errors, leaving the item queued.
+func (c *Conn) QueueRecall(ctx context.Context) (ctl.RecallResult, error) {
 	var res ctl.RecallResult
 	_, err := c.Call(ctx, ctl.MethodQueueRecall, nil, &res)
-	return res.Text, err
+	return res, err
 }
 
 // Resolve answers one pending interaction.
 func (c *Conn) Resolve(ctx context.Context, params ctl.ResolveParams) error {
 	_, err := c.Call(ctx, ctl.MethodResolve, params, nil)
+	return err
+}
+
+// YieldSeat releases the control seat without dropping this connection, so
+// another controller can take it while you keep watching. A no-op when this
+// connection holds nothing.
+func (c *Conn) YieldSeat(ctx context.Context) error {
+	_, err := c.Call(ctx, ctl.MethodSeatYield, nil, nil)
 	return err
 }
 

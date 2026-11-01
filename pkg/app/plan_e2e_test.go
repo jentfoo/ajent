@@ -71,8 +71,6 @@ type planHarness struct {
 	notices  []string
 }
 
-// TestForkTo pins sessRec.forkTo's guards: a mid-turn fork is refused, serve
-// mode survives the divider and a post-switch fork keeps the branch.
 func TestForkTo(t *testing.T) {
 	t.Run("refused_mid_turn", func(t *testing.T) {
 		ui, _, out := plainUI(t)
@@ -395,10 +393,6 @@ func hasRefInjection(req llm.Request) bool {
 	})
 }
 
-// TestPlanWorkflowEndToEnd drives plan → user approval → implement → review →
-// complete against two scripted providers, asserting which model ran in each
-// phase and that the implementor's context holds the approved plan and nothing
-// from the planning conversation.
 func TestPlanWorkflowEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -471,10 +465,6 @@ func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool { return e.ParentID == "" }, entries), 2)
 }
 
-// TestPlanKickoffsStayUnexpanded drives the workflow over the driver's real
-// @-expansion seam with @ paths in every authored surface: the gate submit's
-// planned reads must not land behind the implementation kickoff, and paths
-// quoted in summaries or revision instructions must stay literal pointers.
 func TestPlanKickoffsStayUnexpanded(t *testing.T) {
 	t.Parallel()
 
@@ -524,10 +514,6 @@ func TestPlanKickoffsStayUnexpanded(t *testing.T) {
 	assert.False(t, h.ctl.Active())
 }
 
-// TestPlanResumeRepairsMissingKickoff reproduces the crash window between the
-// implementing transition persisting and its kickoff landing: the resumed root
-// carries only bookkeeping entries, so the next prompt must re-deliver the
-// kickoff ahead of itself rather than run the implementor context-free.
 func TestPlanResumeRepairsMissingKickoff(t *testing.T) {
 	t.Parallel()
 
@@ -563,9 +549,6 @@ func TestPlanResumeRepairsMissingKickoff(t *testing.T) {
 	assert.False(t, h.ctl.Active())
 }
 
-// TestPlanResumeRepairsMissingGoal covers the planning half of the same window:
-// a goal recorded as captured whose message never landed must not swallow the
-// planning contract from the prompt that retypes it.
 func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	t.Parallel()
 
@@ -588,9 +571,6 @@ func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	assert.Contains(t, planningCtx, "add a --version flag")
 }
 
-// TestPlanResumeLandedGoalStaysCaptured covers the planning half of the same
-// resume: a goal that already landed must stay captured, so a later prompt is
-// an ordinary steer rather than the goal all over again.
 func TestPlanResumeLandedGoalStaysCaptured(t *testing.T) {
 	t.Parallel()
 

@@ -1,7 +1,12 @@
 package client
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -9,8 +14,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/paths"
 )
 
-// TestDiscoverReadsRegistry pins discovery over a real control dir: the fake
-// instance's registry record is found without dialing.
 func TestDiscoverReadsRegistry(t *testing.T) {
 	f := newFakeSession(t)
 	f.writeRegistry(t)
@@ -24,8 +27,6 @@ func TestDiscoverReadsRegistry(t *testing.T) {
 	assert.False(t, live[0].Started().IsZero()) // the server's startedAt decodes
 }
 
-// TestResolveTargetForms pins the target forms: an exact socket path, a
-// session id in the registry, its name, and a unique id prefix.
 func TestResolveTargetForms(t *testing.T) {
 	f := newFakeSession(t)
 	f.writeRegistry(t)
@@ -62,8 +63,77 @@ func TestResolveTargetForms(t *testing.T) {
 	})
 }
 
-// TestFollowablePrefersSameInstance pins the reconnect rule: the same token
-// wins, a single survivor is followed, several answer nil for the picker.
+// reapChild starts a child process and waits for it, returning the one pid
+// this test knows is gone.
+func reapChild(t *testing.T) int {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "true")
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+	return cmd.Process.Pid
+}
+
+func TestInstanceDead(t *testing.T) {
+	t.Parallel()
+
+	gone := reapChild(t)
+	old := time.Now().Add(-2 * staleAfter).UnixMilli()
+	fresh := time.Now().UnixMilli()
+
+	t.Run("live_pid", func(t *testing.T) {
+		assert.False(t, InstanceDead(Instance{PID: os.Getpid(), StartedAt: old}))
+	})
+
+	t.Run("reaped_pid_old_record", func(t *testing.T) {
+		assert.True(t, InstanceDead(Instance{PID: gone, StartedAt: old}))
+	})
+
+	// the age gate holds even a provably dead pid for its first minute, matching
+	// the sweep's grace for a writer that may still be binding
+	t.Run("reaped_pid_fresh_record", func(t *testing.T) {
+		assert.False(t, InstanceDead(Instance{PID: gone, StartedAt: fresh}))
+	})
+
+	// no usable pid is nothing to judge, so the record stays
+	t.Run("no_pid_reads_alive", func(t *testing.T) {
+		assert.False(t, InstanceDead(Instance{StartedAt: old}))
+	})
+}
+
+func TestDiscoverLiveFiltersStale(t *testing.T) {
+	f := newFakeSession(t)
+	f.writeRegistry(t) // live: this process's pid, fresh start
+
+	stale := Instance{
+		SessionID: "01STALE0000000000000", Token: "oldtoken",
+		Socket: filepath.Join(f.home, "gone.sock"), PID: reapChild(t),
+		StartedAt: time.Now().Add(-2 * staleAfter).UnixMilli(),
+	}
+	b, err := json.Marshal(stale)
+	require.NoError(t, err)
+	dir := filepath.Dir(f.Path())
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "oldtoken.json"), b, 0o600))
+	t.Setenv(paths.EnvHome, f.home) // env pinned: not parallel
+
+	all, err := Discover()
+	require.NoError(t, err)
+	assert.Len(t, all, 2) // discovery itself returns records verbatim
+
+	live, err := DiscoverLive()
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	assert.Equal(t, f.sessionID, live[0].SessionID)
+}
+
+func TestSavedSessionsOpensStore(t *testing.T) {
+	t.Setenv(paths.EnvHome, t.TempDir()) // env pinned: not parallel
+
+	saved, err := SavedSessions() // opening the store creates the root
+	require.NoError(t, err)
+	assert.Empty(t, saved)
+}
+
 func TestFollowablePrefersSameInstance(t *testing.T) {
 	t.Parallel()
 

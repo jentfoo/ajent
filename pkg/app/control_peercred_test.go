@@ -14,9 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestPeerCredentialsSelfDial verifies the credential snapshot over a real
-// socket pair: this process dials itself, so the kernel-reported identity is
-// known exactly.
 func TestPeerCredentialsSelfDial(t *testing.T) {
 	t.Parallel()
 
@@ -70,8 +67,6 @@ func TestPeerIdentitySameUser(t *testing.T) {
 	assert.False(t, other.sameUser())
 }
 
-// TestWriteControlRefusal verifies the refused event a rejected peer reads in
-// place of hello.
 func TestWriteControlRefusal(t *testing.T) {
 	t.Parallel()
 

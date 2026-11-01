@@ -35,8 +35,6 @@ func TestCodecRoundTrip(t *testing.T) {
 	assert.ErrorIs(t, dec.Decode(&req), io.EOF)
 }
 
-// TestDecoder pins Decode's line handling: whitespace between lines is
-// tolerated, garbage is rejected.
 func TestDecoder(t *testing.T) {
 	t.Parallel()
 

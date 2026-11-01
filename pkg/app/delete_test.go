@@ -77,9 +77,6 @@ func TestRunDelete(t *testing.T) {
 	})
 }
 
-// TestRunDeleteGatesOnLiveWriters pins the liveness rule: a session another
-// writer holds live refuses naming the count, --force escapes for --delete
-// only, and the sweep lists live rows as skipped rather than deleting them.
 func TestRunDeleteGatesOnLiveWriters(t *testing.T) {
 	t.Run("live_delete_refuses_then_forces", func(t *testing.T) {
 		store, ws := deleteWorkspace(t)

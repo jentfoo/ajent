@@ -1155,9 +1155,6 @@ func TestImageDataURL(t *testing.T) {
 	}
 }
 
-// TestThinkTagReplayField pins the ingest rule end to end: reasoning that
-// arrived inside content tags carries the configured replay field, so the
-// request after a tool result sends it back instead of dropping it.
 func TestThinkTagReplayField(t *testing.T) {
 	t.Parallel()
 

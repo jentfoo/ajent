@@ -797,8 +797,6 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	})
 }
 
-// TestGrantSessionAllows covers the pre-populated session-allow memory a
-// one-shot seeds from --allow-tools: tool names, whole-bash, and command heads.
 func TestGrantSessionAllows(t *testing.T) {
 	t.Parallel()
 
@@ -1904,8 +1902,6 @@ func TestPrevResolvesOpenDialog(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, got.Action)
 }
 
-// TestCycleBlockAllBackToAllowAll pins the externally reported sequence: cycle
-// right into block-all, step back to allow-all, and the gate must stop asking.
 func TestCycleBlockAllBackToAllowAll(t *testing.T) {
 	t.Parallel()
 
@@ -2152,10 +2148,6 @@ func TestCommandRefused(t *testing.T) {
 	})
 }
 
-// TestFuzzCycleDuringAsk hammers every timing of a shift-right (auto -> auto+write)
-// against an in-scope write ask started in auto. Whatever moment the mode change
-// lands relative to the asker's own gate snapshot (before it, during the hold,
-// after open, after registration), the decision must end as Allow.
 func TestFuzzCycleDuringAsk(t *testing.T) {
 	t.Parallel()
 
@@ -2189,10 +2181,6 @@ func TestFuzzCycleDuringAsk(t *testing.T) {
 	}
 }
 
-// TestAskerStaleAskUnderAllowingMode pins the invariant behind the reported bug:
-// a guard verdict made under one mode must be re-validated against the live gate,
-// so an asker entered after auto+write took over never opens a dialog for a
-// workspace write the new mode allows outright.
 func TestAskerStaleAskUnderAllowingMode(t *testing.T) {
 	t.Parallel()
 
@@ -2216,9 +2204,6 @@ func TestAskerStaleAskUnderAllowingMode(t *testing.T) {
 	assert.Zero(t, p.count()) // no dialog flashed
 }
 
-// TestAskerStaleAskStillPromptsWhenModeAsks makes sure the re-validation only
-// short-circuits what the live gate would allow: an out-of-scope write under
-// auto+write still opens its dialog.
 func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
 	t.Parallel()
 
@@ -2241,9 +2226,6 @@ func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
 	assert.Equal(t, tools.ActionDeny, got.Action)
 }
 
-// TestUnattendedAskVerdictAfterModeChange pins the unattended twin of the dialog
-// path's racing-verdict rule: a classification launched under one mode never
-// decides for the next, so only the live gate may allow what it approved
 func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	t.Parallel()
 
@@ -2277,9 +2259,6 @@ func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	}
 }
 
-// TestOpenFailureHonorsModeChange covers the dialogless fallback: a mode change
-// during the typing hold still decides the call, since the unattended path
-// snapshots the live gate rather than the asker's entry mode
 func TestOpenFailureHonorsModeChange(t *testing.T) {
 	t.Parallel()
 

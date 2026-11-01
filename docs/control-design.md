@@ -32,7 +32,8 @@ its own token. A discovery record beside each socket carries the session identit
 workspace, model and seat state, so pickers and `--attach` resolve a target from files
 alone. Stale-record collection is passive the same way: a starting instance judges a
 foreign record dead by the recorded pid alone (signal zero, never a connect), so launching
-never rings a serving instance's accept log.
+never rings a serving instance's accept log, and client-side discovery applies that same
+record-only test, so any controller filters stale records without dialing either.
 
 ## Boundary rules
 
@@ -42,9 +43,10 @@ The dependency edges are load-bearing.
   speak. Nothing internal may appear here, since every shape in it is what an external
   controller compiles against.
 - **`pkg/client ↛ pkg/app`, `pkg/tui`, `pkg/agent`.** It imports only `ctl`, `paths` and
-  `session`, so a controller gets dial, discovery, typed calls, the event stream and
-  transcript backfill with no protocol knowledge of its own. A refusal surfaces as a
-  coded wire error rather than a transport failure.
+  `session`, so a controller gets dial, discovery (liveness filtered from records alone),
+  typed calls over every wire method, the event stream, transcript backfill and
+  cross-workspace saved-session listing with no protocol knowledge of its own. A refusal
+  surfaces as a coded wire error rather than a transport failure.
 - **The server and both front ends stay in `pkg/app`.** They sit on the seams that
   already decouple the turn loop from its terminal (the session hub and the interaction
   broker), so agent, tools and permit never learn a socket exists.

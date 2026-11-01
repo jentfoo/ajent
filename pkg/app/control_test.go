@@ -294,9 +294,6 @@ func (s *controlServer) seatFree() bool {
 	return s.seat == nil
 }
 
-// TestTokenSuffixDiffersSameMillisecond pins the instance file names: tokenSuffix
-// takes the random tail of a token, so tokens minted in the same millisecond
-// (identical ULID timestamp prefixes) still name different files.
 func TestTokenSuffixDiffersSameMillisecond(t *testing.T) {
 	t.Parallel()
 	a := "01ABCD0123456789ABCDEFGHXY"
@@ -306,8 +303,6 @@ func TestTokenSuffixDiffersSameMillisecond(t *testing.T) {
 	assert.Equal(t, a[len(a)-tokenPrefixLen:], tokenSuffix(a))
 }
 
-// TestPidDead separates proof of death from everything undecidable: only a
-// reaped pid collects, so PID reuse and signal refusals never unlink a live peer.
 func TestPidDead(t *testing.T) {
 	t.Parallel()
 
@@ -329,9 +324,6 @@ func TestPidDead(t *testing.T) {
 // TestCollectStaleNeverDials pins the passive sweep: a live peer's files
 // survive a sweep without its socket ever accepting a connection.
 
-// TestControlCollectStale pins the passive registry sweep: a live peer's files
-// survive without its socket ever accepting a connection, and dead instances are
-// collected with their sockets while this instance is never judged.
 func TestControlCollectStale(t *testing.T) {
 	t.Run("never_dials", func(t *testing.T) {
 		rig := newServeRig(t, nil) // not parallel: AJENT_HOME pins the control dir
@@ -413,10 +405,6 @@ func TestControlCollectStale(t *testing.T) {
 	})
 }
 
-// TestControlLayoutPinsPerInstanceNames pins the per-instance file layout and
-// the sun_path guard: socket and registry live under one per-session directory
-// named for the token prefix, and a home deep enough to overflow the budget
-// fails with a clear error rather than a truncated bind.
 func TestControlLayoutPinsPerInstanceNames(t *testing.T) {
 	t.Run("pins_per_instance_names", func(t *testing.T) {
 		home := shortHome(t)
@@ -453,10 +441,6 @@ func TestControlLayoutPinsPerInstanceNames(t *testing.T) {
 	})
 }
 
-// TestBindControlListener covers bind's socket-file contract: a SIGKILL
-// leftover at this token's own path is unlinked and rebound, and a non-socket
-// file is never deleted. There is no probe: sockets are per instance, so no
-// live peer can sit at this path, and bindControlListener itself never dials.
 func TestBindControlListener(t *testing.T) {
 	t.Parallel()
 
@@ -511,9 +495,6 @@ func TestBindControlListener(t *testing.T) {
 	})
 }
 
-// TestControlRegistryTracksInstanceState pins the discovery record: written
-// after listen with the instance identity, rewritten on seat claim and yield,
-// so pickers stay current without dialing.
 func TestControlRegistryTracksInstanceState(t *testing.T) {
 	rig := newControlRig(t, nil)
 
@@ -562,8 +543,6 @@ func TestControlRegistryTracksInstanceState(t *testing.T) {
 	assert.NoFileExists(t, rig.srv.regPath)
 }
 
-// TestControlCloseUnlinksSocket pins the shutdown contract: Close removes the
-// socket file so the next run on the session starts clean.
 func TestControlCloseUnlinkSocket(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -576,9 +555,6 @@ func TestControlCloseUnlinkSocket(t *testing.T) {
 	assert.True(t, os.IsNotExist(err))
 }
 
-// TestControlCloseDrainsLanes pins the shutdown ordering: with a rewind
-// stalled on the state lane and a verb stalled on the executor lane, the exit
-// event holds until both finish, so no branch.changed can publish after it.
 func TestControlCloseDrainsLanes(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -620,9 +596,6 @@ func TestControlCloseDrainsLanes(t *testing.T) {
 	<-closed
 }
 
-// TestControlHelloAnnouncesIdentity pins the hello contract: protocol version,
-// session identity, workspace, front-end shape, pid and build version, plus
-// the transcript path bulk backfill reads.
 func TestControlHelloAnnouncesIdentity(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -640,7 +613,6 @@ func TestControlHelloAnnouncesIdentity(t *testing.T) {
 	assert.Equal(t, rig.rec.w.Path(), h.TranscriptPath)
 }
 
-// TestControlHelloServeMode pins the serve shape: no terminal, socket only.
 func TestControlHelloServeMode(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newServeRig(t, nil)
@@ -702,11 +674,6 @@ func onlySocket(t *testing.T) (string, bool) {
 	return "", false
 }
 
-// TestServeRun pins the serve contract end to end: the socket binds before
-// serving, a controller attaches and polls, SIGTERM ends the run cleanly with
-// every connection seeing session.exit before this instance's files unlink,
-// and /exit through submit is the controller's kill switch. Serve implies
-// control whatever control.enabled says: the socket is the only front end.
 func TestServeRun(t *testing.T) {
 	// not parallel: AJENT_HOME isolates config, socket dir and sessions
 

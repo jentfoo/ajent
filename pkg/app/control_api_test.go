@@ -35,9 +35,6 @@ func attachControl(t *testing.T, c *ctlClient, holder string) ctl.AttachResult {
 	return res
 }
 
-// TestControlAttach pins the seat contract: one controller claims, a second
-// claim refuses naming the holder, release-on-EOF frees the seat at once, and
-// re-claim is idempotent while force moves it.
 func TestControlAttach(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -153,9 +150,6 @@ func TestControlAttach(t *testing.T) {
 	})
 }
 
-// TestControlMethods pins the registry contract beside the table: every
-// mutating method declares seat-required, read methods never do, and an
-// unknown method errors by code rather than a silent no-op.
 func TestControlMethods(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -231,9 +225,6 @@ func (s *spyCycler) recorded() []string {
 	return slices.Clone(s.calls)
 }
 
-// TestControlModeCycle pins mode.cycle: the reply names the new mode, the
-// hub's barrier stepped in the asked direction, and the permission notice
-// reached observers.
 func TestControlModeCycle(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -257,10 +248,6 @@ func TestControlModeCycle(t *testing.T) {
 	assert.Equal(t, []string{"cycle", "prev"}, spy.recorded())
 }
 
-// TestControlSubmit pins the submit rules: an empty line errors rather than
-// dispatching, the startup window before the router exists is named, and over
-// the real pump a submitted prompt drives a turn carrying its controller
-// origin onto the transcript while further submits queue truthfully.
 func TestControlSubmit(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -425,9 +412,6 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 		newStartState(false), q, newStateLane(), gate, st, nil, &once, func() {}, planHooks{}, &drain)
 }
 
-// TestControlInputSet pins input.set: the editor buffer takes the text on an
-// interactive run, a dialog owning the input refuses naming its kind while the
-// dialog itself still resolves, and a serve run without an editor errors.
 func TestControlInputSet(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -483,10 +467,6 @@ func TestControlInputSet(t *testing.T) {
 	})
 }
 
-// TestControlQueueRecall pins queue.recall: the newest queued prompt pops and
-// its text returns to the caller, empty when nothing is queued, refusals leave
-// the item queued, and the removal announces with rows so attached surfaces
-// resolve pending rows. No editor fill happens host-side — serve included.
 func TestControlQueueRecall(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -580,11 +560,6 @@ func (p *pickBlocker) PickContext(ctx context.Context, _ string, _ []tui.PickIte
 	}
 }
 
-// TestControlResolve pins interaction.resolve: every announced kind answers
-// with its natural shape, wrong shapes and out-of-range indexes refuse
-// legibly, stale ids error after End, the ask_user path holds for a remote
-// answer, a local winner beats a late controller, and a controller dying
-// mid-dialog leaves it open for whoever reattaches.
 func TestControlResolve(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -926,10 +901,6 @@ func TestControlResolve(t *testing.T) {
 	})
 }
 
-// TestControlRewind pins session.rewind: a named head rebuilds the same branch
-// the double-Esc picker would, unknown heads error legibly, a running turn
-// refuses with nothing moved, and the reply names the startup window before
-// the driver wires the rewinder.
 func TestControlRewind(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -1065,10 +1036,6 @@ func writeMessage(t *testing.T, rec *sessRec, text string) {
 	})
 }
 
-// TestControlState pins state.get truth: every field agrees with the hub's
-// own snapshot on the same tick and tool toggles surface later, while the
-// backfill sources stay honest — the head a transcript read branches by comes
-// from hello's named path, and only post-attach appends announce.
 func TestControlState(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -1153,10 +1120,6 @@ func toolRow(t *testing.T, rows []ctl.ToolState, name string) ctl.ToolState {
 	return ctl.ToolState{}
 }
 
-// TestControlEvents pins the event stream contract: events at or below a
-// reply's seq are superseded by the result while later ones apply exactly
-// once, replay serves retained history and refuses trimmed history, and many
-// observers each see the full sequence in order.
 func TestControlEvents(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 

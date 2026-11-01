@@ -20,9 +20,6 @@ func blockedCalls() []llm.ToolCallBlock {
 	}
 }
 
-// TestDispatchCancelledBatchSkipsLaunch asserts a cancelled turn context stops
-// both dispatch paths from launching new calls, matching the serial loop's
-// early break so an abort never runs the rest of a batch.
 func TestDispatchCancelledBatchSkipsLaunch(t *testing.T) {
 	t.Parallel()
 
@@ -214,9 +211,6 @@ func TestOnToolBatch(t *testing.T) {
 	})
 }
 
-// TestRunToolInterruptErrorFillsMarker asserts a tool that only propagates the
-// cancellation reads as interrupted by user in the transcript, never raw
-// context canceled, while real partial output is kept as-is.
 func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 	t.Parallel()
 
@@ -271,9 +265,6 @@ func TestRunToolInterruptErrorFillsMarker(t *testing.T) {
 	})
 }
 
-// TestDispatchAbortIgnoresToolContext pins the full abort path against a tool
-// that keeps running through the interrupt: the turn still ends aborted with a
-// well-formed transcript, and the late results stand over synthetic fills.
 func TestDispatchAbortIgnoresToolContext(t *testing.T) {
 	t.Parallel()
 

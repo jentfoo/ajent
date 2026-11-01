@@ -533,9 +533,6 @@ func TestPollBatchDetection(t *testing.T) {
 	assert.False(t, m.leavePoll())
 }
 
-// TestPollPrefersResultOverTimeout covers the select race: a job that completes in
-// the same instant the poll times out must return its summary, never a
-// still-running report the model would act on.
 func TestPollPrefersResultOverTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -830,10 +827,6 @@ func (m *Manager) grantedOf(id string) bool {
 	return m.jobs[id].granted
 }
 
-// TestClaimHoldKeepsActivationInIdOrder pins the reported bug: a fan-out whose
-// claims land out of order must not let a later number take a slot ahead of an
-// earlier one still unclaimed. sub-1 and sub-3 starting while sub-2 stayed
-// queued is exactly what this holds back.
 func TestClaimHoldKeepsActivationInIdOrder(t *testing.T) {
 	t.Parallel()
 
@@ -858,8 +851,6 @@ func TestClaimHoldKeepsActivationInIdOrder(t *testing.T) {
 	assert.False(t, m.grantedOf(id3)) // the cap is reached: sub-2 runs before sub-3
 }
 
-// TestClaimHoldExpiresWithoutClaim covers the abandoned reservation: a call that
-// never executes (interrupted turn, refused args) must not hold the line forever.
 func TestClaimHoldExpiresWithoutClaim(t *testing.T) {
 	t.Parallel()
 

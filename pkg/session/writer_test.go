@@ -120,10 +120,6 @@ func TestWriterAppendAfterCloseErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "closed")
 }
 
-// TestWriterDeletedUnderWriterStopsRecording pins the --delete-under-writer
-// behavior: once the transcript is gone, appends refuse with ErrTranscriptGone
-// instead of landing in the unlinked inode, and the slot stops rewriting so the
-// heads sidecar is not resurrected beside a missing file.
 func TestWriterDeletedUnderWriterStopsRecording(t *testing.T) {
 	t.Parallel()
 
@@ -325,8 +321,6 @@ func TestWriterHeadSlot(t *testing.T) {
 	})
 }
 
-// TestWriterAppendTimestamp pins the entry ts to the id's monotonic millisecond:
-// metadata ordering must survive a wall clock stepping backward mid-session.
 func TestWriterAppendTimestamp(t *testing.T) {
 	// resets the package counter and clock, so this cannot run in parallel
 
@@ -355,9 +349,6 @@ func TestWriterAppendTimestamp(t *testing.T) {
 	})
 }
 
-// TestAppendFencesTornTailMidSession pins the append-side fence: a peer's
-// partial write landing after this writer's open repair is quarantined inside
-// the append itself, never glued onto.
 func TestAppendFencesTornTailMidSession(t *testing.T) {
 	t.Parallel()
 
@@ -391,9 +382,6 @@ func TestAppendFencesTornTailMidSession(t *testing.T) {
 	assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
 }
 
-// TestCreateStampsSlotWithSessionHead pins the create path's immediate stamp:
-// a live slot never advertises an empty head another writer would skip or a
-// resume would misread as a fresh fork.
 func TestCreateStampsSlotWithSessionHead(t *testing.T) {
 	t.Parallel()
 
@@ -409,9 +397,6 @@ func TestCreateStampsSlotWithSessionHead(t *testing.T) {
 	assert.NotEmpty(t, slots[0].Head)
 }
 
-// TestSetHeadPeerEntryKeepsStamp pins the rewind-onto-peer-entry path: the
-// stamp comes from a live re-read, so the slot still orders by its entry's
-// time instead of sinking to zero.
 func TestSetHeadPeerEntryKeepsStamp(t *testing.T) {
 	t.Parallel()
 
@@ -449,8 +434,6 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
-// TestWriterOpenRepairsTornTail pins the torn-tail fence: a partial write
-// without its newline must never glue the next append onto the stray bytes.
 func TestWriterOpenRepairsTornTail(t *testing.T) {
 	t.Parallel()
 

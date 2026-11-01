@@ -565,11 +565,6 @@ func TestResumeByID(t *testing.T) {
 	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
-// TestResumeSyncsActiveModel pins the resume fix: a transcript naming p/b must
-// make the registry's active entry follow, so /model preselects and names the
-// model the session runs instead of the config default. Before the sync a
-// restored session kept Active on the default while state ran p/b, so picking
-// p/b read as a silent no-op.
 func TestResumeSyncsActiveModel(t *testing.T) {
 	t.Parallel()
 
@@ -613,9 +608,6 @@ func TestResumeSyncsActiveModel(t *testing.T) {
 	assert.Equal(t, "p/b", reg.Active().Key()) // the /model preselect follows the resume
 }
 
-// A session-scoped compaction.threshold must survive --resume: it is stamped into
-// the registry before state resolution so the trigger, the context bar and the band
-// ceiling read one number. Before the fix the resumed ledger kept the global 0.8.
 func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -674,10 +666,6 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
-// A recorded tools.enabled must survive resume: the rebuilt state carries it (so
-// the driver's post-registration re-apply and the MCP restore set see it) and the
-// live registry reflects it. Subagents were off in the recorded frame, so the
-// trio registering after the rebuild must not resurrect them.
 func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	t.Parallel()
 
@@ -746,8 +734,6 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	assert.True(t, toolsReg.IsEnabled(tools.ToolGrep))
 }
 
-// A recorded empty set means the session ran with every tool off: resume comes
-// back all-off rather than the config default, and a late registration stays off.
 func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	t.Parallel()
 
@@ -900,8 +886,6 @@ func TestCheckSessionTargetRefusesNewer(t *testing.T) {
 	assert.ErrorContains(t, err, "newer session format")
 }
 
-// a damaged transcript never lists, so its full path is the only handle: resume
-// refuses it with the removal hint while a readable file opens by its path too
 func TestOpenSessionDamagedTranscript(t *testing.T) {
 	t.Parallel()
 
@@ -921,8 +905,6 @@ func TestOpenSessionDamagedTranscript(t *testing.T) {
 	assert.Equal(t, healthy.Path(), w.Path())
 }
 
-// --continue over a listing that is empty only because the directory's remaining
-// transcripts are damaged starts fresh, loudly about what it left behind
 func TestOpenSessionContinueOverDamaged(t *testing.T) {
 	t.Parallel()
 
@@ -1129,10 +1111,6 @@ func textOf(m llm.Message) string {
 	return ""
 }
 
-// TestSwitchStateSeedsBase covers a ledger built by session.State or minted for a
-// new root: neither carries the constant request overhead, so without seeding it
-// here a rewind drops the system prompt and tool block out of the bar entirely,
-// and it stays dropped until the next turn starts.
 func TestSwitchStateSeedsBase(t *testing.T) {
 	t.Parallel()
 
@@ -1169,9 +1147,6 @@ func TestSwitchStateSeedsBase(t *testing.T) {
 	assert.Equal(t, 100000, cs.Window)
 }
 
-// TestSwitchStateKeepsWindowWithoutModel covers a branch that names no model of
-// its own: the rebuilt ledger has a zero window, which would rescale the bar off
-// the compaction threshold onto the raw context size.
 func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	t.Parallel()
 
@@ -1568,10 +1543,6 @@ func branchTexts(t *testing.T, w *session.Writer) []string {
 	return out
 }
 
-// TestRewindHoldsLaneAgainstDispatch pins the closed swap-then-SetHead window:
-// while a rewind holds the state lane mid-transaction, a concurrent dispatch
-// cannot start a turn, and the line it tried to dispatch — queued against the
-// branch the rewind forked away from — comes back instead of landing.
 func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
 	t.Parallel()
 
@@ -1632,9 +1603,6 @@ func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
 	}, 5*time.Second, 5*time.Millisecond)
 }
 
-// TestStaleLineWithoutCorrelationPublishesNothing pins the stale-line gate: a
-// typed line stuck in the pump buffer never entered the queue, so no surface
-// announced it as a row and aging it out publishes no drop event to flash.
 func TestStaleLineWithoutCorrelationPublishesNothing(t *testing.T) {
 	t.Parallel()
 
@@ -1684,10 +1652,6 @@ func TestRewindDispatchRaceKeepsBranch(t *testing.T) {
 	}
 }
 
-// TestRewindCleanupRunsOnRestoreRefusal pins the transaction's cleanup ordering:
-// a model restore that hits a running turn returns early, and the queue clear
-// (with its recorded notice) must already have run, never leaving prompts
-// queued for the branch the rewind abandoned.
 func TestRewindCleanupRunsOnRestoreRefusal(t *testing.T) {
 	t.Parallel()
 
@@ -2075,9 +2039,6 @@ func mustEntries(t *testing.T, w *session.Writer) []session.Entry {
 	return entries
 }
 
-// TestRenameRaceLoser pins the create-race rule: the older session id keeps the
-// name, the younger suffix-renames with a recorded session_name entry, and a
-// younger rival never displaces this run's name.
 func TestRenameRaceLoser(t *testing.T) {
 	t.Setenv("AJENT_HOME", t.TempDir())
 	store, err := session.NewStore()
@@ -2111,10 +2072,6 @@ func TestRenameRaceLoser(t *testing.T) {
 	assert.Empty(t, note)
 }
 
-// TestRewindClearsQueuedWithNotice pins the transaction tail: a rewind clears
-// the queue instead of re-targeting, records a notice entry naming the cleared
-// prompts so resume replays it, and fires the ephemeral drop event beside the
-// queue update.
 func TestRewindClearsQueuedWithNotice(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "first prompt")
@@ -2183,9 +2140,6 @@ func TestRewindClearsQueuedWithNotice(t *testing.T) {
 	assert.Greater(t, cleared.Seq, droppedEv.Seq) // drop first, rows update beside it
 }
 
-// TestRenameSettleYieldsToOlderRival pins the rename race settlement: a rename
-// landing beside an older session holding the same name suffix-renames this one
-// with a notice, while a younger rival leaves the name here and says so.
 func TestRenameSettleYieldsToOlderRival(t *testing.T) {
 	t.Setenv("AJENT_HOME", t.TempDir())
 	store, err := session.NewStore()

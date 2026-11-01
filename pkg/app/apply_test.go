@@ -76,9 +76,6 @@ func testApplier(t *testing.T, rec *recSurface, hooks applyHooks) *applier {
 	return newApplier(rec, tuisink.New(term), hooks)
 }
 
-// TestApplierChromeEvents pins the shared chrome mapping: each event family
-// reaches exactly one surface call, keyed notices replace rather than stack,
-// empty texts remove, and placement comes from this build's spec table.
 func TestApplierChromeEvents(t *testing.T) {
 	t.Parallel()
 
@@ -191,9 +188,6 @@ func TestApplierChromeEvents(t *testing.T) {
 	})
 }
 
-// TestApplierQueueHook pins the queue merge point: a surface merges its own
-// local state into the wire copy through the hook, and a hookless applier
-// falls back to the plain texts.
 func TestApplierQueueHook(t *testing.T) {
 	t.Parallel()
 
@@ -214,10 +208,6 @@ func TestApplierQueueHook(t *testing.T) {
 	assert.Equal(t, "q1", merged[0].ID)
 }
 
-// TestApplierSnapshotReconciles pins the diff-clear on snapshot: rows and
-// segments the new state no longer lists clear instead of lingering, an emptied
-// queue clears behind its old guard, a turn that ended while the surface was
-// away forces its end, and the snapshot has the last word on idle.
 func TestApplierSnapshotReconciles(t *testing.T) {
 	t.Parallel()
 
@@ -307,8 +297,6 @@ func TestApplierSnapshotReconciles(t *testing.T) {
 	})
 }
 
-// TestApplierLateToolHeader pins the lost-start rule: a tool result whose start
-// event this surface never saw renders its header here, attached to its body.
 func TestApplierLateToolHeader(t *testing.T) {
 	t.Parallel()
 
@@ -325,8 +313,6 @@ func TestApplierLateToolHeader(t *testing.T) {
 	assert.NotContains(t, out(), "tool grep failed")
 }
 
-// TestApplierStreamedResultNotRepeated pins the other half of the fallback: a
-// call whose deltas already rendered commits nothing from its result copy.
 func TestApplierStreamedResultNotRepeated(t *testing.T) {
 	t.Parallel()
 

@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestControlExecutorSerializesAndPreempts pins the lane: queued verbs run in
-// order, an interrupt jumps ahead of everything queued, and a shut-down lane
-// refuses legibly instead of hanging.
 func TestControlExecutorSerializesAndPreempts(t *testing.T) {
 	t.Parallel()
 
@@ -69,9 +66,6 @@ func TestControlExecutorRefusesAfterShutdown(t *testing.T) {
 	assert.True(t, ran.Load())
 }
 
-// TestControlExecutorQuiesce pins the shutdown wait: the lane drains the verb
-// it holds before quiesce returns, refuses new work once armed, and a verb
-// that never finishes only costs the bound.
 func TestControlExecutorQuiesce(t *testing.T) {
 	t.Parallel()
 

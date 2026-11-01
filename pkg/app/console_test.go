@@ -42,8 +42,6 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	assert.JSONEq(t, `["read"]`, string(raw))
 }
 
-// A resumed run starts committed (its history already sent a tool block) but not
-// dispatched, so /tools selection stays free until this run sends a prompt.
 func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
 	t.Parallel()
 
@@ -57,10 +55,6 @@ func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
 	assert.True(t, starts.committed.marked()) // dispatch commits the block too
 }
 
-// TestUIConsoleSetModel pins the model switcher's write-through behavior: a
-// smaller window remeasures the live ledger instead of resetting it, an
-// unchanged switch stays silent, session-only overrides survive, and a
-// reasoning-mode change keeps its intent across the swap.
 func TestUIConsoleSetModel(t *testing.T) {
 	t.Run("remasures_ledger", func(t *testing.T) {
 		inR, inW, err := os.Pipe()
@@ -231,8 +225,6 @@ func TestUIConsoleSetModel(t *testing.T) {
 	})
 }
 
-// TestUIConsoleMutatorsQueueMidTurn pins a turn inside its tool call and checks
-// that state mutators queue behind it, then land once the drain exits
 func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -288,8 +280,6 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	assert.Equal(t, "session", set.Source("model"))
 }
 
-// TestUIConsoleSettledMessages pins the /copy read: live at rest, the last
-// settled copy while a drain goroutine owns State
 func TestUIConsoleSettledMessages(t *testing.T) {
 	t.Parallel()
 
@@ -310,8 +300,6 @@ func TestUIConsoleSettledMessages(t *testing.T) {
 	assert.Equal(t, live, c.SettledMessages())
 }
 
-// TestTurnSnapshotMidTurn pins the copy boundary: reads while a turn streams
-// return the seed, and the turn end republishes the full transcript
 func TestTurnSnapshotMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -401,8 +389,6 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	assert.Equal(t, used, tk.Context().Used)
 }
 
-// Serial: flips the package-wide images gate. The apply must read the value
-// just set, not the stale one, so each flip lands immediately.
 func TestUIConsoleImagesBlockLiveFlip(t *testing.T) {
 	set := loadTestConfig(t)
 	tools.SetImagesEnabled(false)
@@ -501,7 +487,6 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 	})
 }
 
-// Serial: flips the package-wide images gate.
 func TestUIConsoleResetImagesBlockBackToConfig(t *testing.T) {
 	set := loadTestConfig(t)
 	tools.SetImagesEnabled(false)
@@ -550,8 +535,6 @@ func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
 	assert.Equal(t, "user", layer)
 }
 
-// A resolved flavor retention default must never latch into a config layer:
-// the level pick owns its leaf, the sink writes nothing.
 func TestUIConsoleReasoningRetainDoesNotLatch(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 	t.Setenv("AJENT_HOME", t.TempDir())

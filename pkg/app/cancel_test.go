@@ -290,10 +290,6 @@ func askCancel(b *permit.Barrier, ctx context.Context, input string) tools.Decis
 	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)})
 }
 
-// TestControlInterruptCancelsStagedShell pins a turn mid-tool so ag.Running()
-// holds, stages a real sleeping shell beside it, and drives one interrupt
-// control through the loop: the interrupt must reach the staged run too, not
-// only the turn.
 func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	t.Parallel()
 
@@ -368,10 +364,6 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	}
 }
 
-// TestControlAbortReleasesHeldReserve pins the interrupt-during-hold path: a
-// directly dispatched prompt parks in the AwaitInput hold before its message
-// lands, so Settled never fires. The queue's abort must release its submit
-// reserve anyway, or the context bar overcounts until the next submit.
 func TestControlAbortReleasesHeldReserve(t *testing.T) {
 	t.Parallel()
 
@@ -448,11 +440,6 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 	}
 }
 
-// TestControlEscapeStopsDrainStagedWait pins the between-turns interrupt window:
-// with no turn mid-flight, the drain loop sits in take's staged-command wait
-// over a queued prompt. Esc must answer stopTurn, recover the prompt to the
-// editor, kill the staged shell and end the drain, never wait the command out
-// and never run the queued prompt as the turn the user tried to stop.
 func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
 	t.Parallel()
 
@@ -515,10 +502,6 @@ func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
 	}
 }
 
-// TestControlAbortKeepsStagedOutput pins a turn mid-tool with a finished `!`
-// run staged and a prompt queued mid-turn, then drives Esc: the abort recovers
-// the prompt to the editor while the staged output stays in the stager (never
-// consumed at submit), so it still counts on the bar and rides a later delivery.
 func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	t.Parallel()
 

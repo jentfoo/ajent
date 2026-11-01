@@ -215,8 +215,6 @@ func TestHubUIReportsSurfaceChanges(t *testing.T) {
 	assert.Equal(t, []ctl.QueueRow{{ID: "row-1", Text: "waiting"}}, log.queuesSeen()[0])
 }
 
-// TestHubUILabelSetKeepsCaps pins the two model setters: a label-only SetModel
-// keeps the capabilities the last full model recorded.
 func TestHubUILabelSetKeepsCaps(t *testing.T) {
 	t.Parallel()
 
@@ -235,8 +233,6 @@ func TestHubUILabelSetKeepsCaps(t *testing.T) {
 	assert.Equal(t, caps, m.Caps)
 }
 
-// TestHubUINilTerminalReportsOnly pins serve mode's shape: a wrapper with no
-// terminal reports every mutation and renders nothing, never panicking.
 func TestHubUINilTerminalReportsOnly(t *testing.T) {
 	t.Parallel()
 
@@ -326,9 +322,6 @@ func TestHubUIIdleAndSpinTrack(t *testing.T) {
 	hub.mu.Unlock()
 }
 
-// TestHubUIPaintsThroughSharedApplier pins the host half of the shared
-// applier: reported mutations paint the local terminal through the same
-// mapping an attached terminal applies to wire events, not past it.
 func TestHubUIPaintsThroughSharedApplier(t *testing.T) {
 	t.Parallel()
 

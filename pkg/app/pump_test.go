@@ -100,9 +100,6 @@ func TestDrainWaiterWait(t *testing.T) {
 	})
 }
 
-// TestRunPump pins the pump's line loop: command and prompt dispatch, quit
-// semantics, deferred-state flushes on wake, parked holds that skip flushes,
-// stale-prompt recovery and interrupt-during-hold drops.
 func TestRunPump(t *testing.T) {
 	t.Run("dispatch_and_exit", func(t *testing.T) {
 		t.Run("serves_then_exits_on_cancel", func(t *testing.T) {
@@ -409,8 +406,6 @@ func TestRunPump(t *testing.T) {
 	})
 }
 
-// TestStartDrain pins drain startup: the parked gate, idle exits and the
-// interrupt fill that lands before teardown reads state.
 func TestStartDrain(t *testing.T) {
 	t.Run("parked_gate", func(t *testing.T) {
 		t.Run("parked_queue_holds", func(t *testing.T) {

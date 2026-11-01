@@ -90,10 +90,6 @@ func rigBranch(t *testing.T, rec *sessRec) []session.Entry {
 	return session.Branch(entries, rec.w.Head())
 }
 
-// TestAttachRewindPicker pins the shared picker over the attach surface: a
-// branch.changed from the other surface closes an open picker so no rewind rides
-// a stale choice, a picked prompt rewinds the remote session like a local one,
-// and abandoned forks stay listed with the editor pre-filled after the move.
 func TestAttachRewindPicker(t *testing.T) {
 	t.Run("closed_by_remote_rewind", func(t *testing.T) {
 		rig := newControlRig(t, func(rec *sessRec) {
@@ -216,8 +212,6 @@ func TestAttachRewindPicker(t *testing.T) {
 	})
 }
 
-// TestAttachRewindObserverRefused pins the refusal path: a rewind from a
-// connection without the control seat moves nothing.
 func TestAttachRewindObserverRefused(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "first prompt")
@@ -233,9 +227,6 @@ func TestAttachRewindObserverRefused(t *testing.T) {
 	assert.Equal(t, rig.rec.w.Head(), branch[len(branch)-1].ID) // nothing moved
 }
 
-// TestAttachRewindFillsEditor pins the double-Esc tail: rewinding pre-fills
-// this editor with the picked prompt so it can be edited or re-sent as the
-// restored branch's first message, exactly like a local rewind.
 func TestAttachRewindFillsEditor(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "first prompt")
@@ -260,9 +251,6 @@ func TestAttachRewindFillsEditor(t *testing.T) {
 	assert.Equal(t, "second prompt", <-term.Messages())
 }
 
-// TestAttachQueueRecallFillsEditor pins Alt+Up over the wire: the newest
-// queued prompt pops from the session's queue into THIS terminal's editor, so
-// editing and resubmitting here replaces it; an observer refuses legibly.
 func TestAttachQueueRecallFillsEditor(t *testing.T) {
 	rig := newControlRig(t, nil)
 	term, feed, out := ptyUI(t)
@@ -291,8 +279,6 @@ func TestAttachQueueRecallFillsEditor(t *testing.T) {
 	assert.Equal(t, "queued two", <-term.Messages())
 }
 
-// TestAttachSubmitRefusedWithoutRouter pins the legible refusal: submitting to
-// a run still wiring reports unavailable, never a silent drop.
 func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -306,10 +292,6 @@ func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {
 	assert.Equal(t, ctl.CodeUnavailable, wire.Code)
 }
 
-// TestAttachReconnect pins reconnectLoop's offline behavior: a line typed while
-// between instances fails legibly inline with its text kept in the editor, and
-// an offline stretch past the give-up window reports back so RunAttach can exit
-// with the distinct lost-session code instead of retrying forever.
 func TestAttachReconnect(t *testing.T) {
 	t.Run("refuses_submits", func(t *testing.T) {
 		rig := newControlRig(t, nil)
@@ -381,9 +363,6 @@ func captureStderr(t *testing.T, fn func()) string {
 	return string(b)
 }
 
-// TestExplainNoControlSuggestsResume pins the none-live resolution: a target
-// that names a recorded session but no live instance points at resuming that
-// session without a socket, while an unknown target stays generic.
 func TestExplainNoControlSuggestsResume(t *testing.T) {
 	rig := newControlRig(t, nil)
 	rig.srv.Close("test") // the registry went with it; the transcript stays

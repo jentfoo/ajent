@@ -106,9 +106,6 @@ func (o rigObserver) log(ev string) {
 	o.r.events = append(o.r.events, ev)
 }
 
-// TestHubSubmit pins submit routing through the hub: editor-shaped lines
-// dispatch like typed prompts, foreign-goroutine submits stay ordered, and a
-// full queue refuses instead of dropping.
 func TestHubSubmit(t *testing.T) {
 	t.Run("routes_like_the_editor", func(t *testing.T) {
 		submit := func(t *testing.T, line string, fromEditor bool) []pumpLine {
@@ -188,8 +185,6 @@ func TestHubSubmit(t *testing.T) {
 	})
 }
 
-// TestHubRegisterFanout drives a scripted turn through the hub sink and
-// asserts registered observers see the stream events.
 func TestHubRegisterFanout(t *testing.T) {
 	t.Parallel()
 
@@ -216,7 +211,6 @@ func sinkOrder(mu *sync.Mutex, out *[]string) []string {
 	return slices.Clone(*out)
 }
 
-// TestHubObserverOrder pins registration-order fanout across two observers.
 func TestHubObserverOrder(t *testing.T) {
 	t.Parallel()
 
@@ -232,9 +226,6 @@ func TestHubObserverOrder(t *testing.T) {
 	assert.Equal(t, []string{"first", "second"}, sinkOrder(&mu, &order))
 }
 
-// TestHubFanoutAfterRecorder pins the sink-list contract: with the recorder
-// ahead of the hub, every event reaches the recorder before the hub's
-// observers, the order the driver wires and 34a's clients rely on.
 func TestHubFanoutAfterRecorder(t *testing.T) {
 	t.Parallel()
 
@@ -280,9 +271,6 @@ func (s orderSink) Text(string) {
 	*s.out = append(*s.out, s.n)
 }
 
-// TestHubInterruptMatchesKeypress pins the extracted interrupt body: called
-// from a non-loop goroutine it stops a running turn exactly like the Esc
-// keypress, and reports each priority tier.
 func TestHubInterruptMatchesKeypress(t *testing.T) {
 	t.Parallel()
 
@@ -319,8 +307,6 @@ func TestHubInterruptMatchesKeypress(t *testing.T) {
 	require.NoError(t, err) // a clean abort, never a failed turn
 }
 
-// TestHubModeCycleMatchesKeypress cycles through the hub, asserting the mode
-// lands and the notice reaches the local surface in both directions.
 func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	t.Parallel()
 
@@ -356,9 +342,6 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	assert.Equal(t, permit.ModeAllowRead.String(), mode)
 }
 
-// TestHubSnapshot pins the snapshot contract: at-rest truth, mid-turn
-// streaming shape, ledger swaps on model change, event coverage for every field,
-// and mutation consistency under concurrent readers.
 func TestHubSnapshot(t *testing.T) {
 	t.Run("truth", func(t *testing.T) {
 		term, _ := pipeUI(t)
@@ -453,8 +436,6 @@ func TestHubSnapshot(t *testing.T) {
 	})
 }
 
-// TestHubHeadTracks pins setHead's two write paths: surface switches and
-// recorded appends both move the head without disturbing live state.
 func TestHubHeadTracks(t *testing.T) {
 	t.Run("tracks_switches", func(t *testing.T) {
 		w, err := session.Create(filepath.Join(t.TempDir(), "s.jsonl"),
@@ -528,8 +509,6 @@ func TestHubHeadTracks(t *testing.T) {
 	})
 }
 
-// TestHubBindSession pins the identity fields: root id from the transcript,
-// name from its open-time parse.
 func TestHubBindSession(t *testing.T) {
 	t.Parallel()
 
@@ -552,9 +531,6 @@ func TestHubBindSession(t *testing.T) {
 	assert.Equal(t, "named-one", snap.SessionName)
 }
 
-// TestHubQueueRowsRedactSecrets pins the parity rule: secret-prefixed queue
-// rows lose their text on the wire but keep their id, so the submitting surface
-// still resolves its pending row; the local surface keeps the real texts.
 func TestHubQueueRowsRedactSecrets(t *testing.T) {
 	t.Parallel()
 
@@ -638,9 +614,6 @@ func TestHubSnapshotEventCoverage(t *testing.T) {
 	}
 }
 
-// TestHubToolsPublishOnChange pins the tool rows' flow: installing a registry
-// seeds the view model, and every later reshape fires the registry's change
-// hook and republishes the rows without any per-site wiring.
 func TestHubToolsPublishOnChange(t *testing.T) {
 	t.Parallel()
 
@@ -674,8 +647,6 @@ func TestHubToolsPublishOnChange(t *testing.T) {
 	assert.False(t, snap.Tools[1].Enabled)
 }
 
-// TestHubContextMirrorsSink pins the context flow: the sink call records the
-// numbers on the view model and publishes the event once, from the hub.
 func TestHubContextMirrorsSink(t *testing.T) {
 	t.Parallel()
 
@@ -696,10 +667,6 @@ func TestHubContextMirrorsSink(t *testing.T) {
 	assert.Equal(t, want.Used, hub.Snapshot().Context.Used)
 }
 
-// TestHubSnapshotConsistentUnderMutation hammers the view model setters
-// against concurrent SnapshotAt reads: every snapshot must be one internally
-// consistent state (counts matching their rows, the status row matching its
-// inputs, rows in display order) whatever interleaving produced it.
 func TestHubSnapshotConsistentUnderMutation(t *testing.T) {
 	t.Parallel()
 

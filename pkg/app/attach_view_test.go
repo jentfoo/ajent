@@ -21,8 +21,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-// TestAttachBackfillRendersHistory pins the attach promise: committed history
-// renders through replay and the snapshot paints the model label.
 func TestAttachBackfillRendersHistory(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "what changed")
@@ -33,12 +31,6 @@ func TestAttachBackfillRendersHistory(t *testing.T) {
 		ctlWait, 5*time.Millisecond)
 }
 
-// TestAttachRecallSources pins the recall scopes against a session that an
-// earlier one came before: ctrl+r walks the workspace-wide recall store, so the
-// prior session's prompt surfaces beside the attached session's own while
-// injected context, assistant messages and secret-prefixed lines never do; and
-// plain arrows stay scoped to the attached transcript alone. Both follow
-// prompts the host records after attach through the files they read.
 func TestAttachRecallSources(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "attached session prompt")
@@ -125,9 +117,6 @@ func TestAttachRecallSources(t *testing.T) {
 	})
 }
 
-// TestAttachRunSearchesHistory pins the ctrl+r wiring end to end: an attached
-// view's search source loads from the wire transcript, and accepting the match
-// fills this terminal's editor so submitting re-sends the recorded prompt.
 func TestAttachRunSearchesHistory(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "searchable prompt")
@@ -154,12 +143,6 @@ func TestAttachRunSearchesHistory(t *testing.T) {
 	assert.Equal(t, "searchable prompt", <-term.Messages())
 }
 
-// TestAttachViewStreams pins surface parity for committed history: an echo,
-// keyed and unkeyed notices, /command print output, text deltas and tool
-// starts, outputs and results each reach the attached terminal as the host's
-// renderer would show them. Status-line chrome (segments, queued rows,
-// activity) forwards through the same tui setters the host uses; its rendering
-// is pkg/tui's own tested behavior, not capturable in plain scrollback.
 func TestAttachViewStreams(t *testing.T) {
 	t.Run("live_events", func(t *testing.T) {
 		rig := newControlRig(t, nil)
@@ -251,10 +234,6 @@ func TestAttachViewStreams(t *testing.T) {
 	})
 }
 
-// TestAttachToolResultEntryNoEcho pins the live-echo parity rule: a committed
-// tool-result entry (user role, tool-result blocks only) is not a prompt, so
-// the attached terminal never paints the empty user row the host does not
-// show, whether a turn is streaming or at rest. A typed prompt still echoes.
 func TestAttachToolResultEntryNoEcho(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	record := func(rec *sessRec) {
@@ -290,9 +269,6 @@ func TestAttachToolResultEntryNoEcho(t *testing.T) {
 	})
 }
 
-// TestAttachReplayedInjectedDrawsBlock pins the live-append side of the echo
-// rule: a replay-marked injected entry appended at rest draws as its own block,
-// exactly as the replay of the same branch would, instead of painting nothing.
 func TestAttachReplayedInjectedDrawsBlock(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -309,10 +285,6 @@ func TestAttachReplayedInjectedDrawsBlock(t *testing.T) {
 	assert.Contains(t, a.out(), "16:00")
 }
 
-// TestAttachSteeredNoteMidTurn pins the note path: a barrier note lands as an
-// injected, replay-marked message mid-turn, and its committed entry paints on
-// the attached terminal exactly as backfill would draw it — never dropped for
-// arriving while the turn streams.
 func TestAttachSteeredNoteMidTurn(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -332,9 +304,6 @@ func TestAttachSteeredNoteMidTurn(t *testing.T) {
 	assert.NotContains(t, strutil.StripANSI(a.out()), "❯ \n", "note echoed as a prompt row")
 }
 
-// TestAttachErrorResultBody pins the failed-call body: a tool.result error's
-// Output commits under its header, like the host terminal commits Content, so
-// a denial reason is never lost between the wire shape and the sink.
 func TestAttachErrorResultBody(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 	rig := newControlRig(t, nil)
@@ -351,8 +320,6 @@ func TestAttachErrorResultBody(t *testing.T) {
 	assert.Contains(t, a.out(), "tool bash failed")
 }
 
-// TestAttachViewWatermarkDropsStaleEvents pins the connect-time rule: events
-// at or below the backfill watermark are superseded by what was just rendered.
 func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
 	t.Parallel()
 
@@ -375,10 +342,6 @@ func TestAttachViewWatermarkDropsStaleEvents(t *testing.T) {
 	assert.NotContains(t, out(), "stale echo")
 }
 
-// TestAttachRedrawKeepsLiveAppends pins the repaint rule: the redraw a head
-// move triggers reads the file on the actor, after every append queued ahead of
-// it applied, so those entries stay rendered and shown, never wiped by the
-// repaint's Reset.
 func TestAttachRedrawKeepsLiveAppends(t *testing.T) {
 	rig := newControlRig(t, func(rec *sessRec) {
 		writeMessage(t, rec, "recorded prompt")
@@ -461,10 +424,6 @@ func (b *blockingPick) OpenDecision(tui.DecisionRequest) *tui.Decision {
 	return &tui.Decision{}
 }
 
-// TestAttachAnswerLocal pins the dialog mapping: each announced kind asks its
-// matching local surface and lands on the right resolve shape, a cancelled ctx
-// reports no usable answer, an unknown kind shows nothing, and a surface that
-// cannot show an approval dialog never answers it with a denial.
 func TestAttachAnswerLocal(t *testing.T) {
 	// not parallel: the canned surfaces hand out answers in order
 
@@ -567,10 +526,6 @@ func TestAttachAnswerLocal(t *testing.T) {
 	})
 }
 
-// TestAttachSnapshotCarriesOpenDialogs pins the resnapshot rule: dialogs are
-// runtime state that rides the socket's snapshot, so a controller attaching
-// mid-dialog races what holds the run, and a resnapshot cancels racers whose
-// dialogs settled while their terminal was away.
 func TestAttachSnapshotCarriesOpenDialogs(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -646,8 +601,6 @@ func TestAttachSnapshotCarriesOpenDialogs(t *testing.T) {
 	})
 }
 
-// TestAttachSettledCancelsLocalRacer pins the race rule end to end: a settled
-// event ends the local dialog and no resolve leaves the process.
 func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -668,9 +621,6 @@ func TestAttachSettledCancelsLocalRacer(t *testing.T) {
 	<-done
 }
 
-// TestAttachPendingRowsPromptOnly pins the pending-row rule: a prompt paints
-// its row at submit and keeps it until the entry commits, while slash and
-// shell lines never paint one, they surface through their effects.
 func TestAttachPendingRowsPromptOnly(t *testing.T) {
 	rig := newControlRig(t, nil)
 	rig.hub.setSubmitLine(func(string, string, string) error { return nil }) // accepted silently, no entry follows
@@ -706,11 +656,6 @@ func mustEncode(t *testing.T, v any) json.RawMessage {
 	return b
 }
 
-// TestAttachCommitResolvesQueuedRow pins the row lifecycle: a submitted
-// prompt's dimmed row clears from the terminal when its entry commits, whether
-// it landed alone or joined with other prompts into one newline-joined message,
-// and an annotated @ref resolves through its correlation though the committed
-// text no longer matches the typed line.
 func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -774,9 +719,6 @@ func TestAttachCommitResolvesQueuedRow(t *testing.T) {
 	})
 }
 
-// TestAttachRecallResolvesPending pins the recall rule: a queued prompt the
-// host recalled for editing resolves this terminal's pending row through its
-// drop event, so the resubmitted replacement never shows beside the original.
 func TestAttachRecallResolvesPending(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -806,10 +748,6 @@ func TestAttachRecallResolvesPending(t *testing.T) {
 	assert.Equal(t, []string{"original"}, a.view.ui.Queued()) // the fresh row survives
 }
 
-// TestAttachSecretRowResolvesByID pins the secret rule end to end: the row's
-// text redacts on every wire copy but its id always travels, so an interrupt or
-// recall of a queued secret still clears this terminal's pending row — and the
-// display keeps the real text from the local submission.
 func TestAttachSecretRowResolvesByID(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -836,9 +774,6 @@ func TestAttachSecretRowResolvesByID(t *testing.T) {
 	assert.Empty(t, a.view.pending)
 }
 
-// TestAttachDuplicateTextsResolveIndependently pins the identity rule: two
-// identical prompts carry different correlations, so each resolves on its own —
-// one commit or one drop never clears its twin.
 func TestAttachDuplicateTextsResolveIndependently(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -866,9 +801,6 @@ func TestAttachDuplicateTextsResolveIndependently(t *testing.T) {
 	assert.Empty(t, a.view.ui.Queued())
 }
 
-// TestAttachReconnectResolvesPending pins the resnapshot rule: prompts that
-// committed while this terminal was away resolve their pending rows during
-// backfill, so a later queued event cannot resurrect them as rows.
 func TestAttachReconnectResolvesPending(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -891,9 +823,6 @@ func TestAttachReconnectResolvesPending(t *testing.T) {
 	assert.Equal(t, []string{"other"}, a.view.ui.Queued()) // no resurrected row
 }
 
-// TestAttachAppendDedupeById pins the reconciliation rule: entry.append is
-// idempotent by id, a prompt's committed entry resolves this terminal's pending
-// row and paints it once, and stream-painted entries mark rendered silently.
 func TestAttachAppendDedupeById(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)
@@ -930,10 +859,6 @@ func TestAttachAppendDedupeById(t *testing.T) {
 	a.view.waitIdle()
 }
 
-// TestAttachReconnectClearsStaleChrome pins the resnapshot reconcile against a
-// mid-turn disconnect: segments, activity rows and queue rows the new snapshot
-// no longer lists clear instead of lingering, and a spinner whose turn ended
-// while this terminal was away does not survive the reconnect.
 func TestAttachReconnectClearsStaleChrome(t *testing.T) {
 	rig := newControlRig(t, nil)
 	a := newAttachRig(t, rig)

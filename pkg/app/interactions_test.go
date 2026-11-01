@@ -237,8 +237,6 @@ func TestBrokerNoLocalHoldsForRemote(t *testing.T) {
 	assert.Equal(t, 1, ends[0].outcome.Index)
 }
 
-// a remote answer must cancel the local racer, or its menu stays open on the
-// host terminal: /model answered from an attach left the picker up there.
 func TestBrokerRemoteAnswerClosesLocal(t *testing.T) {
 	t.Parallel()
 
@@ -381,9 +379,6 @@ func firstOpenID(b *interactionBroker) uint64 {
 	}
 }
 
-// TestBrokerOpenDecision pins the OpenDecision flow: a remote answer closes
-// the local pick, Esc is denied, plain mode refuses legibly, root cancel
-// settles as denial and an optionless interaction waits for ErrNoUI.
 func TestBrokerOpenDecision(t *testing.T) {
 	t.Run("races_remote", func(t *testing.T) {
 		local := &scriptedLocal{}

@@ -101,9 +101,6 @@ func noopSearching() (bool, time.Time) { return false, time.Time{} }
 
 // TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
 // window and only a second inside it quits, while Ctrl+D quits outright.
-//
-// Mode cycling rides the hub's barrier, so the cycled channel carries the
-// barrier mode after each control, giving a test its ordering signal.
 func TestControlLoop(t *testing.T) {
 	t.Parallel()
 
@@ -221,8 +218,6 @@ func (s *modeSpy) Prev() permit.Mode {
 	return m
 }
 
-// TestAbortRunning pins the interrupt's two targets: a running turn and the
-// drain's between-turns window. An idle queue with no turn stops nothing.
 func TestAbortRunning(t *testing.T) {
 	t.Parallel()
 
@@ -322,9 +317,6 @@ func TestSubagentPollWait(t *testing.T) {
 	})
 }
 
-// TestSubagentSinkTurnEnd pins the TurnEnd release: an aborted turn clears a
-// queued batch's in-flight marks so the next Flush re-offers it, while a clean
-// StopEndTurn leaves them set (no duplicate on a normal turn).
 func TestSubagentSinkTurnEnd(t *testing.T) {
 	t.Parallel()
 

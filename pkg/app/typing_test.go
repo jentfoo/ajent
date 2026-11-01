@@ -434,9 +434,6 @@ func TestTypingGateHoldDialog(t *testing.T) {
 	})
 }
 
-// TestTypingGateDeliversIntoHeldBoundary wires the real gate, steer queue and agent:
-// a prompt submitted while AwaitInput holds a boundary lands in that same step, with no
-// intervening model request.
 func TestTypingGateDeliversIntoHeldBoundary(t *testing.T) {
 	t.Parallel()
 

@@ -31,8 +31,10 @@ type fakeSession struct {
 	transcriptPath string // hello names this file when set; state.get reports head
 	head           string
 	sessionID      string
-	hangState      bool          // never answer state.get: the close-wakeup test hangs on it
-	hung           chan struct{} // closed once a hangState request reaches serveConn
+	recall         ctl.RecallResult // canned queue.recall answer
+	input          string           // last input.set text received
+	hangState      bool             // never answer state.get: the close-wakeup test hangs on it
+	hung           chan struct{}    // closed once a hangState request reaches serveConn
 }
 
 // newFakeSession binds a socket in a short temp dir and starts accepting. It
@@ -86,6 +88,13 @@ func waitEvent(t *testing.T, events <-chan ctl.Event) ctl.Event {
 
 // Path reports the socket path this fake listens on.
 func (f *fakeSession) Path() string { return f.ln.Addr().String() }
+
+// inputText reports the last input.set text the fake received.
+func (f *fakeSession) inputText() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.input
+}
 
 // serve answers one connection until it goes away.
 func (f *fakeSession) acceptLoop() {
@@ -162,6 +171,18 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 		case ctl.MethodInterrupt:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Result: mustJSON(ctl.InterruptResult{Stopped: "turn"})})
+		case ctl.MethodInputSet:
+			var p ctl.InputSetParams
+			if json.Unmarshal(req.Params, &p) == nil {
+				f.mu.Lock()
+				f.input = p.Text
+				f.mu.Unlock()
+			}
+			_ = enc.Encode(ctl.Reply{ID: req.ID})
+		case ctl.MethodQueueRecall:
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(f.recall)})
+		case ctl.MethodSeatYield:
+			_ = enc.Encode(ctl.Reply{ID: req.ID})
 		default:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Error: ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)})
@@ -177,8 +198,6 @@ func mustJSON(v any) json.RawMessage {
 	return b
 }
 
-// TestDial pins connection setup: the greeting decodes into a usable conn and
-// a missing socket refuses.
 func TestDial(t *testing.T) {
 	t.Run("reads_hello", func(t *testing.T) {
 		f := newFakeSession(t)
@@ -205,8 +224,6 @@ func TestDial(t *testing.T) {
 	})
 }
 
-// TestCallReportsWireError pins the error shape: a refused request surfaces as
-// *ctl.Error with its code, not a transport failure.
 func TestCallReportsWireError(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
@@ -219,8 +236,6 @@ func TestCallReportsWireError(t *testing.T) {
 	assert.Equal(t, ctl.CodeUnknownMethod, wire.Code)
 }
 
-// TestServeOrdersEventsBeforeReplies pins the delivery rule a view relies on:
-// events queued ahead of a reply arrive first, in order.
 func TestServeOrdersEventsBeforeReplies(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
@@ -238,8 +253,6 @@ func TestServeOrdersEventsBeforeReplies(t *testing.T) {
 	<-done
 }
 
-// TestSubmitCarriesLine pins the typed helper: submit round trips its line and
-// the committed rendering arrives as its entry, never an echo.
 func TestSubmitCarriesLine(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
@@ -256,8 +269,6 @@ func TestSubmitCarriesLine(t *testing.T) {
 	assert.Equal(t, "hello session", llm.FirstBlockText(md.Message.Content))
 }
 
-// TestCloseWakesCallers pins teardown: a closed connection fails an in-flight
-// call that the session never answers, instead of hanging it.
 func TestCloseWakesCallers(t *testing.T) {
 	t.Parallel()
 	f := newFakeSession(t)
@@ -278,6 +289,49 @@ func TestCloseWakesCallers(t *testing.T) {
 
 	err := <-errCh
 	require.Error(t, err)
+}
+
+func TestQueueRecall(t *testing.T) {
+	t.Parallel()
+
+	t.Run("decodes_row", func(t *testing.T) {
+		f := newFakeSession(t)
+		f.mu.Lock()
+		f.recall = ctl.RecallResult{ID: "c1", Text: "queued prompt"}
+		f.mu.Unlock()
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.QueueRecall(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "c1", res.ID)
+		assert.Equal(t, "queued prompt", res.Text)
+	})
+
+	t.Run("empty_when_nothing_queued", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.QueueRecall(t.Context())
+		require.NoError(t, err)
+		assert.Zero(t, res)
+	})
+}
+
+func TestInputSet(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	require.NoError(t, conn.InputSet(t.Context(), "draft text"))
+	assert.Equal(t, "draft text", f.inputText())
+}
+
+func TestYieldSeat(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	require.NoError(t, conn.YieldSeat(t.Context()))
 }
 
 // recordTo writes one JSONL transcript of two chained entries and names it in
@@ -306,8 +360,6 @@ func recordTo(t *testing.T, f *fakeSession) (first, second session.Entry) {
 	return first, second
 }
 
-// TestBackfill pins the bulk history source: one call returns snapshot plus
-// watermark with the branch through the head, and no recording is a clean empty.
 func TestBackfill(t *testing.T) {
 	t.Run("reads_recorded_branch", func(t *testing.T) {
 		f := newFakeSession(t)
@@ -335,8 +387,6 @@ func TestBackfill(t *testing.T) {
 	})
 }
 
-// TestReadBranchSkipsTornTail pins the concurrent-append guarantee: a final
-// line the writer has not finished is skipped silently, complete lines stand.
 func TestReadBranchSkipsTornTail(t *testing.T) {
 	f := newFakeSession(t)
 	first, second := recordTo(t, f)

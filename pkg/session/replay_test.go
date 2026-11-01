@@ -332,9 +332,6 @@ func (s *echoSink) ToolStart(call agent.ToolCall, label string, _ bool) func(age
 	return func(res agent.ToolResult) { s.calls = append(s.calls, "ibody:"+res.Display) }
 }
 
-// TestEchoEntry pins the standalone paint rule entry by entry: a typed prompt
-// echoes, a replay-marked injected block draws as its own block, a notice
-// replays, and everything Replay folds or the stream owns paints nothing.
 func TestEchoEntry(t *testing.T) {
 	t.Parallel()
 

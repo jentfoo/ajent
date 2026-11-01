@@ -67,11 +67,10 @@ Rules that matter to an implementation:
 
 ### Protocol versioning
 
-`hello.protocol` must equal the controller's expected version (currently 3). An
-incompatible shape change bumps it: v2 split events into committed and ephemeral families
-and removed the echo concepts, v3 gave queue rows stable ids. Additive fields may appear
-within one version (the discovery record is additive-only by rule), so ignore unknown event
-names, method names you are not offered, and payload fields rather than erroring on them.
+`hello.protocol` must equal the controller's expected version (currently 1). An
+incompatible shape change bumps it. Additive fields may appear within one version (the
+discovery record is additive-only by rule), so ignore unknown event names, method names
+you are not offered, and payload fields rather than erroring on them.
 
 ### Error codes on replies
 
@@ -497,8 +496,11 @@ error (`*ctl.Error`) rather than a transport failure.
 |---|---|
 | `Dir() (string, error)` | the control directory under the ajent home, without creating it |
 | `Discover() ([]Instance, error)` | every live instance's registry record, sorted by session id. A corrupt or truncated file reads as absent, and nothing here dials |
+| `DiscoverLive() ([]Instance, error)` | Discover without the dead records: every instance whose recorded pid still answers signal zero past its first minute. It never dials and never collects; removing a dead record stays the serving instances' passive sweep |
+| `InstanceDead(in Instance) bool` | the record-only liveness test: a record at least one minute old whose recorded pid fails signal zero. Anything undecidable (no usable pid, a permission error, a reused pid) reads as alive, so a caller only drops a record on proof of death |
 | `Resolve(target string) (matches, live []Instance, err error)` | Discovery's target-resolution order over the registry. An empty target returns every instance in both slices, a socket-path target wins outright as one record with only `Socket` filled, and a miss is an error naming the target while the second slice carries the full live set for a picker |
 | `Followable(live []Instance, sessionID, token string) []Instance` | what a reconnecting controller follows: the same token when it still serves, else a sole surviving instance of that session, else nil so several candidates never become a silent swap onto a sibling's head |
+| `SavedSessions() ([]session.Listed, error)` | every saved session under the ajent home across all workspaces through ajent's own store (`session.Store.ListAll`), most recently used first. Each row carries the workspace its transcript recorded for resume targets to derive from; a newer-format transcript still lists marked `Blocked`, one without decodable identity never lists, and opening the store creates the sessions root when missing |
 | `Instance` | alias of `ctl.Instance`, with `Label()` (name or id), `Started()` and `String()` for listing rows |
 
 ### Connection lifecycle
@@ -527,25 +529,15 @@ context and surfaces wire refusals unchanged.
 | `Submit(ctx, ctl.SubmitParams) error` | `submit` | sets `Line` and optionally `PendingID` |
 | `Interrupt(ctx) (string, error)` | `interrupt` | what stopped: `turn`, `survey`, `shell`, empty for nothing |
 | `ModeCycle(ctx, back bool) (string, error)` | `mode.cycle` | mode now in effect, empty when no gate exists |
+| `InputSet(ctx, text string) error` | `input.set` | prefills the served run's editor buffer under local typing semantics; serve mode refuses with `unavailable` |
 | `Rewind(ctx, head string) (string, error)` | `session.rewind` | the new head id |
-| `QueueRecall(ctx) (string, error)` | `queue.recall` | the popped text, empty when nothing was queued |
+| `QueueRecall(ctx) (ctl.RecallResult, error)` | `queue.recall` | the popped row whole: its `ID` names the queue entry that left, so a controller tracking pending rows resolves them by id. Zero result when nothing was queued |
 | `Resolve(ctx, ctl.ResolveParams) error` | `interaction.resolve` | pass exactly one answer shape with the dialog `ID` |
+| `YieldSeat(ctx) error` | `seat.yield` | releases the seat without dropping the socket; a no-op when this connection holds none |
 | `ReadBranch(path, head string) ([]session.Entry, error)` | package-level | read one transcript file and return its chain under `head`, oldest first, tolerating a torn final line |
 
-Two verbs have no wrapper because no in-tree consumer needed one. `input.set` writes the host
-editor's buffer, while an attached terminal holds its own draft instead. `seat.yield` frees a
-seat that detaching releases anyway. Reach them through `Call`, which is also the escape hatch
-for any method added later:
-
-```go
-// hand the seat back without dropping the socket
-err := conn.Call(ctx, ctl.MethodSeatYield, nil, nil)
-// prefill the served run's editor (refused in serve mode, which has none)
-err = conn.Call(ctx, ctl.MethodInputSet, ctl.InputSetParams{Text: "draft"}, nil)
-```
-
-To read a queue recall's row id as well as its text, call the method directly and decode
-`ctl.RecallResult`, whose `ID` names the row that left.
+Every method in the table above has a typed wrapper. `Call` remains the escape hatch for any
+method added later.
 
 ### A controller in Go, end to end
 

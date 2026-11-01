@@ -83,9 +83,6 @@ func TestWireBatchHooks(t *testing.T) {
 	})
 }
 
-// TestClassifierAdapter pins the Classify fallbacks and metadata handling:
-// shell commands classify with fresh context, failures and truncated verdicts
-// read as unsure, MCP calls need their own metadata to be judged.
 func TestClassifierAdapter(t *testing.T) {
 	t.Run("classifies_shell_commands", func(t *testing.T) {
 		model := llm.Model{ID: "p/m", Provider: "scripted"}

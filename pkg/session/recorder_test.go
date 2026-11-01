@@ -65,9 +65,6 @@ func TestRecorderOneEntryPerMessage(t *testing.T) {
 	assert.Equal(t, 3, countMessages(t, p))
 }
 
-// TestRecorderMessagePersistsOrigin pins the provenance annotation: a
-// non-editor submitter's origin lands on its message entry, absent when typed
-// locally, so a resume or audit reads who said what.
 func TestRecorderMessagePersistsOrigin(t *testing.T) {
 	t.Parallel()
 

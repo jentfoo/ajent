@@ -7,10 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestQuitArmFire pins the shared ctrl+c gesture: one press arms and holds the
-// hint line, a second inside the window commits with the committed label, and
-// a press after the window closed arms anew. Labels name the surface, so the
-// host loop and attach render the same behavior.
 func TestQuitArmFire(t *testing.T) {
 	t.Parallel()
 

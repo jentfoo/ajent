@@ -259,10 +259,6 @@ func TestPollOutcome(t *testing.T) {
 	}
 }
 
-// The both-ready race from subagents-design.md: a turn interrupted as the polled
-// job finishes leaves wait's select with two ready channels and Go picks either,
-// and whichever wins the summary must survive. done is closed and ctx
-// pre-cancelled before wait runs, so select decides uniformly per attempt.
 func TestInterruptedPollDeliversClaimedResult(t *testing.T) {
 	t.Parallel()
 

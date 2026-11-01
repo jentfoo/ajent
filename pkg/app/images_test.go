@@ -142,7 +142,6 @@ func TestImageSlots(t *testing.T) {
 	})
 }
 
-// Serial: swaps the package probe list and the no-backend cache.
 func TestCaptureClipboardImage(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-based fakes are unix-only")
@@ -208,8 +207,6 @@ func TestRestoredLabel(t *testing.T) {
 	})
 }
 
-// Serial: flips the package-wide images gate. Resuming a transcript saved
-// with images.block true must re-apply it, not leave the config default live.
 func TestResumeAppliesImagesBlock(t *testing.T) {
 	tools.SetImagesEnabled(true)
 	t.Cleanup(func() { tools.SetImagesEnabled(true) })
