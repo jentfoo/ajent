@@ -107,8 +107,8 @@ func resetTimer(t *time.Timer, d time.Duration) {
 
 // physNames records the canonical name of a configurable line-ending control byte.
 var physNames = map[byte]string{
-	0x0a: "ctrl+j",
-	0x0d: "enter",
+	0x0a: physNameCtrlJ,
+	0x0d: physNameEnter,
 }
 
 // controlKeys maps single control bytes to their editing action.
@@ -185,11 +185,11 @@ func decodeEscape(b []byte, pasteFrom int) (key, int, bool) {
 		}
 		k := key{typ: ss3Key(b[2])}
 		if k.typ == keyEnter {
-			k.phys = "enter" // keypad enter is the same physical key as Enter
+			k.phys = physNameEnter // keypad enter is the same physical key as Enter
 		}
 		return k, 3, true
 	case 0x0d, 0x0a:
-		return key{typ: keyNewline, phys: "alt+enter"}, 2, true // alt+enter
+		return key{typ: keyNewline, phys: physNameAltEnter}, 2, true // alt+enter
 	case 'b':
 		return key{typ: keyWordLeft}, 2, true
 	case 'f':

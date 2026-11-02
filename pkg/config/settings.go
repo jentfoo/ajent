@@ -103,8 +103,9 @@ type UI struct {
 }
 
 // Keymap names the keys that submit a prompt and those that insert a newline.
-// Names are tui keymap identifiers; an empty list leaves that action at its
-// default. A key bound to both is rejected at startup.
+// Names are tui keymap identifiers. An empty list leaves that action at its
+// default. A key bound to both actions, or an override leaving no submit key,
+// is rejected at startup.
 type Keymap struct {
 	Submit  []string `json:"submit,omitempty"`
 	Newline []string `json:"newline,omitempty"`

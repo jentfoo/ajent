@@ -274,6 +274,11 @@ func New(opts Options) (*UI, error) {
 		u.settledW, u.settledH = u.render.size() // the startup size: a first-settle grow must not pad
 	}
 
+	km, err := opts.Keymap.resolve()
+	if err != nil {
+		return nil, err // resolved before render.start, no terminal state to restore
+	}
+
 	if err := u.render.start(u.inFd); err != nil {
 		return nil, err
 	}
@@ -282,10 +287,6 @@ func New(opts Options) (*UI, error) {
 		return u, nil
 	}
 
-	km, err := opts.Keymap.resolve()
-	if err != nil {
-		return nil, err
-	}
 	u.keymap = km
 	u.reader = newInputReader(in)
 	// Type-ahead decodes and handles as soon as these start, so from here New

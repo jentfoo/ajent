@@ -1,11 +1,16 @@
 package tui
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+)
 
 // Keymap configures which physical keys submit the prompt and which insert a
 // line break. The zero value (empty lists) uses the built-in defaults: Enter
 // submits, Ctrl+J and Alt+Enter insert a newline. Build one with
-// ParseKeymap to validate names and conflicts; the caller hands it to Options.
+// ParseKeymap to validate names and conflicts. The caller hands it to Options.
 type Keymap struct {
 	Submit  []string // keys that submit the prompt
 	Newline []string // keys that insert a line break
@@ -20,22 +25,30 @@ const (
 )
 
 // keymap resolves a physical key name to its role. Only the line-ending keys are
-// configurable; every other key keeps its fixed role.
+// configurable, every other key keeps its fixed role.
 type keymap map[string]keyRole
+
+// Canonical names of the configurable line-ending keys. The decoder tags each
+// key it decodes with one of these (key.phys), so defaultKeymap must cover them.
+const (
+	physNameEnter    = "enter"     // Enter and the keypad enter
+	physNameCtrlJ    = "ctrl+j"    // LF, the classic newline control
+	physNameAltEnter = "alt+enter" // ESC CR and ESC LF
+)
 
 // defaultKeymap holds the built-in bindings, mirroring the historic defaults:
 // Enter submits, Ctrl+J and Alt+Enter insert a newline.
 var defaultKeymap = keymap{
-	"enter":     roleSubmit,
-	"ctrl+j":    roleNewline,
-	"alt+enter": roleNewline,
+	physNameEnter:    roleSubmit,
+	physNameCtrlJ:    roleNewline,
+	physNameAltEnter: roleNewline,
 }
 
 // resolve builds the effective keymap from the lists, layering overrides on the
 // hard-coded defaults. The config lists are overrides only, never a complete
-// binding, so a partial keymap (e.g. just `newline`) leaves the unlisted keys at
-// their defaults. An unknown name or a name the user bound to both roles is an
-// error so a typo or a conflicting pair cannot silently fall back.
+// binding, so an unlisted key keeps its default role. An unknown name or one
+// bound to both roles is an error (a typo or conflict must not fall back), and
+// at least one submit key has to survive the overrides.
 func (k Keymap) resolve() (keymap, error) {
 	km := make(keymap, len(defaultKeymap))
 	for name, role := range defaultKeymap {
@@ -60,6 +73,11 @@ func (k Keymap) resolve() (keymap, error) {
 			return nil, fmt.Errorf("key %q bound to both submit and newline", name)
 		}
 		km[name] = roleNewline
+	}
+	// an override stripping every submit binding leaves nothing to send a prompt
+	// with, so it falls back like any other invalid keymap
+	if !slices.Contains(slices.Collect(maps.Values(km)), roleSubmit) {
+		return nil, errors.New("keymap leaves no submit key")
 	}
 	return km, nil
 }

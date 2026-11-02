@@ -29,9 +29,9 @@ func TestParseKeymap(t *testing.T) {
 			submit:  []string{"alt+enter"},
 			newline: []string{"enter"},
 			want: keymap{
-				"enter":     roleNewline,
-				"ctrl+j":    roleNewline,
-				"alt+enter": roleSubmit,
+				physNameEnter:    roleNewline,
+				physNameCtrlJ:    roleNewline,
+				physNameAltEnter: roleSubmit,
 			},
 		},
 		{
@@ -39,20 +39,26 @@ func TestParseKeymap(t *testing.T) {
 			submit:  []string{"ctrl+j"},
 			newline: nil,
 			want: keymap{
-				"enter":     roleSubmit,
-				"ctrl+j":    roleSubmit,
-				"alt+enter": roleNewline,
+				physNameEnter:    roleSubmit,
+				physNameCtrlJ:    roleSubmit,
+				physNameAltEnter: roleNewline,
 			},
 		},
 		{
-			name:    "partial_override_no_conflict",
+			name:    "redundant_binding_ok",
+			submit:  nil,
+			newline: []string{"ctrl+j"},
+			want: keymap{
+				physNameEnter:    roleSubmit,
+				physNameCtrlJ:    roleNewline,
+				physNameAltEnter: roleNewline,
+			},
+		},
+		{
+			name:    "newline_only_no_submit",
 			submit:  nil,
 			newline: []string{"enter"},
-			want: keymap{
-				"enter":     roleNewline,
-				"ctrl+j":    roleNewline,
-				"alt+enter": roleNewline,
-			},
+			err:     `keymap leaves no submit key`,
 		},
 		{
 			name:    "unknown_submit_key",
@@ -86,6 +92,18 @@ func TestParseKeymap(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, km)
 		})
+	}
+}
+
+// TestDefaultKeymapCoversPhysNames pins every canonical phys name to a binding,
+// so a decoder tag can never outlive its entry in defaultKeymap.
+func TestDefaultKeymapCoversPhysNames(t *testing.T) {
+	t.Parallel()
+
+	km, err := Keymap{}.resolve()
+	require.NoError(t, err)
+	for _, name := range []string{physNameEnter, physNameCtrlJ, physNameAltEnter} {
+		assert.Contains(t, km, name)
 	}
 }
 
