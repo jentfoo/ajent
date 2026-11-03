@@ -256,7 +256,19 @@ func (f *fakeConsole) SetSessionName(name string) error {
 	f.sessionName = name
 	return nil
 }
-func (f *fakeConsole) SetModel(m llm.Model)               { f.models.SetActive(m); f.state.Model = m; f.setModel = m }
+
+// SetModel mirrors the real console: an unchanged key is a no-op, and a switch
+// applies, moves the registry's active copy and records a session override so
+// Explain reports the same key.
+func (f *fakeConsole) SetModel(m llm.Model) {
+	if m.Key() == f.state.Model.Key() {
+		return
+	}
+	f.models.SetActive(m)
+	f.state.Model = m
+	f.setModel = m
+	_ = f.settings.SetSession("model", m.Key())
+}
 func (f *fakeConsole) SetReasoning(c llm.ReasoningConfig) { f.state.Reasoning = c }
 func (f *fakeConsole) ToolsChanged()                      { f.mu.Lock(); f.toolsChanged++; f.mu.Unlock() }
 func (f *fakeConsole) Dispatched() bool                   { return f.dispatched }

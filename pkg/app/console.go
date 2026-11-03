@@ -51,9 +51,11 @@ type uiConsole struct {
 	lane *stateLane
 	// snap is the settled transcript copy mid-turn readers use
 	snap *turnSnapshot
-	// deferred holds state writes queued while a turn owned State. Pump-goroutine
-	// confined: command handlers append, the dispatch and drain-exit flush drain
+	// deferred holds state writes queued while a turn owned State. Command
+	// handlers append from the pump goroutine and the control executor from its
+	// lane, so the append and the pump's drain share deferMu
 	deferred []func()
+	deferMu  sync.Mutex
 
 	starts *startState // shared with the driver pump
 	quit   func()      // idempotent driver quit, /exit and friends
@@ -103,10 +105,19 @@ func (c *uiConsole) DetectTone() tui.Tone {
 	return c.tone
 }
 
-func (c *uiConsole) Models() *llm.Registry       { return c.reg }
-func (c *uiConsole) State() *agent.State         { return c.st }
-func (c *uiConsole) Tools() *tools.Registry      { return c.tools }
-func (c *uiConsole) MCP() command.MCPServers     { return c.mcp }
+func (c *uiConsole) Models() *llm.Registry  { return c.reg }
+func (c *uiConsole) State() *agent.State    { return c.st }
+func (c *uiConsole) Tools() *tools.Registry { return c.tools }
+
+// MCP returns the MCP server manager, nil when none was built. The adapter is
+// a struct value, so returning it unwrapped would hand callers a non-nil
+// interface over a nil *mcp.Manager and every method call would panic.
+func (c *uiConsole) MCP() command.MCPServers {
+	if c.mcp.m == nil {
+		return nil
+	}
+	return c.mcp
+}
 func (c *uiConsole) Commands() *command.Registry { return c.commands }
 func (c *uiConsole) Settings() *config.Set       { return c.set }
 
@@ -127,14 +138,25 @@ func (c *uiConsole) stateOwned() bool {
 
 // queueState runs fn now when State is at rest, else queues it for the pump to
 // land once the drain exits, and says so. Nothing of the change lands until it
-// applies
+// applies. The drain check runs under the state lane: dispatch commits the
+// queue's draining mark there, so a caller holding the lane either lands
+// before the next dispatch reads State or sees the drain and defers. The
+// control executor relies on that to mutate console state off the pump.
 func (c *uiConsole) queueState(label string, fn func()) {
+	c.lane.lock()
 	if !c.stateOwned() {
-		c.applyState(fn)
+		defer c.lane.unlock() // a panicking fn must not wedge the lane
+		fn()
 		return
 	}
+	c.lane.unlock()
+	c.deferMu.Lock()
 	c.deferred = append(c.deferred, fn)
+	c.deferMu.Unlock()
 	c.ui.Notify(label+" queued; applies after this turn", tui.LevelInfo)
+	// a drain that exited between the check and the append leaves no wake to
+	// flush this write, so land it now when the state is already free
+	c.applyDeferred()
 }
 
 // applyState runs one state write under the state lane, so a rewind or fork
@@ -150,11 +172,14 @@ func (c *uiConsole) applyState(fn func()) {
 // pump runs this at each dispatch and at drain exit, and each landed write
 // joins the state lane like an immediate one
 func (c *uiConsole) applyDeferred() {
+	c.deferMu.Lock()
 	if len(c.deferred) == 0 || c.stateOwned() {
+		c.deferMu.Unlock()
 		return
 	}
 	pending := c.deferred
 	c.deferred = nil
+	c.deferMu.Unlock()
 	c.applyState(func() {
 		for _, fn := range pending {
 			fn()

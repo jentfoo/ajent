@@ -55,8 +55,9 @@ func settingsCompletion(c Console) func(prefix string) []string {
 // An empty section reopens after every edit until cancelled.
 func runSettings(ctx context.Context, c Console, section string) error {
 	if section != "" {
-		for i := range allRows() {
-			r := &allRows()[i]
+		rows := allRows()
+		for i := range rows {
+			r := &rows[i]
 			if strings.EqualFold(r.name, section) || (section == "reasoning" && r.name == "Reasoning") {
 				return editRow(ctx, c, r)
 			}
@@ -226,7 +227,7 @@ func modelRow(name, key string) settingsRow {
 		raw, _, _ := c.Settings().Explain(key)
 		var cur string
 		_ = json.Unmarshal(raw, &cur)
-		m, err := PickModel(ctx, c, "Model", cur, tui.PickOptions{})
+		m, err := PickModel(ctx, c, labelModel, cur, tui.PickOptions{})
 		if err != nil {
 			return nil, err
 		}
@@ -239,7 +240,7 @@ func modelRow(name, key string) settingsRow {
 // allRows returns the settings menu in display order.
 func allRows() []settingsRow {
 	rows := []settingsRow{
-		{name: "Model", render: rowModel, edit: editModel},
+		{name: labelModel, render: rowModel, edit: editModel},
 		{name: "Reasoning", render: detailRow("Reasoning", "reasoning.level"), edit: editReasoning,
 			unavailable: reasoningUnavailable},
 		{name: "Reasoning retention", render: rowRetention, edit: editRetention},
@@ -248,7 +249,7 @@ func allRows() []settingsRow {
 		{name: "Auto-compaction", render: rowCompaction, edit: editCompaction},
 		intRow("Compaction verbatim steps", "compaction.minSteps", 1, 8),
 		floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5),
-		enumRow("Permissions mode", "permissions.mode", []string{"allow-all", "allow-read", "auto", "auto+write", "block-all"}),
+		enumRow("Permissions mode", "permissions.mode", permissionModes),
 		modelRow("Sub-agent model", "subagent.model"),
 		intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64),
 		intRow("Sub-agent step limit", "subagent.maxSteps", 0, 10000),
@@ -328,11 +329,11 @@ func detail(c Console, key string) (string, bool) {
 }
 
 func rowModel(c Console) (string, string) {
-	d, ok := detail(c, "model")
+	d, ok := detail(c, keyModel)
 	if !ok {
-		return "Model", c.Models().Active().Key() + "  (session)"
+		return labelModel, c.Models().Active().Key() + "  (session)"
 	}
-	return "Model", d
+	return labelModel, d
 }
 
 // detailRow renders the setting's stored value under a fixed label.
@@ -400,8 +401,8 @@ func editModel(ctx context.Context, c Console) ([]settingChange, error) {
 		return nil, err
 	}
 	key := m.Key()
-	_ = c.SetSessionSetting("model", key)
-	return []settingChange{{key: "model", value: key}}, nil
+	_ = c.SetSessionSetting(keyModel, key)
+	return []settingChange{{key: keyModel, value: key}}, nil
 }
 
 // editReasoning delegates to the reasoning picker. A cancelled pick, a model
@@ -420,15 +421,24 @@ func editReasoning(ctx context.Context, c Console) ([]settingChange, error) {
 	return []settingChange{{key: "reasoning.level", value: level.String()}}, nil
 }
 
+// setReasoningField rebuilds the live reasoning config with one field
+// changed, every other field preserved from the current state. The dialog
+// editors and the socket apply share it, so neither can drop a field the
+// other kept.
+func setReasoningField(c Console, mod func(rc *llm.ReasoningConfig)) {
+	rc := c.State().Reasoning
+	mod(&rc)
+	c.SetReasoning(rc)
+}
+
 // editRetention lets the user pick a reasoning retention policy.
 func editRetention(ctx context.Context, c Console) ([]settingChange, error) {
-	policies := []string{"none", "lastTurn", "wholeTurn", "all"}
 	current := llm.RetainWholeTurn
 	if p, ok := llm.ParseRetain(c.State().Reasoning.Retain.String()); ok {
 		current = p
 	}
-	opts := make([]tui.Option, len(policies))
-	for i, p := range policies {
+	opts := make([]tui.Option, len(retainPolicies))
+	for i, p := range retainPolicies {
 		marker := "  "
 		if p == current.String() {
 			marker = "* "
@@ -439,16 +449,11 @@ func editRetention(ctx context.Context, c Console) ([]settingChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	retain, ok := llm.ParseRetain(policies[idx])
+	retain, ok := llm.ParseRetain(retainPolicies[idx])
 	if !ok {
-		return nil, fmt.Errorf("unknown policy %q", policies[idx])
+		return nil, fmt.Errorf("unknown policy %q", retainPolicies[idx])
 	}
-	c.SetReasoning(llm.ReasoningConfig{
-		Level:  c.State().Reasoning.Level,
-		Budget: c.State().Reasoning.Budget,
-		Retain: retain,
-		Hide:   c.State().Reasoning.Hide,
-	})
+	setReasoningField(c, func(rc *llm.ReasoningConfig) { rc.Retain = retain })
 	// a text leaf survives even when the policy is "none" (zero value).
 	_ = c.SetSessionSetting("reasoning.retain", retain.String())
 	return []settingChange{{key: "reasoning.retain", value: retain.String()}}, nil
@@ -460,12 +465,7 @@ func editThinking(ctx context.Context, c Console) ([]settingChange, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.SetReasoning(llm.ReasoningConfig{
-		Level:  c.State().Reasoning.Level,
-		Budget: c.State().Reasoning.Budget,
-		Retain: c.State().Reasoning.Retain,
-		Hide:   !on,
-	})
+	setReasoningField(c, func(rc *llm.ReasoningConfig) { rc.Hide = !on })
 	_ = c.SetSessionSetting("reasoning.hide", !on)
 	return []settingChange{{key: "reasoning.hide", value: !on}}, nil
 }
@@ -505,7 +505,8 @@ func editCompaction(ctx context.Context, c Console) ([]settingChange, error) {
 		if ierr != nil {
 			return nil, ierr
 		}
-		// enter on the placeholder keeps the current threshold, but anything else must be a positive number
+		// enter on the placeholder keeps the current threshold;
+		// anything else must be a positive number
 		if in != "" {
 			f, perr := strconv.ParseFloat(strings.TrimSpace(in), 64)
 			if perr != nil || math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {

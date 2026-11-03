@@ -21,6 +21,15 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
+func TestUIConsoleMCPNilWithoutManager(t *testing.T) {
+	t.Parallel()
+
+	// the adapter is a struct value, so an unwrapped return would hand callers
+	// a non-nil interface over a nil manager and every call would panic
+	c := &uiConsole{}
+	assert.Nil(t, c.MCP())
+}
+
 func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	t.Parallel()
 

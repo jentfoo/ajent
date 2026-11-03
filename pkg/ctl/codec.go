@@ -55,9 +55,11 @@ func (d *Decoder) Decode(v any) error {
 			}
 			return err
 		}
-		trimmed := trimLine(line)
-		if len(trimmed) > 0 {
-			if jerr := json.Unmarshal(trimmed, v); jerr != nil {
+		// drop the newline and any carriage return a remote peer may add
+		line = bytes.TrimSuffix(line, []byte("\n"))
+		line = bytes.TrimSuffix(line, []byte("\r"))
+		if len(line) > 0 {
+			if jerr := json.Unmarshal(line, v); jerr != nil {
 				return fmt.Errorf("unparseable control line: %w", jerr)
 			}
 			return nil
@@ -66,10 +68,4 @@ func (d *Decoder) Decode(v any) error {
 			return io.EOF // a final blank fragment ends the stream
 		}
 	}
-}
-
-// trimLine drops the newline and any carriage return a remote peer may add.
-func trimLine(line []byte) []byte {
-	line = bytes.TrimSuffix(line, []byte("\n"))
-	return bytes.TrimSuffix(line, []byte("\r"))
 }

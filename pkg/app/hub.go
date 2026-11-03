@@ -23,10 +23,7 @@ import (
 )
 
 // submit refusals the wire maps to distinct codes.
-var (
-	errSubmitStarting  = errors.New("the run is still starting")
-	errPromptQueueFull = errors.New("prompt queue full")
-)
+var errPromptQueueFull = errors.New("prompt queue full")
 
 // activityUnranked mirrors the TUI's rank for rows whose producer keeps no
 // order of its own: after every ranked row, ties in arrival order.
@@ -144,8 +141,12 @@ type sessionHub struct {
 	initCtl    *initController
 	rewindTo   func(head, cause string) (string, error) // rewind/fork to an entry; ends a plan first
 	tools      *tools.Registry                          // registry the tool rows mirror
-	workspace  string
-	cwd        string
+	// console is the wired command console the settings, model and tool
+	// methods apply through, the same implementations the keyboard's slash
+	// commands use. Installed by the driver before dispatch starts.
+	console   command.Console
+	workspace string
+	cwd       string
 
 	sessionID   string // stable once the transcript opens
 	sessionName string
@@ -504,17 +505,13 @@ func (h *sessionHub) refreshTools() {
 // editor-coupled side effects. queueID carries a submitting surface's pending
 // correlation onto the prompt's queue row and committed entry; empty mints one.
 // origin names the submitter ("controller") for transcript provenance; empty
-// means the local editor. It reports errSubmitStarting before the router is
-// wired and the router's own error otherwise, which is errPromptQueueFull when
-// the pump queue is full: a remote submit never blocks the caller. Safe from
-// any goroutine.
+// means the local editor. It reports the router's own error, which is
+// errPromptQueueFull when the pump queue is full: a remote submit never blocks
+// the caller. Safe from any goroutine.
 func (h *sessionHub) Submit(line, queueID, origin string) error {
 	h.mu.Lock()
 	f := h.submitLine
 	h.mu.Unlock()
-	if f == nil {
-		return errSubmitStarting
-	}
 	return f(line, queueID, origin)
 }
 
@@ -527,8 +524,7 @@ func (h *sessionHub) setSubmitLine(f func(line, queueID, origin string) error) {
 	h.mu.Unlock()
 }
 
-// rewindEntry returns the installed rewind entry, nil while the run is still
-// wiring one.
+// rewindEntry returns the installed rewind entry, set before dispatch starts.
 func (h *sessionHub) rewindEntry() func(head, cause string) (string, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -541,6 +537,21 @@ func (h *sessionHub) setRewindTo(f func(head, cause string) (string, error)) {
 	h.mu.Lock()
 	h.rewindTo = f
 	h.mu.Unlock()
+}
+
+// setConsole installs the console seam the control server's settings, model
+// and tool methods apply through. Same startup discipline as setSubmitLine.
+func (h *sessionHub) setConsole(c command.Console) {
+	h.mu.Lock()
+	h.console = c
+	h.mu.Unlock()
+}
+
+// consoleOf returns the wired console seam, set before dispatch starts.
+func (h *sessionHub) consoleOf() command.Console {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.console
 }
 
 // barrierModeCycler is the permission-gate surface the hub reads: the real

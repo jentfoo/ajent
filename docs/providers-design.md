@@ -454,6 +454,11 @@ existing file so setup only ever adds. A local server URL pasted without a path
 inherits the flavor default's path, so a bare `http://host:port` still reaches
 the OpenAI-compatible chat endpoint.
 
+Serve mode never opens the wizard (or any other first-run picker): there is no
+terminal to render it on, and a dialog that cannot be answered must not own
+startup. An unconfigured serve run skips straight past setup and tells
+controllers through a notice how to configure a provider instead.
+
 `SaveUserFile` follows config.json's writer contract (see
 config-design.md "The writer") by saving through `config.OverlayJSON`: declared
 fields follow the saved struct, unrecognized keys anywhere in the current file

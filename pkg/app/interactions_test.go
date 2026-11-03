@@ -494,3 +494,16 @@ func TestBrokerCancelledContextSettles(t *testing.T) {
 	assert.False(t, ends[0].outcome.Answered)
 	assert.True(t, ends[0].outcome.Cancelled)
 }
+
+func TestLocalRacer(t *testing.T) {
+	t.Parallel()
+
+	// serve mode owns no terminal, and the broker must see its absence: a
+	// typed-nil *tui.UI would race as present and panic on the first dialog
+	// instead of holding for a controller.
+	assert.Nil(t, localRacer(nil))
+
+	var term *tui.UI // typed nil, the exact shape Driver hands over in serve mode
+	assert.Nil(t, localRacer(term))
+	assert.NotNil(t, localRacer(&tui.UI{}))
+}

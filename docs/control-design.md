@@ -15,7 +15,8 @@ A serving session binds a socket under the ajent home, named for the session and
 instance's writer slot token (`session-design.md`), so two instances of one session never
 share a path (see `config-design.md` for the control directory). Any number of
 connections may observe what the session emits, and one at a time holds the **control
-seat** to mutate: submit a prompt, interrupt, cycle the permission mode, rewind, answer a
+seat** to mutate: submit a prompt, interrupt, set or cycle the permission mode, reshape
+the enabled tools, switch the model, change settings, rewind, answer a
 dialog. Two front ends are in-tree.
 
 - `--serve` runs the driver with no terminal, where the socket is the only source of
@@ -98,8 +99,15 @@ keep that single path honest under concurrent controllers.
   controller that dies mid-dialog leaves the dialog open for whoever answers next, exactly
   as a detached terminal does.
 
-Two further rules follow from the single path:
+Further rules follow from the single path:
 
+- **Console-backed writes reuse the console's applies.** `tools.set`, `model.set`,
+  `mode.set` and `settings.set` run the same implementations `/tools`, `/model` and
+  `/settings` use, through a console seam the driver installs on the hub before dispatch
+  starts. The tool rule is the `/tools` dispatch branch itself and settings validation is
+  the table the menu editors share, so a remote change can never drift from a typed one.
+  Model and permission-mode changes stay run-scoped: a controller-driven switch records
+  its own entry or drives the barrier live, and never rewrites the user's config layer.
 - **Submitting is not delivering.** A submit during a running turn obeys the pump's
   queue and steer rules, and a dialog holding the editor refuses it the same way it
   refuses any write. A controller never believes a prompt reached the model while a

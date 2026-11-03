@@ -326,8 +326,7 @@ func TestWriterAppendTimestamp(t *testing.T) {
 
 	t.Run("ts_tracks_monotonic_not_wall", func(t *testing.T) {
 		base := time.Now().Add(time.Hour).UTC()
-		resetIDCounter() // ignore what earlier tests left in the counter
-		t.Cleanup(setClock(base))
+		t.Cleanup(pinClock(base))
 
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})

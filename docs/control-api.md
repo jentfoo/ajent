@@ -78,12 +78,13 @@ you are not offered, and payload fields rather than erroring on them.
 |---|---|
 | `unknown-method` | no such method |
 | `bad-request` | malformed or invalid params (empty submit line, empty rewind head, out-of-range dialog index, two answer shapes at once) |
-| `unavailable` | valid now-refused call: a dialog holds input, serve mode has no editor, the run is still starting, a turn owns the loop, the queue cannot take an item, or the session is shutting down |
+| `unavailable` | valid now-refused call: a dialog holds input, serve mode has no editor, a turn owns the loop, the queue cannot take an item, no gate exists for `mode.set`, or the session is shutting down |
 | `seat-held` | another controller owns the seat, with `Error.Holder` naming it |
 | `observer` | write from a connection without the seat, with `Error.Holder` naming its holder when one holds it |
-| `not-found` | unknown target (rewind head entry id, interaction id) |
+| `not-found` | unknown target (rewind head entry id, interaction id, model or settings key) |
 | `settled` | a dialog already resolved, first answer won |
 | `busy` | the prompt queue is full, retry once it drains |
+| `unexpected` | the verb faulted mid-run; its effect may have partially applied, so reconcile from `state.get` before writing again |
 
 A refusal is always a reply with `error`, never a transport failure. Errors carry a
 human-readable `message` on top of the code. Scripts should branch on `code` and `holder`.
@@ -148,7 +149,8 @@ caller picks among them rather than guessing. An empty target means every live i
 
 ## Methods
 
-`state.get` answers any connection. `attach` is callable from any connection at any time and
+`state.get`, `models.get` and `settings.get` answer any connection. `attach` is callable
+from any connection at any time and
 is how a connection takes or keeps the seat. Every other method requires the control seat,
 so an observer's write refuses with code `observer`. Mutating verbs serialize on one lane,
 where guards revalidate at execution time rather than at request time and a reply follows the
@@ -158,20 +160,37 @@ but runs off the lane, because its first resolution wins against local surfaces.
 | method | params → result | seat | lane |
 |---|---|---|---|
 | `state.get` | none → `State` snapshot | no | no |
+| `models.get` | none → `{active, models}` | no | no |
+| `settings.get` | none → `{rows}` | no | no |
 | `attach` | `{control?, holder?, force?}` → `{control}` | claims it | no |
 | `submit` | `{line, pendingId?}` → void | yes | yes |
 | `interrupt` | none → `{stopped?}` | yes | yes, priority |
 | `mode.cycle` | `{back?}` → `{mode?}` | yes | yes |
+| `mode.set` | `{mode}` → `{mode}` | yes | yes |
 | `input.set` | `{text}` → void | yes | yes |
 | `queue.recall` | none → `{id?, text?}` | yes | yes |
 | `session.rewind` | `{head}` → `{head}` | yes | yes |
 | `interaction.resolve` | `{id, index? \| indexes? \| text? \| cancel, chat?}` → void | yes | no |
 | `seat.yield` | none → void | yes | no |
+| `tools.set` | `{names}` → `{rows}` | yes | yes |
+| `model.set` | `{model}` → `{model}` | yes | yes |
+| `settings.set` | `{key, value, persist?}` → `{row}` | yes | yes |
 
 Params and results with their wire keys:
 
 - **`state.get`** → one snapshot object, documented in [Snapshots](#snapshots). The reply's
   `seq` is the snapshot's own number.
+- **`models.get`** lists the model registry exactly as the running process resolved it
+  (config plus discovery, no compiled entries), so a controller renders a picker without
+  riding one. `{active}` names the model now in effect and each entry of `models` is the
+  snapshot's `model` shape (`{key, short, window, caps}`). The registry this lists is the
+  one `model.set` resolves against.
+- **`settings.get`** returns the `/settings` rows, one per editable dotted key, in menu
+  order: `{rows: [{label, key, value, source, editable, reason}]}`. `value` is the
+  resolved JSON value and `source` the layer it came from (see
+  [Vocabularies](#vocabularies)). `reason` says why an uneditable row cannot change right
+  now. Theme has no config key and Reset overrides is an action, so neither appears. Rows
+  answer any connection.
 - **`attach`** `{control, holder, force}`. With `control` false or absent this stays an
   observer attach and answers `{control:false}`, which succeeds even while another controller
   holds the seat. With `control` true it claims the seat: `holder` names this controller in
@@ -185,7 +204,7 @@ Params and results with their wire keys:
   its tests. During a running turn the line steers or queues per the pump's rules, and a
   queued submit can come back with `queue.recall`. Submitting never delivers past a human
   gate: while a dialog holds the editor this refuses. Errors: `bad-request` on an empty or
-  whitespace-only line, `unavailable` while a dialog holds input or the run is still starting,
+  whitespace-only line, `unavailable` while a dialog holds input,
   `busy` when the prompt queue is full.
   `pendingId` is your own correlation for the pending row. Omit it and the session mints one,
   which you then learn only from `queued` events, so pass your own if you track submissions.
@@ -209,8 +228,7 @@ Params and results with their wire keys:
 - **`queue.recall`** pops the newest queued prompt for your own surface to edit, like Alt+Up.
   `{id,text}` names the row that left and its text, because the reply's watermark supersedes
   that same row's `queue.dropped` event (cause `recalled`). An empty result means nothing was
-  queued. A refusal (`unavailable`, run still starting or an item that cannot cross the wire)
-  leaves the item queued.
+  queued. A refusal (an item that cannot cross the wire) leaves the item queued.
 - **`session.rewind`** `{head}` forks onto an earlier transcript entry through the keyboard's
   rewind transaction: queued prompts clear with a recorded notice, the head moves, and
   `branch.changed` announces it. Head ids come from the transcript tree or prior backfill
@@ -231,6 +249,40 @@ Params and results with their wire keys:
   back in any event.
 - **`seat.yield`** releases the seat without dropping your socket, so another controller can
   take it while you keep watching. A no-op when you do not hold it.
+- **`tools.set`** `{names}` reshapes the enabled tool set through the same apply `/tools`
+  uses, widen-only by construction: before this run's first dispatched prompt `names` is a
+  free replacement (names left out disable, an empty list disables everything). After it
+  the call can only enable, and names left out keep their state, since the tool block the
+  model has already seen is not retractable. Group names (like `subagents`) expand to
+  their members and unknown names are ignored. The reshape records its
+  `setting_change` entry, publishes the full-replacement `tools` event and, when the set
+  actually changed, notes the prompt cache will miss. A set that changes nothing records
+  nothing. The reply's `{rows}` is the post-apply tool rows, the same shape the `tools`
+  event and the snapshot carry.
+- **`model.set`** `{model}` switches onto one model resolved by key, alias, provider/id,
+  bare id or a unique id suffix, exactly the names `models.get` lists. The switch is
+  **session-only**: it records a `model_change` entry and a session override, never
+  rewriting the user's config the way the `/model` command does. During a running turn the
+  switch queues and lands at the turn boundary, announced by its `status.model` event. The
+  reply names the model the switch resolved to. An unknown name is `not-found`, an
+  ambiguous one `bad-request` listing its candidates.
+- **`mode.set`** `{mode}` sets the permission mode by name rather than stepping it, through
+  the same hook the `/settings` row drives: the barrier flips live, open approval dialogs
+  re-evaluate under the new mode, the `permission` event publishes and no `setting_change`
+  entry records, so the mode stays run-scoped. Mode names are the vocabulary `mode.cycle`
+  uses. An unknown name is `bad-request`. A session with no gate at all (tools disabled)
+  refuses `unavailable`.
+- **`settings.set`** `{key, value, persist}` applies one setting from the `settings.get`
+  rows as a session override with its live effects, validated server-side against the
+  row's shape and bounds (a bad value is `bad-request`, an unknown key `not-found`, an
+  uneditable row `unavailable` naming its reason). `value` carries the JSON value in the
+  row's own shape: booleans, numbers, strings, or a list of tool names for `tools.enabled`
+  (which applies through the same widen-only rule as `tools.set`). Model and reasoning
+  rows apply their live effects too, so a switch or level change never records an override
+  that does not take effect. Every change records its `setting_change` entry except
+  `permissions.mode`, which never does. `persist`, when set, also copies the value to a
+  config file layer (`user` or `project`) exactly as the `/settings` save prompt would.
+  The reply carries the row after the change.
 
 ## Events
 
@@ -366,9 +418,12 @@ sub-agent spend and `byModel` keyed by model key.
 Strings a controller switches on. Unknown values should render generically rather than fail,
 since additions are additive changes.
 
-- **Permission modes** (`permission`, `mode.cycle`): `allow-read`, `auto`, `auto+write`,
-  `allow-all`, `block-all`. Cycle order follows that list and wraps, `back: true` walks it in
+- **Permission modes** (`permission`, `mode.cycle`, `mode.set`): `allow-read`, `auto`,
+  `auto+write`, `allow-all`, `block-all`. Cycle order follows that list and wraps, `back: true` walks it in
   reverse. Empty means no gate exists on this session.
+- **Setting sources** (`settings.get`): `default`, `user`, `project`, `local`, `session`, plus
+  `active` for the model row when no layer sets it (the run still sits on the model it
+  started with).
 - **Dialog kinds** (`kind`): `pick`, `multipick`, `select`, `confirm`, `input`, `secret`,
   `ask`, `decision`. The answer shape to trust comes from the flags, not the kind: `options`
   for `index`, `multi` for `indexes`, `text` for a text answer.
@@ -529,6 +584,12 @@ context and surfaces wire refusals unchanged.
 | `Submit(ctx, ctl.SubmitParams) error` | `submit` | sets `Line` and optionally `PendingID` |
 | `Interrupt(ctx) (string, error)` | `interrupt` | what stopped: `turn`, `survey`, `shell`, empty for nothing |
 | `ModeCycle(ctx, back bool) (string, error)` | `mode.cycle` | mode now in effect, empty when no gate exists |
+| `ModeSet(ctx, mode string) (string, error)` | `mode.set` | mode now in effect, and a session without a gate refuses |
+| `ToolsSet(ctx, names []string) (ctl.ToolsSetResult, error)` | `tools.set` | the tool rows after the reshape (widen-only past the first dispatched prompt) |
+| `Models(ctx) (ctl.ModelsData, error)` | `models.get` | the registry listing with its active key |
+| `ModelSet(ctx, model string) (ctl.ModelSetResult, error)` | `model.set` | the model the session-only switch resolved to |
+| `Settings(ctx) (ctl.SettingsData, error)` | `settings.get` | the `/settings` rows with values, sources and editability |
+| `SettingsSet(ctx, ctl.SettingsSetParams) (ctl.SettingsSetResult, error)` | `settings.set` | the row after the applied change, with `Persist` optionally copying to `user`/`project` |
 | `InputSet(ctx, text string) error` | `input.set` | prefills the served run's editor buffer under local typing semantics; serve mode refuses with `unavailable` |
 | `Rewind(ctx, head string) (string, error)` | `session.rewind` | the new head id |
 | `QueueRecall(ctx) (ctl.RecallResult, error)` | `queue.recall` | the popped row whole: its `ID` names the queue entry that left, so a controller tracking pending rows resolves them by id. Zero result when nothing was queued |
@@ -592,7 +653,7 @@ The minimum honest implementation:
 
 1. Read `<home>/control/*/<token8>.json` for candidates, or dial one known socket path. Pick by
    name, id prefix or a user's choice. Judge liveness from the recorded pid, never a probe.
-2. Connect over unix and read the first line. Require `protocol` to match (3 today), accept
+2. Connect over unix and read the first line. Require `protocol` to match (1 today), accept
    `refused` as a fatal permission error, and remember hello's `seq`, `transcriptPath` and `token`.
 3. Send `attach` with `control: true` if you intend to write. On `seat-held` decide between
    re-attaching with `force`, waiting for `seat.lost` or exit.

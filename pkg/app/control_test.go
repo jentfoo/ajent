@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
 	"net"
 	"os"
@@ -766,4 +767,84 @@ func TestServeRun(t *testing.T) {
 			return os.IsNotExist(derr)
 		}, 5*time.Second, 10*time.Millisecond)
 	})
+}
+
+// buildAjentBinary compiles the module root into a scratch directory for the
+// calling test, removed at cleanup. Serve-mode regressions must die in a log a
+// test can read rather than take down the runner, so the run is a subprocess.
+func buildAjentBinary(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("", "ajent-bin-")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	out := filepath.Join(dir, "ajent")
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-o", out, "github.com/jentfoo/ajent")
+	if b, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build ajent: %v\n%s", err, b)
+	}
+	return out
+}
+
+// TestServeUnconfiguredHome boots the real binary against an empty
+// configuration directory. First-run setup must not own a run with no
+// terminal: the wizard never opens, hello and the first snapshot answer, and
+// SIGTERM ends the run with no panic anywhere in its log.
+func TestServeUnconfiguredHome(t *testing.T) {
+	// not parallel: AJENT_HOME pins the socket dir into the test's temp home
+
+	bin := buildAjentBinary(t)
+	t.Setenv(config.EnvHome, t.TempDir()) // empty: no models file, no config.json
+
+	var log bytes.Buffer
+	cmd := exec.CommandContext(t.Context(), bin, "--serve")
+	cmd.Stdout = &log
+	cmd.Stderr = &log
+	require.NoError(t, cmd.Start())
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+
+	// the socket binds before the run accepts. A regression crashes startup;
+	// name it through the log instead of timing out blind.
+	var path string
+	require.Eventually(t, func() bool {
+		if p, ok := onlySocket(t); ok {
+			path = p
+			return true
+		}
+		select {
+		case err := <-exited:
+			t.Fatalf("serve exited before binding: %v\nlog:\n%s", err, log.String())
+		default:
+		}
+		return false
+	}, 15*time.Second, 10*time.Millisecond)
+
+	c := dialControl(t, path)
+	h := c.hello()
+	assert.True(t, h.Serve)
+	assert.False(t, h.Interactive)
+
+	// the first snapshot answers, unconfigured and with no wizard pending:
+	// a controller learns the model is missing rather than meeting a picker
+	rp := c.call("s1", ctl.MethodState, map[string]any{})
+	require.Nil(t, rp.Error)
+	var st ctl.State
+	require.NoError(t, rp.DecodeResult(&st))
+	assert.Empty(t, st.Model.Key)
+	assert.Empty(t, st.Interactions)
+
+	// SIGTERM ends the run cleanly; no panic may reach its log
+	require.NoError(t, cmd.Process.Signal(syscall.SIGTERM))
+	var exitErr error
+	require.Eventually(t, func() bool {
+		select {
+		case exitErr = <-exited:
+			return true
+		default:
+			return false
+		}
+	}, 10*time.Second, 10*time.Millisecond)
+	require.NoError(t, exitErr) // the graceful SIGTERM path exits 0
+	assert.NotContains(t, log.String(), "panic")
 }

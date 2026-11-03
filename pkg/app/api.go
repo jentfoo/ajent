@@ -27,7 +27,9 @@ const (
 // run offers the model, and the barrier mode its permission flag starts. A
 // scope that names no mode leaves the configured default alone interactively,
 // and runs auto+write headless (permissions.headlessMode overriding) where no
-// dialog can settle a prompt and the model classifier is final.
+// dialog can settle a prompt and the model classifier is final. ToolScopeNone
+// is a real scope, not an absence of one, so those guarantees hold as tools
+// are added.
 type ToolScope uint8
 
 const (
@@ -36,6 +38,7 @@ const (
 	ToolScopeReadOnly                   // verifiably read-only tools only; starts at auto
 	ToolScopeAuto                       // every built-in but the core writers; starts at auto
 	ToolScopeAutoWrite                  // everything incl. bash; starts at auto+write
+	ToolScopeNone                       // no tools at all, built-ins and MCP alike
 )
 
 // barrierMode maps a scope onto the barrier mode its permission flag starts

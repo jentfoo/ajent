@@ -159,6 +159,26 @@ func TestStagerEmptyCommandNoticesAndRunsNothing(t *testing.T) {
 	}
 }
 
+func TestStagerNilRegistryNoticesAndRunsNothing(t *testing.T) {
+	t.Parallel()
+
+	// builtin tools can fail to register: the stager still exists, so Run
+	// must notice rather than deref a nil registry
+	sink := &recordingSinkForShell{}
+	s := NewStager(t.Context(), nil, sink)
+	require.NotPanics(t, func() { s.Run("echo hi", false) })
+	require.Eventually(t, func() bool {
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		return len(sink.notices) > 0
+	}, time.Second, time.Millisecond)
+	sink.mu.Lock()
+	first := sink.notices[0]
+	sink.mu.Unlock()
+	assert.Contains(t, first, "bash tool")
+	assert.False(t, s.Pending())
+}
+
 func TestStagerNonZeroExitStagesAsError(t *testing.T) {
 	t.Parallel()
 

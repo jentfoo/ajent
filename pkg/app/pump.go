@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -113,7 +114,7 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 					console.Notify("unknown command /"+name, tui.LevelWarn)
 					continue
 				}
-				_ = cmd.Handler(ctx, arg, console)
+				runCommand(ctx, cmd, arg, console)
 			case command.KindPrompt:
 				if line.input == nil && strings.TrimSpace(line.rest) == "" && len(line.blocks) == 0 {
 					continue
@@ -187,6 +188,22 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 			}
 		}
 	}
+}
+
+// runCommand runs one slash handler with panic conversion: a faulting
+// handler degrades to an error notice instead of killing the session, the
+// same guarantee the agent loop and tool exec already carry.
+func runCommand(ctx context.Context, cmd command.Command, arg string, console *uiConsole) {
+	defer func() {
+		if p := recover(); p != nil {
+			if err, ok := p.(error); ok {
+				console.Notify(fmt.Sprintf("/%s failed: %v", cmd.Name, err), tui.LevelError)
+				return
+			}
+			console.Notify(fmt.Sprintf("/%s panicked: %v", cmd.Name, p), tui.LevelError)
+		}
+	}()
+	_ = cmd.Handler(ctx, arg, console)
 }
 
 func promptInput(line pumpLine, expander *refs.Expander, warn func(string)) (agent.Input, string, int) {

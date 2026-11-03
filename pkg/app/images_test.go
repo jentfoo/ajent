@@ -49,6 +49,10 @@ func slotSizedPNG(t *testing.T, w, h int) []byte {
 }
 
 func TestImageSlots(t *testing.T) {
+	// these cases assume the default: images on, whatever earlier tests left behind
+	tools.SetImagesEnabled(true)
+	t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
 	t.Run("store and take round trip", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		token, rejected := s.store(slotPNG(t))

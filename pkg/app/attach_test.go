@@ -279,19 +279,6 @@ func TestAttachQueueRecallFillsEditor(t *testing.T) {
 	assert.Equal(t, "queued two", <-term.Messages())
 }
 
-func TestAttachSubmitRefusedWithoutRouter(t *testing.T) {
-	rig := newControlRig(t, nil)
-	a := newAttachRig(t, rig)
-
-	_, err := a.conn.ClaimSeat(t.Context(), "test", false)
-	require.NoError(t, err)
-	err = a.conn.Submit(t.Context(), ctl.SubmitParams{Line: "hello"})
-	require.Error(t, err)
-	var wire *ctl.Error
-	require.ErrorAs(t, err, &wire)
-	assert.Equal(t, ctl.CodeUnavailable, wire.Code)
-}
-
 func TestAttachReconnect(t *testing.T) {
 	t.Run("refuses_submits", func(t *testing.T) {
 		rig := newControlRig(t, nil)

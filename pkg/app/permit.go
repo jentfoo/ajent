@@ -168,7 +168,7 @@ func showPermissionIndicator(ui *hubUI, b *permit.Barrier) {
 // permissions segment, the default mode hidden until the user changes it.
 // Every mode change funnels through here or hub.ModeCycle.
 func setPermissionMode(ui *hubUI, m permit.Mode) {
-	if ui == nil {
+	if ui == nil { // partial consoles build without a front end
 		return
 	}
 	ui.hub.setPermissionMode(m)

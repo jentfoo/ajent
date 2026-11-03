@@ -24,8 +24,7 @@ import (
 func writeAt(t *testing.T, s *Store, ws string, at time.Time, d SessionData, text string) *Writer {
 	t.Helper()
 
-	restore := setClock(at)
-	resetIDCounter() // historical times only stamp when the counter adopts them
+	restore := pinClock(at)
 	w, err := s.Create(ws, d)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
@@ -38,8 +37,7 @@ func writeAt(t *testing.T, s *Store, ws string, at time.Time, d SessionData, tex
 func appendAt(t *testing.T, w *Writer, at time.Time, text string) {
 	t.Helper()
 
-	restore := setClock(at)
-	resetIDCounter()
+	restore := pinClock(at)
 	_, err := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, text)})
 	require.NoError(t, err)
 	restore()

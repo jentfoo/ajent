@@ -90,7 +90,8 @@ func helloLine(raw json.RawMessage) (ctl.Hello, error) {
 	if err != nil || in.Event == nil {
 		return ctl.Hello{}, errors.New("first control line was not a hello event")
 	}
-	if in.Event.Name == ctl.EventRefused { // identity check failed: the reason says what the kernel saw
+	// refused: the reason names what the kernel saw
+	if in.Event.Name == ctl.EventRefused {
 		var rd ctl.RefusedData
 		_ = in.Event.Decode(&rd)
 		return ctl.Hello{}, fmt.Errorf("session refused this connection: %s", rd.Reason)
@@ -286,6 +287,57 @@ func (c *Conn) ModeCycle(ctx context.Context, back bool) (string, error) {
 	var res ctl.ModeResult
 	_, err := c.Call(ctx, ctl.MethodModeCycle, ctl.ModeCycleParams{Back: back}, &res)
 	return res.Mode, err
+}
+
+// ModeSet sets the permission mode by name rather than stepping it. The
+// returned name is the mode now in effect. A session without a gate refuses.
+func (c *Conn) ModeSet(ctx context.Context, mode string) (string, error) {
+	var res ctl.ModeResult
+	_, err := c.Call(ctx, ctl.MethodModeSet, ctl.ModeSetParams{Mode: mode}, &res)
+	return res.Mode, err
+}
+
+// ToolsSet reshapes the enabled tool set: a free replacement before the
+// session's first dispatched prompt, enable-only after. The result carries
+// the toggleable rows after the reshape.
+func (c *Conn) ToolsSet(ctx context.Context, names []string) (ctl.ToolsSetResult, error) {
+	var res ctl.ToolsSetResult
+	_, err := c.Call(ctx, ctl.MethodToolsSet, ctl.ToolsSetParams{Names: names}, &res)
+	return res, err
+}
+
+// Models lists the session's model registry with its active key, so a
+// controller picks without riding a picker.
+func (c *Conn) Models(ctx context.Context) (ctl.ModelsData, error) {
+	var res ctl.ModelsData
+	_, err := c.Call(ctx, ctl.MethodModelsGet, nil, &res)
+	return res, err
+}
+
+// ModelSet switches the session onto one model resolved by key, alias, id or
+// a unique suffix, session-only. During a running turn the switch queues and
+// lands at the boundary.
+func (c *Conn) ModelSet(ctx context.Context, model string) (ctl.ModelSetResult, error) {
+	var res ctl.ModelSetResult
+	_, err := c.Call(ctx, ctl.MethodModelSet, ctl.ModelSetParams{Model: model}, &res)
+	return res, err
+}
+
+// Settings lists the /settings rows: label, dotted key, resolved value with
+// its source layer, and editability with its reason.
+func (c *Conn) Settings(ctx context.Context) (ctl.SettingsData, error) {
+	var res ctl.SettingsData
+	_, err := c.Call(ctx, ctl.MethodSettingsGet, nil, &res)
+	return res, err
+}
+
+// SettingsSet applies one setting as a session override with its live
+// effects, optionally persisting to a file layer ("user" or "project"). The
+// row after the change comes back.
+func (c *Conn) SettingsSet(ctx context.Context, params ctl.SettingsSetParams) (ctl.SettingsSetResult, error) {
+	var res ctl.SettingsSetResult
+	_, err := c.Call(ctx, ctl.MethodSettingsSet, params, &res)
+	return res, err
 }
 
 // InputSet prefills the served session's editor buffer under local typing

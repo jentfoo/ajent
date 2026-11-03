@@ -155,6 +155,17 @@ func newInteractionBroker(ui localDialogs, onBegin func(interactionInfo), onEnd 
 	return &interactionBroker{ui: ui, onBegin: onBegin, onEnd: onEnd}
 }
 
+// localRacer narrows the run's terminal onto the broker's racer type. Serve
+// mode owns no terminal, and its zero *tui.UI must join as no racer at all:
+// a typed-nil one reads as present, so the first dialog panics reaching for
+// the missing surface instead of holding for a controller.
+func localRacer(term *tui.UI) localDialogs {
+	if term == nil {
+		return nil
+	}
+	return term
+}
+
 // observe chains announcement hooks ahead of any already installed, so a
 // late attach (the control server) sees dialogs without displacing earlier
 // observers. Safe before any dialog opens.

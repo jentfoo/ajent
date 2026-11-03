@@ -268,7 +268,7 @@ type SessionRenamedData struct {
 // never echo here.
 type InteractionPendingData struct {
 	ID      uint64   `json:"id"`
-	Kind    string   `json:"kind"` // display hint: pick, multipick, select, confirm, input, secret, ask, decision
+	Kind    string   `json:"kind"` // pick, multipick, select, confirm, input, secret, ask, decision
 	Prompt  string   `json:"prompt"`
 	Subject string   `json:"subject,omitempty"`
 	Options []string `json:"options,omitempty"` // choice labels an index answer selects from
@@ -344,6 +344,11 @@ type ModeResult struct {
 	Mode string `json:"mode,omitempty"`
 }
 
+// ModeSetParams sets the permission mode by name rather than stepping it.
+type ModeSetParams struct {
+	Mode string `json:"mode"`
+}
+
 // InputSetParams prefills the editor buffer.
 type InputSetParams struct {
 	Text string `json:"text"`
@@ -383,6 +388,74 @@ type ResolveParams struct {
 	Cancel  bool    `json:"cancel,omitempty"`
 }
 
+// ToolsSetParams reshapes the enabled tool set: a free replacement before
+// this run's first dispatched prompt, enable-only after, the same rule the
+// /tools pickers apply. Unknown names are ignored, and after the first prompt
+// names left out keep their state rather than disabling anything.
+type ToolsSetParams struct {
+	Names []string `json:"names"`
+}
+
+// ToolsSetResult reports the toggleable rows after the reshape, the same full
+// replacement the tools event carries.
+type ToolsSetResult struct {
+	Rows []ToolState `json:"rows"`
+}
+
+// ModelsData lists the registry's models (config plus discovery, no compiled
+// entries) with the active key, so a controller picks without riding a picker.
+type ModelsData struct {
+	Active string       `json:"active"`
+	Models []ModelState `json:"models"`
+}
+
+// ModelSetParams switches the session onto one model resolved by key, alias,
+// id or a unique suffix. The switch is session-only: the user's config layer
+// is never rewritten.
+type ModelSetParams struct {
+	Model string `json:"model"`
+}
+
+// ModelSetResult names the model the switch resolved to. During a running
+// turn the switch queues and lands at the boundary, announced by its
+// status.model event.
+type ModelSetResult struct {
+	Model ModelState `json:"model"`
+}
+
+// SettingsData is the settings.get result: the /settings rows, one per
+// editable dotted key, in menu order.
+type SettingsData struct {
+	Rows []SettingRow `json:"rows"`
+}
+
+// SettingRow is one /settings row as the wire carries it: its label, dotted
+// key, resolved value with the layer it came from, and whether it can be
+// edited right now. Reason names why not when it cannot.
+type SettingRow struct {
+	Label    string          `json:"label"`
+	Key      string          `json:"key,omitempty"`
+	Value    json.RawMessage `json:"value,omitempty"`
+	Source   string          `json:"source,omitempty"` // default|user|project|local|session|active
+	Editable bool            `json:"editable"`
+	Reason   string          `json:"reason,omitempty"`
+}
+
+// SettingsSetParams applies one setting as a session override with its live
+// effects, optionally copying it to a config file layer. Value carries the
+// JSON value in the row's own shape (bool, number, string, or a list of tool
+// names for tools.enabled).
+type SettingsSetParams struct {
+	Key     string          `json:"key"`
+	Value   json.RawMessage `json:"value"`
+	Persist string          `json:"persist,omitempty"` // user | project
+}
+
+// SettingsSetResult reports the row after the change.
+type SettingsSetResult struct {
+	Row SettingRow `json:"row"`
+}
+
 // SeatLostData announces one force takeover of the control seat: From names
 // the displaced holder (empty when it never announced one), To its successor.
 type SeatLostData struct {
@@ -400,9 +473,9 @@ type State struct {
 	Session      Session                  `json:"session"`
 	Workspace    string                   `json:"workspace"`
 	Cwd          string                   `json:"cwd"`
-	Head         string                   `json:"head"` // transcript head entry id, for branching a file read
+	Head         string                   `json:"head"` // transcript head entry id (fork point)
 	Model        ModelState               `json:"model"`
-	Permission   string                   `json:"permission"` // barrier mode name, "" when no gate exists
+	Permission   string                   `json:"permission"` // barrier mode name, "" if none
 	Tools        []ToolState              `json:"tools"`
 	Usage        UsageState               `json:"usage"`
 	Context      ContextData              `json:"context"`

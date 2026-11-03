@@ -406,6 +406,49 @@ func TestRunPump(t *testing.T) {
 	})
 }
 
+func TestRunCommandRecoversPanickingHandler(t *testing.T) {
+	t.Parallel()
+
+	ui := newPumpTestUI(t)
+	hubUI := wrapUI(t, ui)
+	var log emitLog
+	log.attach(hubUI.hub)
+
+	cmds := command.NewRegistry()
+	cmds.Register(command.Command{
+		Name: "boom", Description: "test",
+		Handler: func(context.Context, string, command.Console) error { panic("kaboom") },
+	})
+	handled := make(chan struct{}, 1)
+	cmds.Register(command.Command{
+		Name: "fine", Description: "test",
+		Handler: func(context.Context, string, command.Console) error {
+			handled <- struct{}{}
+			return nil
+		},
+	})
+	console := &uiConsole{ui: hubUI, commands: cmds, lane: newStateLane(), q: &steerQueue{}}
+
+	boom, ok := cmds.Get("boom")
+	require.True(t, ok)
+	require.NotPanics(t, func() { runCommand(t.Context(), boom, "", console) })
+
+	// the fault surfaces as an error notice, never a dead session
+	require.Eventually(t, func() bool { return len(log.named(ctl.EventNotice)) > 0 },
+		time.Second, time.Millisecond)
+	var nd ctl.NoticeData
+	require.NoError(t, log.named(ctl.EventNotice)[0].Decode(&nd))
+	assert.Contains(t, nd.Text, "/boom")
+	assert.Contains(t, nd.Text, "kaboom")
+	assert.Equal(t, "error", nd.Level)
+
+	// the pump keeps dispatching after a fault
+	fine, ok := cmds.Get("fine")
+	require.True(t, ok)
+	runCommand(t.Context(), fine, "", console)
+	<-handled
+}
+
 func TestStartDrain(t *testing.T) {
 	t.Run("parked_gate", func(t *testing.T) {
 		t.Run("parked_queue_holds", func(t *testing.T) {

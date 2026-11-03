@@ -16,7 +16,7 @@ import (
 )
 
 // headlessFlagNames are the flags that only mean something alongside --prompt.
-var headlessFlagNames = []string{"output", "allow-tools", "deny-tools", "stats"}
+var headlessFlagNames = []string{"output", "allow-tools", "deny-tools", "no-tools", "stats"}
 
 // defaultStaleDays is the --delete-old window when no day count is given.
 const defaultStaleDays = 28
@@ -52,6 +52,7 @@ type cliFlags struct {
 	readOnly    bool
 	allowAuto   bool
 	autoWrite   bool
+	noTools     bool
 	allowTools  []string
 	denyTools   []string
 
@@ -119,6 +120,8 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"start in auto mode: unverifiable calls are model-classified, and a one-shot takes the verdict as final")
 	fs.BoolVar(&f.autoWrite, "allow-autowrite", false,
 		"like --allow-auto plus workspace-confined writes run without approval")
+	fs.BoolVar(&f.noTools, "no-tools", false,
+		"one-shot: withhold the whole tool set, built-ins and MCP alike")
 	fs.StringSliceVar(&f.allowTools, "allow-tools", nil,
 		"one-shot: registered tool names to offer and pre-allow, or single bash command heads to allow for the session")
 	fs.StringSliceVar(&f.denyTools, "deny-tools", nil, "one-shot: tool names to withhold")
@@ -222,8 +225,11 @@ func (f cliFlags) validate() error {
 		return nil
 	}
 	// the permission-mode flags conflict in every mode, interactive and one-shot
-	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite) > 1 {
-		return errors.New("--allow-all, --read-only, --allow-auto and --allow-autowrite are mutually exclusive")
+	if countTrue(f.allowAll, f.readOnly, f.allowAuto, f.autoWrite, f.noTools) > 1 {
+		return errors.New("--allow-all, --read-only, --allow-auto, --allow-autowrite and --no-tools are mutually exclusive")
+	}
+	if f.noTools && (len(f.allowTools) > 0 || len(f.denyTools) > 0) {
+		return errors.New("--no-tools withholds the whole set, so --allow-tools and --deny-tools name nothing to allow or deny")
 	}
 	if f.deleteForce && !f.deleteGiven {
 		return errors.New("--force only applies to --delete")
@@ -260,6 +266,8 @@ func (f cliFlags) validate() error {
 // scope returns the tool scope this command line asks for.
 func (f cliFlags) scope() app.ToolScope {
 	switch {
+	case f.noTools:
+		return app.ToolScopeNone
 	case f.allowAll:
 		return app.ToolScopeAllowAll
 	case f.readOnly:

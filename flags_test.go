@@ -260,6 +260,12 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"delete_with_blank_prompt", []string{"--delete", "a", "-p", "  "}, false},
 		{"attach_socket", []string{"--attach", "/tmp/x.sock"}, true},
 		{"attach_with_session_name", []string{"--attach=/x.sock", "--session", "fix"}, false},
+		{"no_tools_prompt", []string{"-p", "hi", "--no-tools"}, true},
+		{"no_tools_without_prompt", []string{"--no-tools"}, false},
+		{"no_tools_with_read_only", []string{"-p", "hi", "--no-tools", "--read-only"}, false},
+		{"no_tools_with_allow_all", []string{"-p", "hi", "--no-tools", "--allow-all"}, false},
+		{"no_tools_with_allow_tools", []string{"-p", "hi", "--no-tools", "--allow-tools", "bash"}, false},
+		{"no_tools_with_deny_tools", []string{"-p", "hi", "--no-tools", "--deny-tools", "bash"}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -310,6 +316,7 @@ func TestCliFlagsValidate(t *testing.T) {
 			{"system_prompt_refused", []string{"--attach", "/x.sock", "--system", "x"}, "only applies to a local run"},
 			{"output_format_refused", []string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
 			{"delete_combined", []string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
+			{"no_tools_refused", []string{"--attach", "/x.sock", "--no-tools"}, "only applies to a local run"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				f, perr := parseFlags(tc.argv)
@@ -339,6 +346,24 @@ func TestStatsFlagIsHeadlessOnly(t *testing.T) {
 		require.NoError(t, err)
 		assert.NoError(t, f.validate())
 		assert.True(t, f.stats)
+	})
+}
+
+func TestNoToolsScope(t *testing.T) {
+	t.Parallel()
+
+	t.Run("maps_to_none_scope", func(t *testing.T) {
+		f, err := parseFlags([]string{"-p", "hi", "--no-tools"})
+		require.NoError(t, err)
+		require.NoError(t, f.validate())
+		assert.Equal(t, app.ToolScopeNone, f.scope())
+	})
+
+	t.Run("scope_flags_still_map", func(t *testing.T) {
+		f, err := parseFlags([]string{"-p", "hi", "--read-only"})
+		require.NoError(t, err)
+		require.NoError(t, f.validate())
+		assert.Equal(t, app.ToolScopeReadOnly, f.scope())
 	})
 }
 

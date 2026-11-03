@@ -60,7 +60,7 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// the broker fronts every dialog before one can open (the resume picker
 	// below is the first), and the hub makes every later surface change and
 	// control entry cross one seam. Both exist before the first notice.
-	dialogs := newInteractionBroker(term, nil, nil)
+	dialogs := newInteractionBroker(localRacer(term), nil, nil)
 	env := agent.DetectEnvironment()
 	hub := newSessionHub(hubDeps{
 		ui: term, dialogs: dialogs, active: active,
@@ -603,6 +603,10 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		console.sess = rec
 		console.comp = comp
 	}
+	// the control server's console-backed methods (tools, models, mode,
+	// settings) apply through the same console the slash commands use. Wired
+	// before the server starts dispatching, like every other hub seam
+	hub.setConsole(console)
 	// the plan workflow needs a transcript to branch and a registry to scope,
 	// without either it is simply absent and nothing else changes.
 	ctl := newPlanController(planDeps{
@@ -682,9 +686,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// the rewind entry both fronts share: a manual double-Esc and a remote
 	// session.rewind run one transaction, state swap then head move then
 	// publish, so live state and the writer head cannot diverge and the last
-	// rewind wins whichever surface sent it. Wired after the plan controller
-	// exists; a control request that races the wiring sees the unavailable
-	// error, never a partial rewind.
+	// rewind wins whichever surface sent it. Wired before the control server
+	// starts dispatching, like every hub seam.
 	if rec != nil {
 		// dispatched work the rewind must refuse against: a running turn, or a
 		// drain that owns the next one in the between-turns window
@@ -731,10 +734,15 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	// a first start with nothing configured walks through the first provider
 	// (the probe and prompts abandon when the user quits mid-setup, so the exit is
 	// never held up by a discovery pass). It rides appRoot, which cancels on quit.
+	// Serve mode skips it: no terminal renders the wizard, so its skip notice
+	// reaches controllers through the hub like every other startup notice.
 	if len(reg.ProviderNames()) == 0 {
-		if err := command.ProviderSetup(appRoot, console); err != nil {
+		skipped := "provider setup skipped; add one to ~/.ajent/" + llm.ModelsFileName
+		if serve {
+			ui.Notify(skipped, tui.LevelInfo)
+		} else if err := command.ProviderSetup(appRoot, console); err != nil {
 			if errors.Is(err, tui.ErrCancelled) {
-				ui.Notify("provider setup skipped; add one to ~/.ajent/"+llm.ModelsFileName, tui.LevelInfo)
+				ui.Notify(skipped, tui.LevelInfo)
 			} else {
 				ui.Notify("setup: "+err.Error(), tui.LevelWarn)
 			}

@@ -910,13 +910,9 @@ func entriesCoverArgv(toks []string, cmds []string, fold func(string) string) bo
 
 // entryCovered reports whether line starts with a configured command at a token boundary.
 func entryCovered(line string, cmds []string) bool {
-	for _, e := range cmds {
-		e = strings.TrimSpace(e)
-		if commandHasPrefix(line, e) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cmds, func(e string) bool {
+		return commandHasPrefix(line, strings.TrimSpace(e))
+	})
 }
 
 // toolNameCovered reports whether a non-bash tool name is covered by a configured

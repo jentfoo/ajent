@@ -26,9 +26,6 @@ func newHintBoard(set func(text, short string)) *hintBoard {
 
 // uiHintBoard writes hints to the front end's hint segment.
 func uiHintBoard(ui *hubUI) *hintBoard {
-	if ui == nil {
-		return &hintBoard{}
-	}
 	return newHintBoard(func(text, short string) {
 		ui.SetStatusSegment(segment(segHint, text, short))
 	})

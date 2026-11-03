@@ -31,10 +31,12 @@ type fakeSession struct {
 	transcriptPath string // hello names this file when set; state.get reports head
 	head           string
 	sessionID      string
-	recall         ctl.RecallResult // canned queue.recall answer
-	input          string           // last input.set text received
-	hangState      bool             // never answer state.get: the close-wakeup test hangs on it
-	hung           chan struct{}    // closed once a hangState request reaches serveConn
+	recall         ctl.RecallResult      // canned queue.recall answer
+	input          string                // last input.set text received
+	hangState      bool                  // never answer state.get: the close-wakeup test hangs on it
+	hung           chan struct{}         // closed once a hangState request reaches serveConn
+	toolsSet       []string              // last tools.set names received
+	settingSet     ctl.SettingsSetParams // last settings.set params received
 }
 
 // newFakeSession binds a socket in a short temp dir and starts accepting. It
@@ -94,6 +96,20 @@ func (f *fakeSession) inputText() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.input
+}
+
+// toolsSetNames reports the last tools.set names the fake received.
+func (f *fakeSession) toolsSetNames() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.toolsSet
+}
+
+// settingSetParams reports the last settings.set params the fake received.
+func (f *fakeSession) settingSetParams() ctl.SettingsSetParams {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.settingSet
 }
 
 // serve answers one connection until it goes away.
@@ -183,6 +199,45 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(f.recall)})
 		case ctl.MethodSeatYield:
 			_ = enc.Encode(ctl.Reply{ID: req.ID})
+		case ctl.MethodToolsSet:
+			var p ctl.ToolsSetParams
+			_ = json.Unmarshal(req.Params, &p)
+			f.mu.Lock()
+			f.toolsSet = p.Names
+			f.mu.Unlock()
+			var rows []ctl.ToolState
+			if len(p.Names) > 0 {
+				rows = []ctl.ToolState{{Name: p.Names[0], Enabled: true}}
+			}
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.ToolsSetResult{Rows: rows})})
+		case ctl.MethodModelsGet:
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.ModelsData{
+				Active: "test/alpha", Models: []ctl.ModelState{{Key: "test/alpha"}}})})
+		case ctl.MethodModelSet:
+			var p ctl.ModelSetParams
+			_ = json.Unmarshal(req.Params, &p)
+			if p.Model == "missing" {
+				_ = enc.Encode(ctl.Reply{ID: req.ID, Error: ctl.Errf(ctl.CodeNotFound, "no model matches %s", p.Model)})
+				continue
+			}
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.ModelSetResult{
+				Model: ctl.ModelState{Key: p.Model}})})
+		case ctl.MethodModeSet:
+			var p ctl.ModeSetParams
+			_ = json.Unmarshal(req.Params, &p)
+			// ModeSetParams and ModeResult share one field, so the conversion carries it
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.ModeResult(p))})
+		case ctl.MethodSettingsGet:
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.SettingsData{Rows: []ctl.SettingRow{
+				{Label: "Block images", Key: "images.block", Value: json.RawMessage("false"), Source: "default", Editable: true}}})})
+		case ctl.MethodSettingsSet:
+			var p ctl.SettingsSetParams
+			_ = json.Unmarshal(req.Params, &p)
+			f.mu.Lock()
+			f.settingSet = p
+			f.mu.Unlock()
+			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(ctl.SettingsSetResult{Row: ctl.SettingRow{
+				Label: "x", Key: p.Key, Value: p.Value, Source: "session", Editable: true}})})
 		default:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Error: ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method)})
@@ -332,6 +387,86 @@ func TestYieldSeat(t *testing.T) {
 	conn, _, _ := f.dial(t)
 
 	require.NoError(t, conn.YieldSeat(t.Context()))
+}
+
+func TestToolsSetCarriesNames(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	res, err := conn.ToolsSet(t.Context(), []string{"read", "ls"})
+	require.NoError(t, err)
+	require.Len(t, res.Rows, 1)
+	assert.Equal(t, "read", res.Rows[0].Name)
+	assert.True(t, res.Rows[0].Enabled)
+	assert.Equal(t, []string{"read", "ls"}, f.toolsSetNames())
+}
+
+func TestModels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lists", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.Models(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "test/alpha", res.Active)
+		require.Len(t, res.Models, 1)
+		assert.Equal(t, "test/alpha", res.Models[0].Key)
+	})
+
+	t.Run("set_decodes_and_reports_refusals", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.ModelSet(t.Context(), "beta")
+		require.NoError(t, err)
+		assert.Equal(t, "beta", res.Model.Key)
+
+		_, err = conn.ModelSet(t.Context(), "missing")
+		var we *ctl.Error
+		require.ErrorAs(t, err, &we)
+		assert.Equal(t, ctl.CodeNotFound, we.Code)
+	})
+}
+
+func TestModeSet(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	mode, err := conn.ModeSet(t.Context(), "auto+write")
+	require.NoError(t, err)
+	assert.Equal(t, "auto+write", mode)
+}
+
+func TestSettings(t *testing.T) {
+	t.Parallel()
+
+	t.Run("lists_rows", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.Settings(t.Context())
+		require.NoError(t, err)
+		require.Len(t, res.Rows, 1)
+		assert.Equal(t, "images.block", res.Rows[0].Key)
+		assert.Equal(t, "default", res.Rows[0].Source)
+	})
+
+	t.Run("set_round_trips", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
+
+		res, err := conn.SettingsSet(t.Context(), ctl.SettingsSetParams{
+			Key: "images.block", Value: json.RawMessage("true"), Persist: "user"})
+		require.NoError(t, err)
+		assert.Equal(t, "images.block", res.Row.Key)
+		assert.Equal(t, "session", res.Row.Source)
+		assert.JSONEq(t, "true", string(f.settingSetParams().Value))
+		assert.Equal(t, "user", f.settingSetParams().Persist)
+	})
 }
 
 // recordTo writes one JSONL transcript of two chained entries and names it in

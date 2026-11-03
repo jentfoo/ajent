@@ -24,11 +24,17 @@ const (
 	MethodSubmit      = "submit"
 	MethodInterrupt   = "interrupt"
 	MethodModeCycle   = "mode.cycle"
+	MethodModeSet     = "mode.set"
 	MethodInputSet    = "input.set"
 	MethodQueueRecall = "queue.recall"
 	MethodRewind      = "session.rewind"
 	MethodResolve     = "interaction.resolve"
 	MethodSeatYield   = "seat.yield"
+	MethodToolsSet    = "tools.set"
+	MethodModelsGet   = "models.get"
+	MethodModelSet    = "model.set"
+	MethodSettingsGet = "settings.get"
+	MethodSettingsSet = "settings.set"
 )
 
 // Event names, grouped by family. Stream events mirror the agent sink one to
@@ -92,7 +98,8 @@ const (
 	CodeObserver      = "observer"  // mutating call from a connection without the seat
 	CodeNotFound      = "not-found"
 	CodeSettled       = "settled"
-	CodeBusy          = "busy" // the target queue is full; retry once it drains
+	CodeBusy          = "busy"       // the target queue is full; retry once it drains
+	CodeUnexpected    = "unexpected" // the verb faulted mid-run; its effect may have partially applied
 )
 
 // Request is one controller line: a method call carrying a caller-chosen id

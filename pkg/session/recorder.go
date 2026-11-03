@@ -36,13 +36,6 @@ func (r *Recorder) Message(info agent.MessageInfo) {
 	}
 }
 
-// pullDropped returns and clears the first held append failure, if any.
-func (r *Recorder) pullDropped() string {
-	d := r.dropped
-	r.dropped = ""
-	return d
-}
-
 // Sink wraps next so notices persist and the file is fsynced at each turn end.
 // Write failures surface as a notice through the wrapped sink rather than
 // failing the turn, so a broken disk should not end the conversation.
@@ -99,7 +92,9 @@ func (s *recordingSink) Notice(msg string, level agent.Level) {
 // turn boundary and lets failures surface as an error-level notice rather than
 // ending the turn.
 func (s *recordingSink) TurnEnd(r agent.TurnResult) {
-	if msg := s.rec.pullDropped(); msg != "" {
+	msg := s.rec.dropped // first append failure since the last turn end
+	s.rec.dropped = ""
+	if msg != "" {
 		s.Sink.Notice(msg, agent.LevelError)
 	}
 	if err := s.rec.w.Sync(); err != nil {

@@ -101,6 +101,19 @@ func TestHeadlessTools(t *testing.T) {
 				"git_diff", "git_log", "git_show", "git_status", "grep", "ls",
 				"read", "srv__deploy", "srv__search"},
 		},
+		{
+			name:  "none_offers_nothing",
+			scope: ToolScopeNone,
+			want:  nil,
+		},
+		{
+			// the none scope is a guarantee, so --allow-tools cannot widen it
+			name:  "none_ignores_allow_and_deny",
+			scope: ToolScopeNone,
+			allow: []string{"bash", "write"},
+			deny:  []string{"read"},
+			want:  nil,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -132,6 +145,7 @@ func TestScopeBarrierMode(t *testing.T) {
 		{ToolScopeReadOnly, permit.ModeAuto, true},
 		{ToolScopeAuto, permit.ModeAuto, true},
 		{ToolScopeAutoWrite, permit.ModeAutoWrite, true},
+		{ToolScopeNone, 0, false}, // no tools exist, the configured headless default stands
 	}
 	for _, tc := range tests {
 		m, ok := tc.scope.barrierMode()

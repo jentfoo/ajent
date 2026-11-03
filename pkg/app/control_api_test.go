@@ -62,7 +62,8 @@ func TestControlAttach(t *testing.T) {
 
 		// every write method refuses the observer, each naming the holder
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind, ctl.MethodResolve} {
+			ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind,
+			ctl.MethodResolve, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			rp = two.call("obs-"+m, m, map[string]any{})
 			require.NotNil(t, rp.Error)
 			assert.Equal(t, ctl.CodeObserver, rp.Error.Code)
@@ -155,7 +156,8 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("write_methods_require_seat", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind, ctl.MethodResolve} {
+			ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind,
+			ctl.MethodResolve, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.True(t, entry.seat)
@@ -163,7 +165,8 @@ func TestControlMethods(t *testing.T) {
 	})
 
 	t.Run("read_methods_stay_open", func(t *testing.T) {
-		for _, m := range []string{ctl.MethodState, ctl.MethodAttach} {
+		for _, m := range []string{ctl.MethodState, ctl.MethodAttach,
+			ctl.MethodModelsGet, ctl.MethodSettingsGet} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.False(t, entry.seat)
@@ -172,7 +175,8 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("mutating_verbs_run_the_lane", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt,
-			ctl.MethodModeCycle, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind} {
+			ctl.MethodModeCycle, ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall,
+			ctl.MethodRewind, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
 			assert.True(t, entry.lane)
@@ -263,14 +267,9 @@ func TestControlSubmit(t *testing.T) {
 			assert.Equal(t, ctl.CodeBadRequest, rp.Error.Code)
 		}
 
-		// the hub has no submit seam yet: the run is still starting
-		rp := c.call("u", ctl.MethodSubmit, map[string]any{"line": "hi"})
-		require.NotNil(t, rp.Error)
-		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
-
 		// a full prompt queue refuses busy instead of parking the control lane
 		rig.hub.setSubmitLine(func(string, string, string) error { return errPromptQueueFull })
-		rp = c.call("b", ctl.MethodSubmit, map[string]any{"line": "hi"})
+		rp := c.call("b", ctl.MethodSubmit, map[string]any{"line": "hi"})
 		require.NotNil(t, rp.Error)
 		assert.Equal(t, ctl.CodeBusy, rp.Error.Code)
 		assert.Contains(t, rp.Error.Message, "retry")
@@ -975,17 +974,6 @@ func TestControlRewind(t *testing.T) {
 		close(cw.release)
 		require.NoError(t, <-turnDone) // release unblocks it; the turn ends normally
 	})
-
-	t.Run("unavailable_while_starting", func(t *testing.T) {
-		rig := newServeRig(t, nil)
-		c := dialControl(t, rig.path)
-		c.hello()
-		attachControl(t, c, "early")
-
-		rp := c.call("rw", ctl.MethodRewind, map[string]any{"head": "01ANY"})
-		require.NotNil(t, rp.Error)
-		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
-	})
 }
 
 // wireControlRewind arms the rewind seam over one rig with a live agent and
@@ -1118,6 +1106,54 @@ func toolRow(t *testing.T, rows []ctl.ToolState, name string) ctl.ToolState {
 	}
 	t.Fatalf("tool %s missing from snapshot", name)
 	return ctl.ToolState{}
+}
+
+func TestControlPanicRecovery(t *testing.T) {
+	// not parallel: the rig pins AJENT_HOME
+
+	// every registered handler is wrapped at init, so a faulting verb replies
+	// unexpected instead of killing the goroutine serving it. nil-ing the
+	// console's registry drives a genuine deref through the real handlers.
+
+	t.Run("off_lane_read_survives", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		console := wireControlConsole(t, rig)
+		reg := console.reg
+		console.reg = nil
+
+		rp := c.call("m1", ctl.MethodSettingsGet, map[string]any{})
+		require.NotNil(t, rp.Error)
+		assert.Equal(t, ctl.CodeUnexpected, rp.Error.Code)
+		assert.Contains(t, rp.Error.Message, "faulted")
+
+		// the conn's read loop still serves the next call
+		console.reg = reg
+		rp = c.call("m2", ctl.MethodSettingsGet, map[string]any{})
+		require.Nil(t, rp.Error)
+	})
+
+	t.Run("lane_write_survives", func(t *testing.T) {
+		rig := newControlRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "panic")
+		console := wireControlConsole(t, rig)
+		reg := console.reg
+		console.reg = nil
+
+		rp := c.call("s1", ctl.MethodSettingsSet,
+			map[string]any{"key": "model", "value": "alpha"})
+		require.NotNil(t, rp.Error)
+		assert.Equal(t, ctl.CodeUnexpected, rp.Error.Code)
+
+		// the executor loop still runs the next verb
+		console.reg = reg
+		rp = c.call("s2", ctl.MethodSettingsSet,
+			map[string]any{"key": "model", "value": "alpha"})
+		require.Nil(t, rp.Error)
+	})
 }
 
 func TestControlEvents(t *testing.T) {

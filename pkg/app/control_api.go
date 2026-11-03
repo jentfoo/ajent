@@ -33,19 +33,48 @@ type seqResult struct {
 
 // controlMethods is every method a controller may call. Adding one means adding
 // its entry here; the seat and lane flags sit beside the handler that obeys
-// them.
-var controlMethods = map[string]controlMethod{
+// them. guardMethods wraps every handler, so a faulting verb answers its
+// caller wherever it runs.
+var controlMethods = guardMethods(map[string]controlMethod{
 	ctl.MethodState:  {handle: (*controlConn).stateGet},
 	ctl.MethodAttach: {handle: (*controlConn).attachCall}, // callable before any seat exists
 
 	ctl.MethodSubmit:      {seat: true, lane: true, handle: (*controlConn).submitCall},
 	ctl.MethodInterrupt:   {seat: true, lane: true, priority: true, handle: (*controlConn).interruptCall},
 	ctl.MethodModeCycle:   {seat: true, lane: true, handle: (*controlConn).modeCycleCall},
+	ctl.MethodModeSet:     {seat: true, lane: true, handle: (*controlConn).modeSetCall},
 	ctl.MethodInputSet:    {seat: true, lane: true, handle: (*controlConn).inputSetCall},
 	ctl.MethodQueueRecall: {seat: true, lane: true, handle: (*controlConn).queueRecallCall},
 	ctl.MethodRewind:      {seat: true, lane: true, handle: (*controlConn).rewindCall},
 	ctl.MethodResolve:     {seat: true, handle: (*controlConn).resolveCall}, // answers stay off the lane
 	ctl.MethodSeatYield:   {seat: true, handle: (*controlConn).yieldCall},
+	ctl.MethodToolsSet:    {seat: true, lane: true, handle: (*controlConn).toolsSetCall},
+	ctl.MethodModelSet:    {seat: true, lane: true, handle: (*controlConn).modelSetCall},
+	ctl.MethodSettingsSet: {seat: true, lane: true, handle: (*controlConn).settingsSetCall},
+
+	ctl.MethodModelsGet:   {handle: (*controlConn).modelsGetCall}, // reads answer any connection
+	ctl.MethodSettingsGet: {handle: (*controlConn).settingsGetCall},
+})
+
+// guardMethods wraps every registered handler once, converting a panic into
+// an unexpected refusal. No single execution point exists: lane verbs run on
+// the executor goroutine, off-lane reads on the conn's read loop, so the
+// wrap travels with the handler and a fault never kills either goroutine.
+func guardMethods(methods map[string]controlMethod) map[string]controlMethod {
+	wrapped := make(map[string]controlMethod, len(methods))
+	for name, m := range methods {
+		h := m.handle
+		m.handle = func(c *controlConn, params []byte) (result any, rerr *ctl.Error) {
+			defer func() {
+				if p := recover(); p != nil {
+					result, rerr = nil, ctl.Errf(ctl.CodeUnexpected, "%s faulted: %v", name, p)
+				}
+			}()
+			return h(c, params)
+		}
+		wrapped[name] = m
+	}
+	return wrapped
 }
 
 // stateGet answers one snapshot read with the seat section from this
@@ -274,9 +303,6 @@ func (s *controlServer) inputSet(params []byte) (any, *ctl.Error) {
 // like interrupt naming nothing stopped; an item whose payload cannot cross the
 // wire refuses in place and stays queued.
 func (s *controlServer) queueRecall() (any, *ctl.Error) {
-	if s.hub.q == nil {
-		return nil, ctl.Errf(ctl.CodeUnavailable, "recall unavailable: the run is still starting")
-	}
 	id, text, err := s.hub.q.recallInto()
 	if err != nil {
 		return nil, ctl.Errf(ctl.CodeUnavailable, "recall refused: %v", err)
@@ -295,11 +321,7 @@ func (s *controlServer) rewind(params []byte) (any, *ctl.Error) {
 	if strings.TrimSpace(p.Head) == "" {
 		return nil, ctl.Errf(ctl.CodeBadRequest, "session.rewind needs a head entry id")
 	}
-	rewindTo := s.hub.rewindEntry()
-	if rewindTo == nil {
-		return nil, ctl.Errf(ctl.CodeUnavailable, "rewind unavailable: the run is still starting")
-	}
-	head, err := rewindTo(p.Head, rewindCauseRewind)
+	head, err := s.hub.rewindEntry()(p.Head, rewindCauseRewind)
 	if err != nil {
 		// an unknown head is not-found, every other refusal names what happened
 		code := ctl.CodeUnavailable

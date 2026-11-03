@@ -194,7 +194,8 @@ func RunHeadless(o HeadlessOptions) int {
 	for _, w := range mwarns {
 		notify("mcp: "+w, agent.LevelWarn)
 	}
-	if merr == nil {
+	if merr == nil && o.Scope != ToolScopeNone {
+		// the none scope offers no tools, so no server is worth spawning
 		mgr := mcp.New(servers, mcp.Options{
 			Registrar: registryAdapter{toolsReg},
 			Workspace: config.Cwd(),
@@ -353,8 +354,11 @@ func headlessOutcome(err error, res agent.TurnResult, answer string) (string, in
 // headlessTools returns the tool names to enable for scope, then applies the allow and deny
 // adjustments. Built-in names follow the scope regardless of tools.enabled, and every other
 // source keeps its registered state unless --allow-tools names it, so an unlisted server
-// disabled in mcp.json stays off.
+// disabled in mcp.json stays off. The none scope answers no names at all: nothing is offered.
 func headlessTools(reg *tools.Registry, scope ToolScope, allow, deny []string) []string {
+	if scope == ToolScopeNone {
+		return nil // --no-tools withholds the whole set, --allow-tools included
+	}
 	inScope := func(name string) bool {
 		if name == tools.ToolAskUser { // no human to answer a question headless
 			return false
