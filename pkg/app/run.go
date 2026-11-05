@@ -73,6 +73,19 @@ func Run(o RunOptions) int {
 		warnings = append(warnings, err.Error()+", using defaults")
 		keymap = tui.Keymap{}
 	}
+
+	// attach mode mirrors a running session over its control socket: it opens no
+	// local transcript and needs no models file, so it branches before either loads.
+	// The remote run decides model, tools and permission mode; only the local
+	// settings above are this process's own. A bare --attach resolves to the
+	// live-session picker inside RunAttach.
+	if o.AttachGiven {
+		return RunAttach(AttachOptions{
+			Socket: o.Attach, Mode: mode, Color: color,
+			Palette: pal, Images: imagesName, Keymap: keymap, Warnings: warnings,
+		})
+	}
+
 	tools.SetImagesEnabled(!set.Settings().Images.Block)
 	tools.ApplyLimits(tools.LimitsFrom(set.Settings().Tools.Limits))
 
@@ -88,6 +101,21 @@ func Run(o RunOptions) int {
 	// -m already activated during the build: the flag layer folds into DefaultModel,
 	// so Active() names it, or the first-model fallback when the name does not resolve.
 	active := reg.Active()
+
+	// serve mode replaces the terminal entirely: the control socket is the only
+	// front end, so it is decided before any stream classification. It implies
+	// control whatever control.enabled says: a serve run without a socket has
+	// no prompt source at all, which is useless rather than safer.
+	if o.Serve {
+		return RunServe(ServeOptions{
+			Set: set, Reg: reg, Active: active,
+			SessMode:     o.SessMode,
+			SessTarget:   o.SessTarget,
+			SessResolved: o.SessResolved,
+			Warnings:     warnings,
+			Scope:        o.Scope,
+		})
+	}
 
 	// a one-shot run never opens a terminal; neither does a piped invocation.
 	// Both settle every permission ask without a dialog, so they share the
@@ -154,12 +182,35 @@ func Run(o RunOptions) int {
 		go version.CheckForUpdate(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 	}
 
-	resumeLabel := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope)
+	resumeLabel, derr := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope)
+	if derr != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "ajent:", derr)
+		return ExitUsage
+	}
 
 	// tell the user how to get back to this conversation
 	ui.Close()
 	if resumeLabel != "" {
 		fmt.Print(resumeHint(resumeLabel))
+	}
+	return ExitOK
+}
+
+// RunServe drives the session with the control socket as its only front end
+// and returns the process exit code. No terminal exists: prompts arrive over
+// the socket, dialogs hold for a controller, and the run ends on signal. The
+// resume hint lands on stderr, where a supervisor can read it.
+func RunServe(o ServeOptions) int {
+	for _, w := range o.Warnings {
+		_, _ = fmt.Fprintln(os.Stderr, w)
+	}
+	label, err := Driver(nil, o.Set, o.Reg, o.Active, o.SessMode, o.SessTarget, o.SessResolved, nil, o.Scope)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
+		return ExitUsage
+	}
+	if label != "" {
+		_, _ = fmt.Fprint(os.Stderr, resumeHint(label))
 	}
 	return ExitOK
 }

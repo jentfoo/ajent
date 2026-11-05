@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -17,9 +18,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/go-analyze/bulk"
+
 	"github.com/jentfoo/ajent/pkg/agent"
+	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/config"
+	"github.com/jentfoo/ajent/pkg/ctl"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/session"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -134,6 +140,94 @@ func TestRewindStateRebuild(t *testing.T) {
 	}))
 }
 
+func TestRewindClosesOpenPicker(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{
+			"p": {Models: []llm.ModelConfig{{ID: "m"}}},
+		},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-pick.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/m"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+	u1, err := w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, err)
+
+	// nothing armed: a rewind closes nothing and posts no notice
+	assert.False(t, r.closePick())
+
+	ag := agent.New(&agent.State{Model: llm.Model{ID: "p/m"}, Tokens: tokens.New(llm.Model{ID: "p/m"})}, agent.Options{
+		Provider: func(llm.Model) (llm.Provider, error) {
+			return &llm.ScriptedProvider{}, nil
+		},
+		Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+	})
+	r.busy = func() bool { return ag.Running() }
+
+	var opened atomic.Bool
+	b := newInteractionBroker(nil, func(interactionInfo) { opened.Store(true) }, nil)
+	ui := newSessionHub(hubDeps{dialogs: b}).ui
+	var log emitLog
+	log.attach(ui.hub)
+	// the driver wires branch.changed onto the switch callback; mirror that here
+	r.onSwitch = func(_ []llm.Message, cause string) { ui.hub.setHead(w.Head(), cause) }
+
+	var ok, returned atomic.Bool
+	go func() {
+		_, got := r.pickRewind(ui)
+		ok.Store(got)
+		returned.Store(true)
+	}()
+	require.Eventually(t, opened.Load, ctlWait, 5*time.Millisecond)
+
+	// a rewind from the other surface: one transaction closes the armed picker
+	head, err := r.rewindTo(ui, ag, reg, u1.ID, rewindCauseRewind)
+	require.NoError(t, err)
+	assert.Equal(t, readEntriesRewind(t, p)[0].ID, head) // rewound onto the prompt's parent
+	require.Eventually(t, returned.Load, ctlWait, 5*time.Millisecond)
+	assert.False(t, ok.Load()) // the closed picker answers its surface as a cancellation
+
+	// the closing notice rides the transient family, beside the branch change
+	require.Len(t, log.noticesSeen(), 1) // and it is the only notice this rewind posts
+	assert.Contains(t, log.noticesSeen(),
+		"|rewind picker closed: the session moved under it")
+	branches := log.named(ctl.EventBranchChanged)
+	require.Len(t, branches, 1)
+
+	// disarmed once returned: the next rewind closes nothing
+	assert.False(t, r.closePick())
+}
+
+func TestPickRewindDisarmsOnAnswer(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "2026-01-02T03-04-05Z-pick.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "hello")})
+	require.NoError(t, err)
+
+	local := &scriptedLocal{picks: []int{0}}
+	b := newInteractionBroker(local, nil, nil)
+	ui := newSessionHub(hubDeps{dialogs: b}).ui
+
+	id, ok := r.pickRewind(ui)
+	require.True(t, ok)
+	assert.NotEmpty(t, id)
+	assert.False(t, r.closePick()) // the answer disarmed the cancel
+}
+
 func TestInitialRow(t *testing.T) {
 	t.Parallel()
 
@@ -206,7 +300,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 		Version: session.Version(), Model: "p/a",
 	})
 	require.NoError(t, err)
-	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
 
 	// grow a chain on model a
 	a := agent.New(&agent.State{Model: llm.Model{ID: "a"}, Tools: []string{tools.ToolBash}, Tokens: tokens.New(llm.Model{ID: "a"})}, agent.Options{
@@ -231,7 +325,7 @@ func TestRewindKeepsCurrentModel(t *testing.T) {
 	// rewind onto the first user message and restore the fork model: it must stay b
 	save, ok := r.liveModel(a)
 	require.True(t, ok)
-	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, "rewind: "))
+	require.NoError(t, r.switchState(nil, a, reg, branch[1].ID, rewindCauseRewind, "rewind: "))
 	require.NoError(t, r.restoreForkModel(nil, a, reg, save))
 
 	var got llm.Model
@@ -471,11 +565,6 @@ func TestResumeByID(t *testing.T) {
 	assert.ErrorIs(t, err, session.ErrNotFound)
 }
 
-// TestResumeSyncsActiveModel pins the resume fix: a transcript naming p/b must
-// make the registry's active entry follow, so /model preselects and names the
-// model the session runs instead of the config default. Before the sync a
-// restored session kept Active on the default while state ran p/b, so picking
-// p/b read as a silent no-op.
 func TestResumeSyncsActiveModel(t *testing.T) {
 	t.Parallel()
 
@@ -513,15 +602,12 @@ func TestResumeSyncsActiveModel(t *testing.T) {
 	require.NoError(t, err)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	assert.Equal(t, "p/b", st.Model.Key())
 	assert.Equal(t, "p/b", reg.Active().Key()) // the /model preselect follows the resume
 }
 
-// A session-scoped compaction.threshold must survive --resume: it is stamped into
-// the registry before state resolution so the trigger, the context bar and the band
-// ceiling read one number. Before the fix the resumed ledger kept the global 0.8.
 func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	t.Parallel()
 
@@ -569,7 +655,7 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	require.NoError(t, err)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	// the session override 0.5 survives resume onto a model with no declared one,
 	// so the trigger and the bar read it rather than the global default.
@@ -580,10 +666,6 @@ func TestResumeAppliesSessionCompactionThreshold(t *testing.T) {
 	assert.Equal(t, at, cs.Compact) // the ledger's compact term follows the resumed threshold
 }
 
-// A recorded tools.enabled must survive resume: the rebuilt state carries it (so
-// the driver's post-registration re-apply and the MCP restore set see it) and the
-// live registry reflects it. Subagents were off in the recorded frame, so the
-// trio registering after the rebuild must not resurrect them.
 func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	t.Parallel()
 
@@ -631,7 +713,7 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	// the recorded frame lands in state, feeding the MCP restore set
 	assert.Equal(t, []string{"read", "write", "edit", "grep", "find", "ls"}, st.Tools)
@@ -652,8 +734,6 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	assert.True(t, toolsReg.IsEnabled(tools.ToolGrep))
 }
 
-// A recorded empty set means the session ran with every tool off: resume comes
-// back all-off rather than the config default, and a late registration stays off.
 func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	t.Parallel()
 
@@ -700,7 +780,7 @@ func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	// the empty frame survives as empty, not nil, feeding every restore path
 	assert.NotNil(t, st.Tools)
@@ -806,8 +886,6 @@ func TestCheckSessionTargetRefusesNewer(t *testing.T) {
 	assert.ErrorContains(t, err, "newer session format")
 }
 
-// a damaged transcript never lists, so its full path is the only handle: resume
-// refuses it with the removal hint while a readable file opens by its path too
 func TestOpenSessionDamagedTranscript(t *testing.T) {
 	t.Parallel()
 
@@ -827,8 +905,6 @@ func TestOpenSessionDamagedTranscript(t *testing.T) {
 	assert.Equal(t, healthy.Path(), w.Path())
 }
 
-// --continue over a listing that is empty only because the directory's remaining
-// transcripts are damaged starts fresh, loudly about what it left behind
 func TestOpenSessionContinueOverDamaged(t *testing.T) {
 	t.Parallel()
 
@@ -1035,10 +1111,6 @@ func textOf(m llm.Message) string {
 	return ""
 }
 
-// TestSwitchStateSeedsBase covers a ledger built by session.State or minted for a
-// new root: neither carries the constant request overhead, so without seeding it
-// here a rewind drops the system prompt and tool block out of the bar entirely,
-// and it stays dropped until the next turn starts.
 func TestSwitchStateSeedsBase(t *testing.T) {
 	t.Parallel()
 
@@ -1068,16 +1140,13 @@ func TestSwitchStateSeedsBase(t *testing.T) {
 
 	// an empty head starts a new root: no messages, but the next request still
 	// carries the system prompt and the committed tool block
-	require.NoError(t, r.switchState(nil, ag, reg, "", "rewind: "))
+	require.NoError(t, r.switchState(nil, ag, reg, "", rewindCauseRewind, "rewind: "))
 	cs := st.Tokens.Context()
 	assert.Equal(t, wantBase, cs.Used)
 	assert.True(t, cs.Estimated) // a base is an estimate, so the bar says so
 	assert.Equal(t, 100000, cs.Window)
 }
 
-// TestSwitchStateKeepsWindowWithoutModel covers a branch that names no model of
-// its own: the rebuilt ledger has a zero window, which would rescale the bar off
-// the compaction threshold onto the raw context size.
 func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	t.Parallel()
 
@@ -1103,7 +1172,7 @@ func TestSwitchStateKeepsWindowWithoutModel(t *testing.T) {
 	r.rec.Message(agent.MessageInfo{Message: llm.Text(llm.RoleUser, "hello there")})
 
 	entries := readEntriesRewind(t, p)
-	require.NoError(t, r.switchState(nil, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	require.NoError(t, r.switchState(nil, ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: "))
 
 	cs := st.Tokens.Context()
 	assert.Equal(t, 100000, cs.Window) // framed by the live model, not left at zero
@@ -1135,13 +1204,9 @@ func heldTurnAgent(t *testing.T) (*agent.Agent, *agent.State, func(), func()) {
 	start := func() {
 		began.Store(true)
 		go func() { errCh <- ag.Prompt(ctx, agent.Input{Text: "held"}) }()
-		select {
-		case <-bp.onCreate:
-		case <-time.After(5 * time.Second):
-			// start may run off the test goroutine (a switch hook), so no Fatal here
-			t.Error("the held turn never started")
-			return
-		}
+		// start may run off the test goroutine (a switch hook): a stall fails
+		// via the test timeout rather than t.Fatal on a foreign goroutine
+		<-bp.onCreate
 		assert.Eventually(t, func() bool { return ag.Running() }, 5*time.Second, 5*time.Millisecond)
 	}
 	release := func() {
@@ -1185,14 +1250,14 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	var resumed bool
 	r := &sessRec{
 		w: w, rec: session.NewRecorder(w),
-		onSwitch:   func([]llm.Message) { switched = true },
+		onSwitch:   func([]llm.Message, string) { switched = true },
 		resumeAuto: func() { resumed = true },
 	}
 
 	entries := readEntriesRewind(t, p)
 	ag, st, release := holdTurn(t)
 
-	err = r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: ")
+	err = r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: ")
 
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head()) // the head never moved
@@ -1206,7 +1271,7 @@ func TestSwitchStateRefusedMidTurn(t *testing.T) {
 	}, 2*time.Second, 5*time.Millisecond)
 
 	release()
-	require.NoError(t, r.switchState(ui, ag, reg, entries[len(entries)-1].ID, "rewind: "))
+	require.NoError(t, r.switchState(wrapUI(t, ui), ag, reg, entries[len(entries)-1].ID, rewindCauseRewind, "rewind: "))
 	assert.True(t, switched) // the retry fires what the refusal held back
 	assert.True(t, resumed)
 	assert.Equal(t, entries[len(entries)-1].ID, w.Head())
@@ -1225,18 +1290,18 @@ func TestRestoreForkModelRefusedMidTurn(t *testing.T) {
 	w, err := session.Create(p, session.SessionData{Version: session.Version()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
-	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
 
 	m, err := reg.Resolve("p/b")
 	require.NoError(t, err)
 	ag, st, release := holdTurn(t)
 
-	err = r.restoreForkModel(ui, ag, reg, m)
+	err = r.restoreForkModel(wrapUI(t, ui), ag, reg, m)
 	require.ErrorIs(t, err, errTurnRunning)
 	assert.Equal(t, "m", st.Model.ID) // the live model is untouched
 
 	release()
-	require.NoError(t, r.restoreForkModel(ui, ag, reg, m))
+	require.NoError(t, r.restoreForkModel(wrapUI(t, ui), ag, reg, m))
 	assert.Equal(t, "b", st.Model.ID)
 }
 
@@ -1266,7 +1331,7 @@ func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
-	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
 	_, err = w.Append(session.TypeMessage,
 		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
 	require.NoError(t, err)
@@ -1274,11 +1339,12 @@ func TestRewindCaptureRefusedMidTurn(t *testing.T) {
 	before := out()
 
 	ag, _, start, release := heldTurnAgent(t)
+	r.busy = func() bool { return ag.Running() }
 	start() // claim the loop first, so the answered picker always refuses at capture
 	rewound := make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	// one exclusive filter answers the picker; readLines queues it until the
 	// picker opens, so ordering against start above stays deterministic
@@ -1321,7 +1387,7 @@ func TestRewindRefusedAfterSwitch(t *testing.T) {
 	ag.WithState(func(s *agent.State) { s.Model = b }) // the live switch the rewind keeps
 	// discardStaged fires between the head move and the restore: land the turn there
 	land := start
-	r := &sessRec{w: w, rec: session.NewRecorder(w), discardStaged: func() {
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane(), busy: func() bool { return ag.Running() }, discardStaged: func() {
 		discarded = true
 		land()
 	}}
@@ -1330,7 +1396,7 @@ func TestRewindRefusedAfterSwitch(t *testing.T) {
 	rewound := make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	<-rewound
 
@@ -1351,10 +1417,296 @@ func TestRewindRefusedAfterSwitch(t *testing.T) {
 	rewound = make(chan struct{})
 	go func() {
 		defer close(rewound)
-		r.rewind(ui, ag, reg)
+		rewindPicked(t, r, wrapUI(t, ui), ag, reg)
 	}()
 	<-rewound
 	assert.Equal(t, "b", st.Model.ID) // the restore landed on the retry
+}
+
+// rewindPicked runs the interactive rewind composition: answer the picker,
+// switch onto its choice. The driver's SetOnRewind body, shared with tests.
+func rewindPicked(t *testing.T, r *sessRec, ui *hubUI, ag *agent.Agent, reg *llm.Registry) {
+	t.Helper()
+	head, ok := r.pickRewind(ui)
+	if !ok {
+		return
+	}
+	_, _ = r.rewindTo(ui, ag, reg, head, rewindCauseRewind)
+}
+
+// rewindRig wires the driver's dispatch shape over one real transcript: a
+// recorder-landed agent, a steer queue, and a pump dispatching through a state
+// lane beside the rewind that holds it. prompts is how many scripted replies
+// the provider carries.
+type rewindRig struct {
+	rec  *sessRec
+	lane *stateLane
+	ag   *agent.Agent
+	st   *agent.State
+	reg  *llm.Registry
+	q    *steerQueue
+	pump chan pumpLine
+	// send queues one stamped line, the driver's own sender
+	send func(pumpLine)
+	prov *llm.ScriptedProvider
+	ui   *hubUI
+	log  *emitLog
+}
+
+func newRewindRig(t *testing.T, prompts int) *rewindRig {
+	t.Helper()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	term := newPumpTestUI(t)
+	ui := wrapUI(t, term)
+	log := &emitLog{}
+	log.attach(ui.hub)
+
+	turns := make([]llm.ScriptedTurn, prompts)
+	for i := range turns {
+		turns[i] = llm.ScriptedTurn{Events: textTurnRewind("reply " + strconv.Itoa(i))}
+	}
+	prov := &llm.ScriptedProvider{Turns: turns}
+
+	w, err := session.Create(filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-race.jsonl"),
+		session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	rec := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+	rec.onSwitch = func([]llm.Message, string) {
+		ui.hub.setHead(w.Head(), rewindCauseRewind) // the driver's wiring
+	}
+
+	model, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	st := &agent.State{Model: model, Tokens: tokens.New(model)}
+	ag := agent.New(st, agent.Options{
+		Provider:  func(llm.Model) (llm.Provider, error) { return prov, nil },
+		Sinks:     []agent.Sink{rec.rec.Sink(agent.NopSink{})},
+		Env:       agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
+		OnMessage: []func(agent.MessageInfo){rec.rec.Message},
+	})
+
+	fake := &fakeQueueUI{}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+
+	pump := make(chan pumpLine, 4)
+	lane := rec.lane
+	send := func(line pumpLine) {
+		line.gen = lane.stamp()
+		pump <- line
+	}
+	console := &uiConsole{ui: ui, commands: command.NewRegistry(), lane: newStateLane(), q: &steerQueue{}}
+	expander := refs.NewExpander(nil, agent.NopSink{}, tools.PathPolicy{Cwd: t.TempDir()}, nil)
+	starts := newStartState(false)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	var drain drainWaiter
+	go runPump(ctx, pump, ag, console, command.NewStager(ctx, nil, nil), expander,
+		true, ui, starts, q, lane, nil, st, nil, &sync.Once{}, func() {}, planHooks{}, &drain)
+
+	// a seed exchange the rewinds fork away from, present in live state too
+	// the way a resumed session's rebuild leaves it
+	writeMessage(t, rec, "one")
+	writeMessage(t, rec, "reply one")
+	seedEntries := mustEntries(t, w)
+	seedState, _ := session.State(session.Branch(seedEntries, w.Head()), modelResolver(reg))
+	st.Messages = seedState.Messages
+
+	rig := &rewindRig{rec: rec, lane: lane, ag: ag, st: st, reg: reg, q: q,
+		pump: pump, send: send, prov: prov, ui: ui, log: log}
+	rec.busy = func() bool { return ag.Running() || q.drainLive() }
+	return rig
+}
+
+// branchTexts lists the current branch's user and assistant message texts, so
+// assertions can speak in prompt terms rather than entry ids.
+func branchTexts(t *testing.T, w *session.Writer) []string {
+	t.Helper()
+
+	entries, _, err := session.Read(w.Path())
+	require.NoError(t, err)
+	var out []string
+	for _, e := range session.Branch(entries, w.Head()) {
+		if e.Type != session.TypeMessage {
+			continue
+		}
+		var md session.MessageData
+		require.NoError(t, json.Unmarshal(e.Data, &md))
+		out = append(out, textOf(md.Message))
+	}
+	return out
+}
+
+func TestRewindHoldsLaneAgainstDispatch(t *testing.T) {
+	t.Parallel()
+
+	rig := newRewindRig(t, 4)
+	entries := mustEntries(t, rig.rec.w)
+	branch := session.Branch(entries, rig.rec.w.Head())
+	target := branch[1].ID // the seed user prompt
+	before := rig.rec.w.Head()
+
+	// the busy hook is the deterministic stall: the rewind parks inside the
+	// lane at its refuse check until the test releases it
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	rig.rec.busy = func() bool {
+		once.Do(func() { close(entered) })
+		<-release
+		return false
+	}
+
+	rewound := make(chan struct{})
+	go func() {
+		defer close(rewound)
+		_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+	}()
+	<-entered // the lane is held mid-transaction, nothing has moved
+
+	rig.send(pumpLine{kind: command.KindPrompt, rest: "racing prompt", queueID: "stale-row"})
+	// the dispatch decision waits on the lane: no model request may leave, so
+	// no entry can append from the head the rewind is about to move
+	require.Never(t, func() bool { return len(rig.prov.Requests()) > 0 },
+		150*time.Millisecond, 10*time.Millisecond)
+
+	close(release)
+	<-rewound
+	assert.NotEqual(t, before, rig.rec.w.Head()) // the switch landed
+
+	// the rewind bumped the generation under the line's stamp, so the racing
+	// prompt recovers instead of running against the switched state. Rewinding
+	// onto the seed prompt drops it from context (it becomes the editor prefill)
+	require.Eventually(t, func() bool {
+		return len(rig.log.named(ctl.EventQueueDropped)) > 0
+	}, 5*time.Second, 5*time.Millisecond)
+	var qd ctl.QueueDroppedData
+	require.NoError(t, rig.log.named(ctl.EventQueueDropped)[0].Decode(&qd))
+	assert.Equal(t, rewindCauseRewind, qd.Cause)
+	assert.Equal(t, []ctl.QueueRow{{ID: "stale-row", Text: "racing prompt"}}, qd.Rows)
+	assert.Empty(t, rig.prov.Requests())
+	assert.Empty(t, branchTexts(t, rig.rec.w))
+
+	// a prompt queued after the rewind carries the fresh generation and runs
+	// as the new branch's own turn, appending from its head
+	rig.send(pumpLine{kind: command.KindPrompt, rest: "fresh after rewind"})
+	require.Eventually(t, func() bool { return len(rig.prov.Requests()) == 1 },
+		5*time.Second, 5*time.Millisecond)
+	require.Eventually(t, func() bool {
+		return slices.Contains(branchTexts(t, rig.rec.w), "fresh after rewind")
+	}, 5*time.Second, 5*time.Millisecond)
+}
+
+func TestStaleLineWithoutCorrelationPublishesNothing(t *testing.T) {
+	t.Parallel()
+
+	rig := newRewindRig(t, 4)
+	entries := mustEntries(t, rig.rec.w)
+	target := session.Branch(entries, rig.rec.w.Head())[1].ID
+	_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+
+	// a line stamped before the rewind is stale at dequeue however the timing
+	// lands, so the silence it must keep is deterministic
+	rig.pump <- pumpLine{kind: command.KindPrompt, rest: "uncorrelated", gen: 0}
+	require.Eventually(t, func() bool { return len(rig.pump) == 0 },
+		5*time.Second, 5*time.Millisecond)
+	assert.Empty(t, rig.log.named(ctl.EventQueueDropped))
+	assert.Empty(t, rig.prov.Requests())
+}
+
+// TestRewindDispatchRaceKeepsBranch races a dispatched prompt against a rewind
+// over and over: whichever wins, the live state must keep describing exactly
+// the writer head's branch, the invariant a torn swap-then-SetHead window used
+// to break by appending from the old head while the head moved.
+func TestRewindDispatchRaceKeepsBranch(t *testing.T) {
+	t.Parallel()
+
+	const iterations = 16
+	rig := newRewindRig(t, iterations+4)
+	entries := mustEntries(t, rig.rec.w)
+	target := session.Branch(entries, rig.rec.w.Head())[1].ID
+
+	for i := 0; i < iterations; i++ {
+		rig.send(pumpLine{kind: command.KindPrompt, rest: "race " + strconv.Itoa(i)})
+		rewound := make(chan struct{})
+		go func() {
+			defer close(rewound)
+			_, _ = rig.rec.rewindTo(rig.ui, rig.ag, rig.reg, target, rewindCauseRewind)
+		}()
+		<-rewound
+
+		// settle: the drain exits and the pump holds no buffered line
+		require.Eventually(t, func() bool {
+			return !rig.q.drainLive() && len(rig.pump) == 0
+		}, 5*time.Second, 5*time.Millisecond)
+
+		entries := mustEntries(t, rig.rec.w)
+		rebuilt, _ := session.State(session.Branch(entries, rig.rec.w.Head()), modelResolver(rig.reg))
+		assert.Equal(t, rebuilt.Messages, rig.st.Messages)
+	}
+}
+
+func TestRewindCleanupRunsOnRestoreRefusal(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	ui, _, _ := plainUI(t)
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-clean.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "one")})
+	require.NoError(t, err)
+	entries := readEntriesRewind(t, p)
+
+	fake := &fakeQueueUI{}
+	waitReady, takeReady := stagePair(t)
+	q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
+	q.hold(agent.Input{Text: "queued for the old branch", QueueIDs: []string{"row-9"}},
+		"queued for the old branch", 0)
+	// a secret row: the recorded notice names what was cleared without ever
+	// writing the value, matching every other surface's redaction rule
+	q.hold(agent.Input{Text: "secret: hunter2", QueueIDs: []string{"row-secret"}},
+		"secret: hunter2", 0)
+	require.Equal(t, 2, q.pending())
+
+	var discarded bool
+	ag, _, start, release := heldTurnAgent(t)
+	r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane(), busy: func() bool { return ag.Running() },
+		discardStaged: func() {
+			discarded = true
+			start() // land the turn between the head move and the model restore
+		},
+		clearQueued: q.clearForRewind}
+
+	_, err = r.rewindTo(wrapUI(t, ui), ag, reg, entries[1].ID, rewindCauseRewind)
+	require.ErrorIs(t, err, errTurnRunning) // the restore refused, cleanup behind it
+	release()
+
+	assert.True(t, discarded)
+	assert.Equal(t, 0, q.pending()) // the clear ran despite the refusal
+
+	after := readEntriesRewind(t, p)
+	noticed := bulk.SliceFilter(func(e session.Entry) bool { return e.Type == session.TypeNotice }, after)
+	require.Len(t, noticed, 1)
+	// the notice chains from the switched head, so it replays on the new branch
+	assert.Equal(t, entries[0].ID, noticed[0].ParentID)
+	var nd session.NoticeData
+	require.NoError(t, noticed[0].Decode(&nd))
+	assert.Contains(t, nd.Message, "queued for the old branch")
+	assert.NotContains(t, nd.Message, "hunter2") // the secret stays off the record
+	assert.Equal(t, noticed[0].ID, w.Head())
 }
 
 // syncBuffer guards one strings.Builder for the plainUI drain goroutine.
@@ -1459,7 +1811,7 @@ func TestRebuildWarnsUnreadable(t *testing.T) {
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	require.NoError(t, os.Remove(p))
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, nil)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, nil)
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "resume: transcript unreadable")
@@ -1477,7 +1829,7 @@ func TestRewindWarnsUnreadable(t *testing.T) {
 	r := &sessRec{w: w}
 	require.NoError(t, os.Remove(p))
 
-	r.rewind(ui, nil, nil) // the failure returns before the agent or registry are touched
+	r.pickRewind(wrapUI(t, ui)) // the failure returns before the agent or registry are touched
 
 	require.Eventually(t, func() bool {
 		return strings.Contains(out(), "rewind: ")
@@ -1511,7 +1863,7 @@ func TestNewSessionSeedsSnapshot(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 
@@ -1564,13 +1916,13 @@ func TestResumeSurfacesSnapshotWarnings(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 
 	st := &agent.State{Tokens: tokens.New(llm.Model{})}
 	_, warns := rec.restoreState(set, reg, st, nil)
-	assert.NotEmpty(t, warns, "the open-time parse must carry Read's per-line warnings")
+	assert.NotEmpty(t, warns)
 }
 
 func TestResumeSeesConcurrentAppend(t *testing.T) {
@@ -1597,7 +1949,7 @@ func TestResumeSeesConcurrentAppend(t *testing.T) {
 	require.NoError(t, cerr)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-	rec, nerr := newSession(nil, ResumeID, list[0].ID, "", session.Info{})
+	rec, nerr := newSession(nil, nil, ResumeID, list[0].ID, "", session.Info{})
 	require.NoError(t, nerr)
 	t.Cleanup(func() { _ = rec.w.Close() })
 	require.NotEmpty(t, rec.snapshot.entries)
@@ -1685,4 +2037,188 @@ func mustEntries(t *testing.T, w *session.Writer) []session.Entry {
 	entries, _, err := session.Read(w.Path())
 	require.NoError(t, err)
 	return entries
+}
+
+func TestRenameRaceLoser(t *testing.T) {
+	t.Setenv("AJENT_HOME", t.TempDir())
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	ws := t.TempDir()
+
+	older, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = older.Close() })
+	olderID := older.Head() // the root entry id sorts by creation time
+	// the younger racer mints after the older one, so its root id sorts higher
+	younger, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = younger.Close() })
+	require.Greater(t, younger.Head(), olderID)
+
+	note := renameRaceLoser(store, ws, "shared", younger)
+	assert.Contains(t, note, "shared-2")
+
+	entries, _, err := session.Read(younger.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared-2", session.NameOf(entries)) // the rename entry records it
+
+	// the older session's own data is untouched and still answers to the name
+	entries, _, err = session.Read(older.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared", session.NameOf(entries))
+
+	// a younger rival: this run keeps the name, no rename happens
+	note = renameRaceLoser(store, ws, "shared", older)
+	assert.Empty(t, note)
+}
+
+func TestRewindClearsQueuedWithNotice(t *testing.T) {
+	rig := newControlRig(t, func(rec *sessRec) {
+		writeMessage(t, rec, "first prompt")
+	})
+	wireAttachRewind(t, rig)
+	c := dialControl(t, rig.path)
+	c.hello()
+	attachControl(t, c, "rewinder")
+
+	// the rig wires no pump, so the queue stands alone with the hub's drop seam
+	// and the transaction's clear seam, exactly what the driver installs
+	rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {},
+		func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+	rig.rec.clearQueued = rig.hub.q.clearForRewind
+
+	// park two prompts as rows with their correlations, the way a gate hold leaves them
+	rig.hub.q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 0)
+	rig.hub.q.hold(agent.Input{Text: "queued two", QueueIDs: []string{"row-2"}}, "queued two", 0)
+	require.Equal(t, 2, rig.hub.q.pending())
+
+	// rewind onto the first user message: the session entry itself is not a
+	// valid target, the branch's first message is
+	branch := rigBranch(t, rig.rec)
+	rp := c.call("rw", ctl.MethodRewind, map[string]any{"head": branch[1].ID})
+	require.Nil(t, rp.Error)
+
+	require.Eventually(t, func() bool { return rig.hub.q.pending() == 0 },
+		ctlWait, 5*time.Millisecond)
+
+	// the notice entry naming them is on the transcript, so resume replays it
+	entries, _, err := session.Read(rig.rec.w.Path())
+	require.NoError(t, err)
+	notices := bulk.SliceFilter(func(e session.Entry) bool {
+		return e.Type == session.TypeNotice
+	}, entries)
+	require.NotEmpty(t, notices)
+	var nd session.NoticeData
+	require.NoError(t, notices[len(notices)-1].Decode(&nd))
+	assert.Contains(t, nd.Message, "queued one")
+	assert.Contains(t, nd.Message, "queued two")
+
+	// the ephemeral drop event rode the same transaction, published before the
+	// emptied rows in one seq window so a re-offer keeps its fresh pending row.
+	// Both surface between the branch change and this read; gather without
+	// discarding, since collect drops non-matching events it holds.
+	var droppedEv, cleared ctl.Event
+	require.Eventually(t, func() bool {
+		for _, ev := range c.takePending() {
+			switch {
+			case ev.Name == ctl.EventQueueDropped && droppedEv.Name == "":
+				droppedEv = ev
+			case ev.Name == ctl.EventQueued && droppedEv.Name != "" && cleared.Name == "":
+				cleared = ev // the rows update beside the drop
+			}
+		}
+		return droppedEv.Name != "" && cleared.Name != ""
+	}, ctlWait, 5*time.Millisecond)
+
+	var qd ctl.QueueDroppedData
+	require.NoError(t, droppedEv.Decode(&qd))
+	assert.ElementsMatch(t,
+		[]ctl.QueueRow{{ID: "row-1", Text: "queued one"}, {ID: "row-2", Text: "queued two"}}, qd.Rows)
+	var cq ctl.QueuedData
+	require.NoError(t, cleared.Decode(&cq))
+	assert.Empty(t, cq.Rows)
+	assert.Greater(t, cleared.Seq, droppedEv.Seq) // drop first, rows update beside it
+}
+
+func TestRenameSettleYieldsToOlderRival(t *testing.T) {
+	t.Setenv("AJENT_HOME", t.TempDir())
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	ws := t.TempDir()
+
+	older, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "shared"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = older.Close() })
+
+	mine, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mine.Close() })
+	rec := session.NewRecorder(mine)
+	require.NoError(t, rec.Rename("shared")) // the rename that raced the older holder
+
+	eff, note := renameSettle(store, ws, "shared", mine.Path(), rec)
+	assert.Equal(t, "shared-2", eff)
+	assert.Contains(t, note, "shared-2")
+
+	entries, _, err := session.Read(mine.Path())
+	require.NoError(t, err)
+	assert.Equal(t, "shared-2", session.NameOf(entries))
+
+	// a younger rival leaves the name here and reports the ambiguity instead
+	mine2, err := store.Create(ws, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = mine2.Close() })
+	rec2 := session.NewRecorder(mine2)
+	require.NoError(t, rec2.Rename("contested"))
+	younger, err := store.Create(ws, session.SessionData{Version: session.Version(), Name: "contested"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = younger.Close() })
+	require.Greater(t, younger.Head(), mine2.Head())
+
+	eff, note = renameSettle(store, ws, "contested", mine2.Path(), rec2)
+	assert.Equal(t, "contested", eff)
+	assert.Contains(t, note, "ambiguous")
+}
+
+func TestCheckSessionTarget(t *testing.T) {
+	ws := t.TempDir()
+	t.Chdir(ws)
+	t.Setenv("AJENT_HOME", t.TempDir())
+
+	store, err := session.NewStore()
+	require.NoError(t, err)
+	w, cerr := store.Create(ws, session.SessionData{Version: session.Version(), Name: "fix-parser"})
+	require.NoError(t, cerr)
+	id := w.Head()
+	require.NoError(t, w.Close())
+
+	t.Run("resume_by_name", func(t *testing.T) {
+		_, err := CheckSessionTarget(ResumeID, "fix-parser")
+		assert.NoError(t, err)
+	})
+
+	t.Run("resume_by_id", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeID, id)
+		assert.NoError(t, err)
+	})
+
+	t.Run("resume_unknown_fails", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeID, "no-such-session")
+		assert.Error(t, err)
+	})
+
+	t.Run("new_name_is_allowed", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, "brand-new")
+		assert.NoError(t, err)
+	})
+
+	t.Run("existing_name_is_allowed", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, "fix-parser")
+		assert.NoError(t, err)
+	})
+
+	t.Run("name_matching_id_fails", func(t *testing.T) {
+		_, err = CheckSessionTarget(ResumeSessionName, id)
+		assert.Error(t, err)
+	})
 }

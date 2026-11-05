@@ -5,6 +5,23 @@ changes it. It is the single configuration system for ajent: layered loading
 with per-key provenance, a schema-derived environment binding, session overrides
 that survive resume, and an ordered writer that preserves unknown keys.
 
+## The home directory
+
+`pkg/paths` resolves the ajent home, honoring `AJENT_HOME`, as a leaf package both
+this one and client-side packages import directly. Everything it creates under the
+home is pinned to owner-only access (`DirPerm`, 0700). Its `SubDir` helper
+materializes a named subdirectory such as the control socket dir or the sessions
+root, tightening a group or world accessible mode in place and reporting what it
+found as a warning. Callers surface that warning beside their other startup output:
+the notice line interactively, stderr under serve and CLI paths.
+
+The control directory holds one subdirectory per served session, and inside it one socket
+plus one discovery record per running instance, named for that instance's writer
+token (see `session-design.md`). Per-instance naming is what lets two processes serve
+one session at a time and keeps every removal scoped to the remover's own token. The
+layout belongs to the control surface (see `control-design.md`), and the directory is
+created and pinned through the same `SubDir` path as every other ajent-owned directory.
+
 ## Layers
 
 Configuration resolves lowest to highest precedence:
@@ -143,7 +160,7 @@ the gate" for the rule.
 
 `tools.diffEcho` names when the write/edit results echo a unified diff of the
 change: `never`, `validate` (the compiled-in default), `overwrite` or `always`
-(see `tools-design.md`). pkg/tools parses the name; an unknown value warns and
+(see `tools-design.md`). pkg/tools parses the name, and an unknown value warns
 keeps the default.
 
 `tools.shellCommands` names extra shell commands the bash tool description
@@ -241,6 +258,16 @@ to the defaults at startup (see tui-design.md, "Keys").
 `images.block`, off by default, is the one image delivery key. It applies to the
 tool layer at startup, and resume re-applies it after the transcript's overrides
 are seeded so a session saved blocked comes back blocked.
+
+### Control
+
+`control.enabled`, off by default, is the deliberate act of turning on a local
+control surface for an interactive run: it exposes the running session on a
+same-user unix socket for controllers. `--serve` always implies it, since a serve
+run with no socket has no prompt source at all. It is read once at process start,
+with no `/settings` row, no session override and no live toggle. The socket is a
+runtime artifact, so a key that could flip mid-run would leave a controller attached
+to nothing.
 
 ## The writer
 

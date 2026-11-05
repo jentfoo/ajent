@@ -24,6 +24,10 @@ updating only when your change alters one of those decisions or adds a new archi
 one. Implementation details (function bodies, struct fields, wiring) belong in the code and its
 comments, not here.
 
+`docs/control-api.md` is the exception in kind: a wire reference for external controllers rather
+than a design record, so it intentionally mirrors exact payload keys and vocabularies. Update it
+together with `pkg/ctl` whenever a shape, method or vocabulary changes.
+
 The docs build on each other: `agent-loop-design.md` is the core (tools,
 sessions and compaction all depend on it), and several reference the prompt surfaces
 collected in `prompt-design.md`. When a change crosses boundaries, read (and if needed
@@ -47,9 +51,11 @@ into a reference mirroring either surface.
 | `command-design.md` | `pkg/command`, `pkg/refs`, TUI overlay | Dispatch of every non-prompt line: slash-command registry (open to MCP), direct `!` shell execution via the stager (`!!` runs excluded from context), `@`-path expansion with auto-read and completion. |
 | `tui-design.md` | `pkg/tui` | Render modes, the paint layer, interaction rules; goals in priority order (scrollback survival, minimal chrome, correct formatting) that drive every hard decision. No external TUI framework. |
 | `mcp-design.md` | `pkg/mcp` (+ registry states in `pkg/tools`, `/mcp` in `pkg/command`, TUI group rows) | The MCP client and server manager: config merge of `mcp.json`, transports, the bridge that turns remote tools into `agent.Tool`, lifecycle (startup modes, reconnect), deferred loading. Boundary rules for keeping mcp-go isolated to `pkg/mcp`. |
-| `config-design.md` | `pkg/config` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. |
+| `config-design.md` | `pkg/config`, `pkg/paths` | Layered loading with per-key provenance and precedence (default → user → project → local), schema-derived environment binding, session overrides that survive resume, the ordered writer, secrets handling (`apiKey`) rules. `pkg/paths` is the ajent-home resolution both config and client-side packages share. |
 | `subagents-design.md` | `pkg/subagent` (+ seams in `pkg/agent`, `pkg/tokens`, `pkg/config`) | Fan-out of read-only investigation into throwaway child agents: the structural tool filter (never `agent_*`, never shell), activity-row sink, bounded concurrency and per-job cancellation, completion notification with delivery confirmation (`Input.Delivered`), child spend accounting. Boundary rules keep it decoupled from tools/tui/command via narrow interfaces supplied by pkg/app. |
 | `plan-design.md` | `pkg/plan` (+ seams in `pkg/agent`, `pkg/session`, `pkg/tools`) | The two-model `/plan` workflow: phases as branches of the session tree rather than projections of one message list, the `Host` boundary, the user gate on the drafted plan, per-phase model and tool scope with guaranteed restore, `dev_*` control tools and `ToolResult.EndTurn`, persistence and resume. |
+| `control-design.md` | `pkg/client`, `pkg/ctl` (+ the server in `pkg/app`) | The per-session control socket, serve mode and attach mode: the single control seat (claim, release-on-EOF, observer refusals), one routing path for every write method, transcript `origin` provenance for controller prompts, fail-open delivery with seq ordering and the watermark rule, the security model. |
+| `control-api.md` | external controllers, the wire contract of `pkg/ctl` and `pkg/client` | The API reference a controller implements against: transport and framing, discovery records, every method and event with exact payload keys, error codes and vocabularies, reconciliation rules, transcript backfill. Mirrors the wire by design, so update it whenever a shape changes. |
 | `prompt-design.md` | every string sent to a model | Each prompt surface ajent sends; the principles enforced by tests: cache-stability of the system block, cheap/stable/honest prompts, provenance markers on all injected content. The single reference for prompting. |
 
 ## Architecture
@@ -112,11 +118,16 @@ Depth lives in the design docs above.
 
 - **`pkg/agent`** — the turn loop; everything else builds on it.
 - **`pkg/app`** — the only wiring layer, nothing imports it. Root `main()` short-circuits
-  `--version`/`--update`/`--delete`/`--delete-old` before calling into `app`.
+  `--version`/`--update`/`--delete`/`--delete-old` before calling into `app`. Also owns the
+  control-socket server, serve mode and attach mode (`control*.go`, `attach*.go`, see
+  `control-design.md`).
 - **`pkg/clipboard`** — shared clipboard writer: platform-native first, OSC 52 on remote (leaf).
 - **`pkg/command`** — `/slash`, `!shell`, prompt-line classification and completion.
 - **`pkg/compact`** — compaction: verbatim band, cut point, summary checkpoint.
-- **`pkg/config`** — layered settings with per-key provenance (leaf).
+- **`pkg/paths`** — ajent home resolution: `AJENT_HOME`, config dir creation (leaf).
+- **`pkg/config`** — layered settings with per-key provenance (leaf, resolves its home via paths).
+- **`pkg/client`** — the control-socket client: dial, discovery, typed calls, event stream, file-based backfill; importable by external controllers (imports only ctl/paths/session).
+- **`pkg/ctl`** — control-socket wire types and line codec; the versioned protocol both the app server and controllers import (leaf).
 - **`pkg/httputil`** — the hardened outbound HTTP client (leaf).
 - **`pkg/img`** — image sniff/downscale for model input (leaf).
 - **`pkg/llm`** — the streaming provider interface, capabilities, model registry.

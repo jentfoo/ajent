@@ -56,6 +56,11 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   exposes `Close()` and `pkg/app` calls it on every run's exit paths. The owning
   decision: a tool that starts long-lived processes (background bash) owns their
   cleanup, so shutdown stays uniform no matter which tools are registered.
+- **One change observer** — `OnChanged(fn)` fires after any tool-set mutation
+  (registration, toggles, read-only marks, unregister), outside the registry lock.
+  The session hub is the intended listener: it republishes the /tools rows so
+  control surfaces track reshapes from any mutation site (MCP connect, plan
+  scopes, config reapply) without per-site wiring.
 
 ### Sub-agent tool set and preview seams
 
@@ -309,7 +314,7 @@ Writes a whole file atomically (temp file + rename) and creates parent
 directories. Emits a `Change` (empty → content for new files) through
 `Previewer`, rendered before the call is vetted rather than after it applies.
 Overwriting an existing file returns a unified diff of what was displaced, the
-one part of the change the model did not itself supply; the echo mode
+one part of the change the model did not itself supply. The echo mode
 (`tools.diffEcho`) gates this. A new file reports its line count alone. Writes
 are never gated on readability, so an unreadable
 existing file (a mode-000 in an otherwise writable directory) still goes
@@ -441,11 +446,11 @@ Both writers can echo a unified diff of the applied change into their tool
 response. One setting selects how much, with `validate` as the compiled-in
 default:
 
-- `never` — no response carries a diff; errors and notes are unaffected.
+- `never` — no response carries a diff, and errors and notes are unaffected.
 - `validate` — only what needs checking rides: an edit with reason to check its
   result (above), or a write that displaced readable content.
 - `overwrite` — write's displaced-content diff only, never an edit's.
-- `always` — every applied change echoes its diff; a new file still has no
+- `always` — every applied change echoes its diff. A new file still has no
   before side to show.
 
 The gate covers only the response echo. Notes and error results ride in every
@@ -818,7 +823,7 @@ must name what it came from. There is no new prompt block, just tools like any o
 
 Also off by default. `ask_user(question, options?)` puts a decision back to the
 user and waits: a closed choice when `options` are given, free text otherwise.
-`pkg/tools` must not import `pkg/tui`, so it takes an injected `Options.Ask`;
+`pkg/tools` must not import `pkg/tui`, so it takes an injected `Options.Ask`.
 `pkg/app` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
 permission dialogs, reports Esc as declined, and reports `ErrNoUI` in plain
 mode.
@@ -975,7 +980,7 @@ blocks-out seam: the only package that touches an imaging codec. The rules:
   output. Bytes that neither decode nor resemble recoverable content become the
   note alone. Sub-agent children run raw tools with no guard chain, so the
   `ToolSource` adapter in `pkg/app` wraps each one with the same rewrite
-  (`NormalizeImages`); a child's history is short-lived but it is still history.
+  (`NormalizeImages`). A child's history is short-lived but it is still history.
 - **One gate.** The block-images setting replaces every image with a text note
   at that same seam, so mid-session changes take effect without restarts. The
   gate's note is not content: a read it reduced to the note is tracked as

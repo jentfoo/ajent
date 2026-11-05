@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -28,6 +29,30 @@ func toolsCommand(ctx context.Context, _ string, c Console) error {
 	return toolsWidenOnly(ctx, c, reg)
 }
 
+// ApplyToolSet reshapes the enabled set without a dialog, the path the
+// control socket and the pickers below share: a free replacement before this
+// run's first dispatched prompt, enable-only after, since the tool block the
+// model has already seen is not retractable. Recording, the tools event and
+// the cache-miss notice ride ToolsChanged, so a reshape reaching every
+// surface stays one code path. A set that changes nothing records nothing.
+func ApplyToolSet(c Console, names []string) {
+	reg := c.Tools()
+	if reg == nil {
+		return
+	}
+	before := reg.Names()
+	if c.Dispatched() {
+		reg.Enable(names)
+	} else {
+		reg.SetEnabled(names)
+	}
+	if slices.Equal(reg.Names(), before) {
+		return // nothing moved: no override, no event, no cache-miss notice
+	}
+	c.ToolsChanged()
+	c.Notify("tool block changed; prompt cache will miss", levelInfo)
+}
+
 // toolsFreeSelect lists every tool with the current set preselected.
 // The selection is free to enable or disable anything ahead of the first prompt.
 func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error {
@@ -43,9 +68,7 @@ func toolsFreeSelect(ctx context.Context, c Console, reg *tools.Registry) error 
 	for _, p := range picked {
 		names = append(names, rows[p].Names...) // a group row expands to every member
 	}
-	reg.SetEnabled(names)
-	c.ToolsChanged()
-	c.Notify("tool block changed; prompt cache will miss", levelInfo)
+	ApplyToolSet(c, names)
 	return nil
 }
 
@@ -71,9 +94,7 @@ func toolsWidenOnly(ctx context.Context, c Console, reg *tools.Registry) error {
 	for _, p := range picked {
 		toEnable = append(toEnable, rows[p].Names...) // a group row expands to every member
 	}
-	reg.Enable(toEnable)
-	c.ToolsChanged()
-	c.Notify("tool block changed; prompt cache will miss", levelInfo)
+	ApplyToolSet(c, toEnable)
 	return nil
 }
 
@@ -93,16 +114,7 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 
 	// group by source so MultiPick emits a header when the group changes, stable
 	// sort keeping declaration order within a source (builtins up front, ahead of MCP)
-	slices.SortStableFunc(rows, func(a, b tools.Row) int {
-		sa, sb := a.Source, b.Source
-		if sa == sb {
-			return 0
-		}
-		if sa < sb {
-			return -1
-		}
-		return 1
-	})
+	slices.SortStableFunc(rows, func(a, b tools.Row) int { return strings.Compare(a.Source, b.Source) })
 	items := make([]tui.PickItem, len(rows))
 	var initial []int
 	for i, rw := range rows {
@@ -112,7 +124,7 @@ func toolRows(reg *tools.Registry, rows []tools.Row, c Console) ([]tui.PickItem,
 			label = l
 		}
 		items[i] = tui.PickItem{Label: rw.Name, Group: label}
-		allOn := !slices.ContainsFunc(rw.Names, func(n string) bool { _, ok := enabled[n]; return !ok })
+		allOn := tools.AllPresent(rw.Names, enabled)
 		if allOn {
 			initial = append(initial, i)
 		}

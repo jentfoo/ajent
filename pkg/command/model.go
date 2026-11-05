@@ -20,7 +20,7 @@ func modelCommand(ctx context.Context, arg string, c Console) error {
 	if err != nil || !changed {
 		return err
 	}
-	if serr := c.SaveSetting("user", "model", m.Key()); serr != nil {
+	if serr := c.SaveSetting("user", keyModel, m.Key()); serr != nil {
 		c.Notify("could not save model: "+serr.Error(), levelWarn)
 	}
 	return nil
@@ -54,7 +54,7 @@ func applyModel(ctx context.Context, arg string, c Console) (llm.Model, bool, er
 	} else {
 		// pre-select the active model so an empty /model shows where it sits.
 		// SetModel announces the change below, so skip the picker's own summary line.
-		m, err = PickModel(ctx, c, "Model", prev,
+		m, err = PickModel(ctx, c, labelModel, prev,
 			tui.PickOptions{Silent: true})
 		if err != nil {
 			return llm.Model{}, false, err // cancelled or failed
@@ -172,12 +172,7 @@ func reasoningCommand(ctx context.Context, arg string, c Console) error {
 	}
 
 	cur := c.State().Reasoning
-	c.SetReasoning(llm.ReasoningConfig{
-		Level:  lvl,
-		Retain: cur.Retain, // keep the current retention policy
-		Hide:   cur.Hide,   // keep whether thinking streams to the UI
-		Budget: cur.Budget, // keep an explicit token budget across level changes
-	})
+	setReasoningField(c, func(rc *llm.ReasoningConfig) { rc.Level = lvl })
 	if lvl != cur.Level {
 		// the pick owns the leaf, the sink persists nothing
 		_ = c.SetSessionSetting("reasoning.level", lvl.String())

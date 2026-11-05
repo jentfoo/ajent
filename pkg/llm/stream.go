@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,6 +41,7 @@ func CloseOnDone(ctx context.Context, s Stream) (stop func()) {
 // caller can forward deltas to the UI in the same loop it assembles them.
 type Accumulator struct {
 	blocks  BlockList
+	order   []int // event index of blocks[i], so content assembles in stream order
 	partial map[int]*partialBlock
 	pos     map[int]int // output index -> position in blocks, for re-emitted end events
 	usage   Usage
@@ -116,6 +118,7 @@ func (a *Accumulator) close(ev Event) {
 		return
 	}
 	a.blocks = append(a.blocks, block)
+	a.order = append(a.order, ev.Index) // kept beside blocks so Message can sort by it
 	if a.pos == nil {
 		a.pos = make(map[int]int)
 	}
@@ -140,17 +143,34 @@ func (p *partialBlock) build() Block {
 }
 
 // Message returns the assembled assistant message, including any block whose
-// end event never arrived.
+// end event never arrived. Content is in stream order (by event index), not
+// end-event arrival order: parallel tool calls can finish streaming out of
+// order, and callers pairing results or reserving ordered identity read this
+// list as the order the model emitted the calls in.
 func (a *Accumulator) Message() Message {
 	pending := a.pendingIndexes()
-	if len(pending) == 0 {
+	if len(pending) == 0 && slices.IsSorted(a.order) {
 		return Message{Role: RoleAssistant, Content: a.blocks}
 	}
-	blocks := slices.Clone(a.blocks)
-	for _, i := range pending {
-		blocks = append(blocks, a.partial[i].build())
+	items := make([]indexedBlock, 0, len(a.blocks)+len(pending))
+	for i, blk := range a.blocks {
+		items = append(items, indexedBlock{index: a.order[i], block: blk})
 	}
-	return Message{Role: RoleAssistant, Content: blocks}
+	for _, i := range pending { // never-closed blocks join their stream position
+		items = append(items, indexedBlock{index: i, block: a.partial[i].build()})
+	}
+	slices.SortStableFunc(items, func(x, y indexedBlock) int { return cmp.Compare(x.index, y.index) })
+	content := make(BlockList, len(items))
+	for i, it := range items {
+		content[i] = it.block
+	}
+	return Message{Role: RoleAssistant, Content: content}
+}
+
+// indexedBlock pairs a block with its event index for stream-order assembly.
+type indexedBlock struct {
+	index int
+	block Block
 }
 
 // pendingIndexes returns the indexes of blocks opened but never closed, in index order.

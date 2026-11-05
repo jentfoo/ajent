@@ -62,6 +62,7 @@ type planHarness struct {
 	toolsReg *tools.Registry
 	expander *refs.Expander
 	ui       *tui.UI
+	wrap     *hubUI // the wrapped surface forkTo drives
 	reg      *llm.Registry
 	dir      string
 	planner  *llm.ScriptedProvider
@@ -70,87 +71,124 @@ type planHarness struct {
 	notices  []string
 }
 
-func TestForkToRefusedMidTurn(t *testing.T) {
-	t.Parallel()
+func TestForkTo(t *testing.T) {
+	t.Run("refused_mid_turn", func(t *testing.T) {
+		ui, _, out := plainUI(t)
+		reg, warnings := llm.NewRegistry(llm.File{
+			Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+		}, nil, llm.RegistryOptions{})
+		require.Empty(t, warnings)
 
-	ui, _, out := plainUI(t)
-	reg, warnings := llm.NewRegistry(llm.File{
-		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
-	}, nil, llm.RegistryOptions{})
-	require.Empty(t, warnings)
+		p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+		_, err = w.Append(session.TypeMessage,
+			session.MessageData{Message: llm.Text(llm.RoleUser, "goal")})
+		require.NoError(t, err)
+		before := readEntriesRewind(t, p)
 
-	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
-	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close() })
-	r := &sessRec{w: w, rec: session.NewRecorder(w)}
-	_, err = w.Append(session.TypeMessage,
-		session.MessageData{Message: llm.Text(llm.RoleUser, "goal")})
-	require.NoError(t, err)
-	before := readEntriesRewind(t, p)
+		m, err := reg.Resolve("p/a")
+		require.NoError(t, err)
+		ag, _, release := holdTurn(t)
 
-	m, err := reg.Resolve("p/a")
-	require.NoError(t, err)
-	ag, _, release := holdTurn(t)
+		err = r.forkTo(wrapUI(t, ui), ag, reg, before[1].ID, m)
+		release()
 
-	err = r.forkTo(ui, ag, reg, before[1].ID, m)
-	release()
+		require.ErrorIs(t, err, errTurnRunning)
+		assert.Equal(t, before[len(before)-1].ID, w.Head()) // the head never moved
+		assert.Len(t, readEntriesRewind(t, p), len(before)) // no model change recorded
+		require.Eventually(t, func() bool {
+			return strings.Contains(out(), "plan: a turn is running")
+		}, 2*time.Second, 5*time.Millisecond)
+	})
 
-	require.ErrorIs(t, err, errTurnRunning)
-	assert.Equal(t, before[len(before)-1].ID, w.Head()) // the head never moved
-	assert.Len(t, readEntriesRewind(t, p), len(before)) // no model change recorded
-	require.Eventually(t, func() bool {
-		return strings.Contains(out(), "plan: a turn is running")
-	}, 2*time.Second, 5*time.Millisecond)
-}
+	t.Run("serve_mode_survives_divider", func(t *testing.T) {
+		reg, warnings := llm.NewRegistry(llm.File{
+			Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+		}, nil, llm.RegistryOptions{})
+		require.Empty(t, warnings)
 
-func TestForkToRefusedAfterSwitch(t *testing.T) {
-	t.Parallel()
+		p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-serve.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
+		entries := make([]session.Entry, 0, 2)
+		for _, text := range []string{"goal", "draft"} {
+			e, aerr := w.Append(session.TypeMessage,
+				session.MessageData{Message: llm.Text(llm.RoleUser, text)})
+			require.NoError(t, aerr)
+			entries = append(entries, e)
+		}
 
-	ui, _, out := plainUI(t)
-	reg, warnings := llm.NewRegistry(llm.File{
-		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
-	}, nil, llm.RegistryOptions{})
-	require.Empty(t, warnings)
+		m, err := reg.Resolve("p/a")
+		require.NoError(t, err)
+		ag := agent.New(&agent.State{Model: m, Tokens: tokens.New(m)}, agent.Options{})
+		serveUI := newSessionHub(hubDeps{}).ui // no terminal: the serve-mode shape
 
-	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
-	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close() })
-	r := &sessRec{w: w, rec: session.NewRecorder(w)}
+		require.NotPanics(t, func() {
+			err = r.forkTo(serveUI, ag, reg, entries[0].ID, m)
+		})
+		require.NoError(t, err)
+		// the fork moved and recorded its model entry chained from the new head;
+		// head cursors are chain markers, filtered from the count
+		after := bulk.SliceFilter(func(e session.Entry) bool { return e.Type != session.TypeHead },
+			readEntriesRewind(t, p))
+		require.Len(t, after, 4)
+		last := after[len(after)-1]
+		assert.Equal(t, session.TypeModelChange, last.Type)
+		assert.Equal(t, entries[0].ID, last.ParentID)
+		assert.Equal(t, last.ID, w.Head())
+	})
 
-	m, err := reg.Resolve("p/a")
-	require.NoError(t, err)
-	ag, _, start, release := heldTurnAgent(t)
-	// onSwitch fires between the head move and the restore: land the turn there
-	r.onSwitch = func([]llm.Message) { start() }
+	t.Run("refused_after_switch", func(t *testing.T) {
+		ui, _, out := plainUI(t)
+		reg, warnings := llm.NewRegistry(llm.File{
+			Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+		}, nil, llm.RegistryOptions{})
+		require.Empty(t, warnings)
 
-	err = r.forkTo(ui, ag, reg, "", m) // empty head: the implementation round's new root
-	release()
+		p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-plan.jsonl")
+		w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = w.Close() })
+		r := &sessRec{w: w, rec: session.NewRecorder(w), lane: newStateLane()}
 
-	require.ErrorIs(t, err, errTurnRunning)
-	require.Eventually(t, func() bool {
-		return strings.Contains(out(), "plan: model p/a recorded but not applied")
-	}, 2*time.Second, 5*time.Millisecond)
+		m, err := reg.Resolve("p/a")
+		require.NoError(t, err)
+		ag, _, start, release := heldTurnAgent(t)
+		// onSwitch fires between the head move and the restore: land the turn there
+		r.onSwitch = func([]llm.Message, string) { start() }
 
-	// the moved head owns the new root, whose first entry is the model change
-	entries := readEntriesRewind(t, p)
-	branch := session.Branch(entries, w.Head())
-	require.NotEmpty(t, branch)
-	assert.Equal(t, session.TypeModelChange, branch[0].Type)
-	assert.Empty(t, branch[0].ParentID)
-	var data session.ModelData
-	require.NoError(t, branch[0].Decode(&data))
-	assert.Equal(t, "p/a", data.Model)
+		err = r.forkTo(wrapUI(t, ui), ag, reg, "", m) // empty head: the implementation round's new root
+		release()
 
-	// the live model is whatever the turn runs with, not the recorded one
-	var live llm.Model
-	ag.WithState(func(s *agent.State) { live = s.Model })
-	assert.Equal(t, "m", live.ID)
+		require.ErrorIs(t, err, errTurnRunning)
+		require.Eventually(t, func() bool {
+			return strings.Contains(out(), "plan: model p/a recorded but not applied")
+		}, 2*time.Second, 5*time.Millisecond)
 
-	// the branch still resolves its model once the turn ends
-	rebuilt, _ := session.State(session.Branch(entries, w.Head()), modelResolver(reg))
-	assert.Equal(t, "p/a", rebuilt.Model.Key())
+		// the moved head owns the new root, whose first entry is the model change
+		entries := readEntriesRewind(t, p)
+		branch := session.Branch(entries, w.Head())
+		require.NotEmpty(t, branch)
+		assert.Equal(t, session.TypeModelChange, branch[0].Type)
+		assert.Empty(t, branch[0].ParentID)
+		var data session.ModelData
+		require.NoError(t, branch[0].Decode(&data))
+		assert.Equal(t, "p/a", data.Model)
+
+		// the live model is whatever the turn runs with, not the recorded one
+		var live llm.Model
+		ag.WithState(func(s *agent.State) { live = s.Model })
+		assert.Equal(t, "m", live.ID)
+
+		// the branch still resolves its model once the turn ends
+		rebuilt, _ := session.State(session.Branch(entries, w.Head()), modelResolver(reg))
+		assert.Equal(t, "p/a", rebuilt.Model.Key())
+	})
 }
 
 // newPlanHarness wires the workflow over a real session and agent. Only the
@@ -163,7 +201,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 		session.SessionData{Version: session.Version(), Model: e2eImplementor.Key()})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = w.Close() })
-	rec := &sessRec{store: session.StoreAt(dir), w: w, rec: session.NewRecorder(w)}
+	rec := &sessRec{store: session.StoreAt(dir), w: w, rec: session.NewRecorder(w), lane: newStateLane()}
 
 	inR, _, err := os.Pipe()
 	require.NoError(t, err)
@@ -181,7 +219,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 	st := &agent.State{Model: e2eImplementor, Tokens: tokens.New(e2eImplementor)}
 
 	h := &planHarness{
-		st: st, rec: rec, toolsReg: toolsReg, dir: dir, ui: ui, reg: reg,
+		st: st, rec: rec, toolsReg: toolsReg, dir: dir, ui: ui, wrap: wrapUI(t, ui), reg: reg,
 		expander: refs.NewExpander(toolsReg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil),
 		planner:  &llm.ScriptedProvider{ProviderName: "planner", Turns: plannerTurns},
 		impl:     &llm.ScriptedProvider{ProviderName: "impl", Turns: implTurns},
@@ -213,7 +251,7 @@ func newPlanHarness(t *testing.T, plannerTurns, implTurns []llm.ScriptedTurn) *p
 // a fresh controller over the same surfaces.
 func (h *planHarness) host() plan.Host {
 	w, rec, st, toolsReg := h.rec.w, h.rec, h.st, h.toolsReg
-	ui, reg := h.ui, h.reg
+	ui, reg := h.wrap, h.reg
 	return plan.Host{
 		PickModel:   func(context.Context, string) (llm.Model, bool) { return e2ePlanner, true },
 		ActiveModel: func() llm.Model { return st.Model },
@@ -357,10 +395,6 @@ func hasRefInjection(req llm.Request) bool {
 	})
 }
 
-// TestPlanWorkflowEndToEnd drives plan → user approval → implement → review →
-// complete against two scripted providers, asserting which model ran in each
-// phase and that the implementor's context holds the approved plan and nothing
-// from the planning conversation.
 func TestPlanWorkflowEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -430,13 +464,12 @@ func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 	require.NoError(t, err)
 
 	// two roots: the session line, plus the independent implementation round.
-	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool { return e.ParentID == "" }, entries), 2)
+	// head cursors chain markers, never roots of their own
+	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool {
+		return e.ParentID == "" && e.Type != session.TypeHead
+	}, entries), 2)
 }
 
-// TestPlanKickoffsStayUnexpanded drives the workflow over the driver's real
-// @-expansion seam with @ paths in every authored surface: the gate submit's
-// planned reads must not land behind the implementation kickoff, and paths
-// quoted in summaries or revision instructions must stay literal pointers.
 func TestPlanKickoffsStayUnexpanded(t *testing.T) {
 	t.Parallel()
 
@@ -486,10 +519,6 @@ func TestPlanKickoffsStayUnexpanded(t *testing.T) {
 	assert.False(t, h.ctl.Active())
 }
 
-// TestPlanResumeRepairsMissingKickoff reproduces the crash window between the
-// implementing transition persisting and its kickoff landing: the resumed root
-// carries only bookkeeping entries, so the next prompt must re-deliver the
-// kickoff ahead of itself rather than run the implementor context-free.
 func TestPlanResumeRepairsMissingKickoff(t *testing.T) {
 	t.Parallel()
 
@@ -525,9 +554,6 @@ func TestPlanResumeRepairsMissingKickoff(t *testing.T) {
 	assert.False(t, h.ctl.Active())
 }
 
-// TestPlanResumeRepairsMissingGoal covers the planning half of the same window:
-// a goal recorded as captured whose message never landed must not swallow the
-// planning contract from the prompt that retypes it.
 func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	t.Parallel()
 
@@ -550,9 +576,6 @@ func TestPlanResumeRepairsMissingGoal(t *testing.T) {
 	assert.Contains(t, planningCtx, "add a --version flag")
 }
 
-// TestPlanResumeLandedGoalStaysCaptured covers the planning half of the same
-// resume: a goal that already landed must stay captured, so a later prompt is
-// an ordinary steer rather than the goal all over again.
 func TestPlanResumeLandedGoalStaysCaptured(t *testing.T) {
 	t.Parallel()
 

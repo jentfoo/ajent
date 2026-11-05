@@ -19,6 +19,7 @@ type replaySink struct {
 
 func (s *replaySink) TurnStart(i agent.TurnInfo) { s.calls = append(s.calls, "start:"+i.Input.Text) }
 func (s *replaySink) UserPrompt(text string)     { s.calls = append(s.calls, "user:"+text) }
+func (s *replaySink) InjectContext(string)       {}
 func (s *replaySink) Thinking(string)            { s.calls = append(s.calls, "thinking") }
 func (s *replaySink) EndThinking()               { s.calls = append(s.calls, "end_thinking") }
 func (s *replaySink) Text(d string)              { s.calls = append(s.calls, "text:"+d) }
@@ -185,7 +186,7 @@ func TestReplay(t *testing.T) {
 		}
 	})
 
-	t.Run("tool_result_renders_header_and_body", func(t *testing.T) {
+	t.Run("tool_result_header_and_body", func(t *testing.T) {
 		cases := []struct {
 			name string
 			res  Entry
@@ -215,7 +216,7 @@ func TestReplay(t *testing.T) {
 		}
 	})
 
-	t.Run("parallel_calls_interleave_headers_and_bodies", func(t *testing.T) {
+	t.Run("parallel_calls_interleave_parts", func(t *testing.T) {
 		s := &replaySink{}
 		Replay(parallelBranch(), s, ReplayOptions{})
 
@@ -306,4 +307,106 @@ func TestReplay(t *testing.T) {
 		Replay(branch, s, ReplayOptions{})
 		assert.Equal(t, []string{"start:real prompt", "user:real prompt", "turn_end"}, s.calls)
 	})
+}
+
+// echoSink records only the standalone shapes EchoEntry may paint, ignoring
+// the turn machinery and real tool headers Replay folds, so a parity run
+// compares like with like.
+type echoSink struct {
+	agent.NopSink
+	calls []string
+}
+
+func (s *echoSink) UserPrompt(text string) { s.calls = append(s.calls, "user:"+text) }
+func (s *echoSink) Notice(m string, l agent.Level) {
+	s.calls = append(s.calls, fmt.Sprintf("notice:%d:%s", l, m))
+}
+
+// ToolStart records a real tool header only when the call names a tool; an
+// injected block carries none, which is what distinguishes it from folding.
+func (s *echoSink) ToolStart(call agent.ToolCall, label string, _ bool) func(agent.ToolResult) {
+	if call.Name != "" {
+		return func(agent.ToolResult) {} // replay folding, not an echo shape
+	}
+	s.calls = append(s.calls, "iblock:"+label)
+	return func(res agent.ToolResult) { s.calls = append(s.calls, "ibody:"+res.Display) }
+}
+
+func TestEchoEntry(t *testing.T) {
+	t.Parallel()
+
+	prompt := msgUser("m1", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+		llm.TextBlock{Text: "one"},
+		llm.TextBlock{Text: "two"},
+	}})
+	cases := []struct {
+		name string
+		e    Entry
+		want []string
+	}{
+		{"prompt_joins_text", prompt, []string{"user:one two"}},
+		{"tool_result_carrier", resultMessage("r1", "c1", "denied by user"), nil},
+		{"parallel_result_carrier", parallelBranch()[2], nil},
+		{"error_result_carrier", resultMessageErr("r2", "c1"), nil},
+		{"injected_context", injectedUser("i1", "User Ran: date"), nil},
+		{"replayed_injected_draws_block", replayedUser("i2", "User Ran: date\n\nOutput:\n16:00"),
+			[]string{"iblock:User Ran: date", "ibody:Output:\n16:00"}},
+		{"replayed_injected_blank_label", replayedUser("i3", "   "), nil},
+		{"assistant_message", assistantText("a1", "answer"), nil},
+		{"notice_entry", noticeEntry("n1", NoticeData{Message: "careful"}), []string{"notice:0:careful"}},
+		{"session_entry", Entry{ID: "s", Type: TypeSession}, nil},
+		{"undecodable_data", Entry{ID: "x", Type: TypeMessage, Data: []byte("{")}, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &echoSink{}
+			EchoEntry(tc.e, s)
+			assert.Equal(t, tc.want, s.calls)
+		})
+	}
+}
+
+// TestEchoEntryMatchesReplay pins the coupling between live rendering and
+// replay: for every entry of a branch carrying all message shapes, EchoEntry
+// paints exactly the standalone calls Replay draws for that entry, in order.
+// Replay may change how it folds turns and tools; this test is what forces the
+// live echo rule to follow.
+func TestEchoEntryMatchesReplay(t *testing.T) {
+	t.Parallel()
+
+	branch := []Entry{
+		{ID: "s", Type: TypeSession},
+		msgUser("m1", llm.Text(llm.RoleUser, "first prompt")),
+		assistantToolCalls("a1", llm.ToolCallBlock{ID: "c1", Name: "bash"}),
+		resultMessage("r1", "c1", "ls out"),
+		msgUser("m2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+			llm.TextBlock{Text: "steering"},
+			llm.ToolResultBlock{CallID: "c2", Content: llm.BlockList{llm.TextBlock{Text: "kept"}}},
+		}}),
+		injectedUser("i1", "User Ran: date"),
+		replayedUser("i2", "User Ran: echo hi"),
+		replayedUser("i3", "   "),
+		msgUser("m3", llm.Text(llm.RoleUser, "last prompt")),
+		noticeEntry("n1", NoticeData{Message: "careful"}),
+		assistantText("a2", "done"),
+		{ID: "bad", Type: TypeMessage, Data: json.RawMessage(`"torn"`)},
+	}
+
+	full := &echoSink{}
+	Replay(branch, full, ReplayOptions{})
+
+	per := make([]string, 0, len(full.calls)) // parity: same calls, same order
+	for _, e := range branch {
+		s := &echoSink{}
+		EchoEntry(e, s)
+		per = append(per, s.calls...)
+	}
+	assert.Equal(t, []string{
+		"user:first prompt",
+		"user:steering",
+		"iblock:User Ran: echo hi", "ibody:", // no body: the label is the whole text
+		"user:last prompt",
+		"notice:0:careful",
+	}, full.calls)
+	assert.Equal(t, full.calls, per)
 }

@@ -25,7 +25,7 @@ The originating brief, and what satisfies each item.
 
 | Requirement | Where |
 |---|---|
-| Thinking output, shaded so it clearly reads as thinking; the pending line streams live like reply text | `UI.Thinking`, `Theme.Thinking` (dim + italic) |
+| Thinking output, shaded so it clearly reads as thinking. The pending line streams live like reply text | `UI.Thinking`, `Theme.Thinking` (dim + italic) |
 | Markdown output | `UI.Text` -> `renderMarkdown` |
 | Status line under the text field, reporting context usage | `status.go`, composed by `UI.repaint` |
 | Text field accepting further user replies | `editor.go` + `input.go`, submitted over `UI.Messages()` |
@@ -187,7 +187,7 @@ So there are two modes, chosen by `ResolveMode`:
 | Who wraps prose | terminal | us |
 | Who scrolls | terminal | us |
 | Scrollback | native, whole session | ours, replayed on exit |
-| Reflow on resize | emulator reflows every text line (prose and code alike); only tables and rules keep their committed width (see Known limits); the live block is redrawn at the new size | always correct (whole session, re-laid from retained lines) |
+| Reflow on resize | emulator reflows every text line (prose and code alike). Only tables and rules keep their committed width (see Known limits), and the live block is redrawn at the new size | always correct (whole session, re-laid from retained lines) |
 | Selection / scrollbar | native | on-screen only |
 
 ```
@@ -508,7 +508,7 @@ rules above to the reply buffer, which is how approval reasons complete @
 paths. The query runs synchronously because a dialog has no live menu and a
 path query prices one ReadDir. Settlement is the prompt row's machinery, not a
 copy of it: both settle a Tab through one shared `applyTab` (fill, listing,
-spend), so fill-or-list behavior cannot drift; an open listing still closes on
+spend), so fill-or-list behavior cannot drift. An open listing still closes on
 the first Esc.
 
 An **approval dialog** resolution reports nothing to history by itself, and the
@@ -725,7 +725,7 @@ Supported elements:
 | Link | styled text plus a dim url, suppressed when they match |
 | Autolink | link style |
 | Image | dim, named by its alt text |
-| Hard line break | preserved; soft break becomes a space |
+| Hard line break | preserved, while a soft break becomes a space |
 | Raw HTML | passed through dim |
 
 Nested inline styles are handled with a style stack: closing an inner span emits
@@ -780,8 +780,8 @@ was tried and reverted: reprinting a large file around a two-line edit buries
 the change it is meant to show.
 
 Every row carries a right-aligned line number and one of three gutter markers:
-a single space for context rows, `-` for deletions, or `+` for additions;
-deletions keep their old-file number, everything else numbers as the new file.
+a single space for context rows, `-` for deletions, or `+` for additions.
+Deletions keep their old-file number, everything else numbers as the new file.
 The gutter is sized from the whole file, so it does not jump between hunks. Hunk
 headers follow git in dropping the count when a side spans one line
 (`@@ -1 +1 @@`).
@@ -873,7 +873,7 @@ not replace it with a hand-listed set.
 | Role | Look | Used for |
 |---|---|---|
 | `Thinking` | dim + italic | reasoning, so it never reads as reply text |
-| `Activity` | dim on the palette's shade (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output; falls back to plain dim below 256 colors |
+| `Activity` | dim on the palette's shade (256/truecolor) | live sub-agent rows above the prompt, set apart from committed output. Falls back to plain dim below 256 colors |
 | `UserTag` / `Assist` / `ToolTag` | three separable hues | the leading kind word in the rewind tree picker |
 | `UserTagOff` / `AssistOff` / `ToolTagOff` | the same hues, faint | rewind rows off the active branch, so an abandoned fork recedes |
 | `User` | bold accent | echoed user messages |
@@ -890,8 +890,8 @@ not a stored mode: after the first answer the palette is a plain name in user
 config and the terminal is never queried again. Detection failure offers every
 palette rather than guessing.
 
-The OSC-11 answer is decoded into its own channel like the DSR resize barrier;
-decoding it is a correctness fix as much as a feature, since an unsolicited
+The OSC-11 answer is decoded into its own channel like the DSR resize barrier.
+Decoding it is a correctness fix as much as a feature, since an unsolicited
 reply used to leak its body into the editor as literal runes.
 
 **Restyling is forward-only.** `UI.SetTheme` recolours the live block and
@@ -1189,9 +1189,11 @@ Replay rendering differs from live output in ways that matter for fidelity:
 - **Assistant text replays verbatim** through `Text`/`EndText`, so replies
   survive intact.
 - **Injected context renders as its own block.** A message marked `replayed`
-  (staged `!` output, a plan kickoff) redraws with the label as its first line
-  and the body beneath it, collapsed through the normal output-head rule,
-  without opening a turn.
+  (staged `!` output, a plan kickoff, a barrier note) redraws with the label as
+  its first line and the body beneath it, collapsed through the normal
+  output-head rule, without opening a turn. Live steering echoes (`InjectContext`)
+  paint that same shape where the note lands, so host, replay, resume and every
+  attached surface render one entry identically.
 
 The design intent: a restore reproduces the committed history (user prompts,
 tool headers with their bodies, injected blocks, and assistant content) minus
@@ -1251,15 +1253,15 @@ The key table:
 | Enter | submit (accepts an open menu or search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
 | `↑`/`↓` | move the caret through visual rows. Only at the prompt's very start (↑) or end (↓) do they recall history. A search overlay or a command menu takes them first, path completion never does |
-| Tab | accept the highlighted command in a menu; for a path, fill in the candidates' longest common prefix, or list what is left (`complete.go`) |
-| Ctrl+C | clear non-empty buffer; interrupt when active; quit empty |
+| Tab | accept the highlighted command in a menu. For a path, fill in the candidates' longest common prefix, or list what is left (`complete.go`) |
+| Ctrl+C | clear a non-empty buffer, interrupt when active, quit when empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Ctrl+V | paste an image from the clipboard as an `[image #N]` token (`ControlClipboardImage`). Readers are `xclip`/`wl-paste` (Linux), `pngpaste` (macOS), PowerShell (Windows). Kitty's own paste binding takes the key first when `ctrl+v` is mapped in `kitty.conf`, and kitty pastes text only |
-| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`); inert everywhere else, so it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
+| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`). Inert everywhere else, so it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
 | Alt+↑ | recall the newest queued message into the editor, emitted as `ControlRecallQueued` |
-| Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor); an empty row is removed like Delete (see above) |
+| Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor). An empty row is removed like Delete (see above) |
 | Ctrl+U | remove from the start of the current line to the caret |
-| Ctrl+Y | restore what the last Ctrl+C/Esc clear or kill removed; one level deep, consumed by the restore, dropped by any later edit, disarms history browsing like any non-recall replacement. Prompt/search/question overlays keep their own kill-line clears and do not undo |
+| Ctrl+Y | restore what the last Ctrl+C/Esc clear or kill removed. One level deep, consumed by the restore, dropped by any later edit, disarms history browsing like any non-recall replacement. Prompt/search/question overlays keep their own kill-line clears and do not undo |
 | Esc, twice | rewind onto an earlier message while idle |
 | Ctrl+R | reverse history search overlay (`search.go`). `←`/`→`, their word-wise forms and Home select the match too |
 | Shift+Tab, Shift+→ | out-of-band `ControlModeCycle`, never consumed by the editor or a dialog. The front end cycles the permission mode forward |
@@ -1373,7 +1375,11 @@ Ctrl+R's provider: the source may scan transcripts, so the press arms an async
 load, arrows fall back to editor history until it lands, and a transient
 status segment explains the wait. A generation guard drops a delivery that
 raced a reset or source swap, and an empty result arms no reload until the
-next navigation episode, so an empty scope never re-scans per press.
+next navigation episode, so an empty scope never re-scans per press. The list
+caches for one navigation episode only: a prompt that paints while it is held
+retires it (at the episode's edge or the in-flight load's delivery, never
+mid-browse), so the next ↑ reloads instead of offering a list the painted
+prompt predates.
 
 ## The demo
 
@@ -1452,8 +1458,8 @@ Things that look fine and are not:
   path that skips it.
 - **Do not pad to a width measured on a different string than the one drawn.**
   Padding computed over raw text (`shadeRow` once did) is arithmetic on a string
-  that no longer exists by draw time, because folding changes its width;
-  sanitize, then truncate, then pad, so what you measure is what you emit.
+  that no longer exists by draw time, because folding changes its width.
+  Sanitize, then truncate, then pad, so what you measure is what you emit.
 - **Do not send caller text to history unsanitized.** Tool output streams raw
   bytes, and `cat` of a file containing `ESC[2J` would fire the no-full-erase trap
   through caller data. Sanitize at commit (`commitHist`) keeping SGR, so colored

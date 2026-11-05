@@ -21,6 +21,15 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
+func TestUIConsoleMCPNilWithoutManager(t *testing.T) {
+	t.Parallel()
+
+	// the adapter is a struct value, so an unwrapped return would hand callers
+	// a non-nil interface over a nil manager and every call would panic
+	c := &uiConsole{}
+	assert.Nil(t, c.MCP())
+}
+
 func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	t.Parallel()
 
@@ -42,8 +51,6 @@ func TestUIConsoleToolsChangedWritesThrough(t *testing.T) {
 	assert.JSONEq(t, `["read"]`, string(raw))
 }
 
-// A resumed run starts committed (its history already sent a tool block) but not
-// dispatched, so /tools selection stays free until this run sends a prompt.
 func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
 	t.Parallel()
 
@@ -57,180 +64,176 @@ func TestUIConsoleDispatchedVsCommitted(t *testing.T) {
 	assert.True(t, starts.committed.marked()) // dispatch commits the block too
 }
 
-func TestUIConsoleSetModelRemasuresLedger(t *testing.T) {
-	t.Parallel()
+func TestUIConsoleSetModel(t *testing.T) {
+	t.Run("remasures_ledger", func(t *testing.T) {
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
 
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			ui.Close()
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
 
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		st := &agent.State{
+			Model:  llm.Model{ID: "p/big", ContextWindow: 200000},
+			Tokens: tokens.New(llm.Model{ID: "p/big", ContextWindow: 8000}),
+		}
+		// a nontrivial in-memory context exists before the switch.
+		st.Messages = []llm.Message{
+			llm.Text(llm.RoleUser, strings.Repeat("x ", 500)), // ~1000+ chars of prose
+		}
+		tk := st.Tokens
+		tk.Add(tokens.EstimateMessages(st.Messages)) // the live ledger already tracks them
+		require.Greater(t, tk.Context().Used, 1)
+
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
+		// switching to a smaller window must not leave Used at zero.
+		c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
+
+		assert.Greater(t, tk.Context().Used, 100)
 	})
 
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	st := &agent.State{
-		Model:  llm.Model{ID: "p/big", ContextWindow: 200000},
-		Tokens: tokens.New(llm.Model{ID: "p/big", ContextWindow: 8000}),
-	}
-	// a nontrivial in-memory context exists before the switch.
-	st.Messages = []llm.Message{
-		llm.Text(llm.RoleUser, strings.Repeat("x ", 500)), // ~1000+ chars of prose
-	}
-	tk := st.Tokens
-	tk.Add(tokens.EstimateMessages(st.Messages)) // the live ledger already tracks them
-	require.Greater(t, tk.Context().Used, 1)
+	t.Run("no_change_silent", func(t *testing.T) {
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
 
-	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
-	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
-	// switching to a smaller window must not leave Used at zero.
-	c.SetModel(llm.Model{ID: "p/small", ContextWindow: 8000})
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			ui.Close()
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
 
-	assert.Greater(t, tk.Context().Used, 100)
-}
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		active := llm.Model{Provider: "p", ID: "same"}
+		st := &agent.State{
+			Model:  active,
+			Tokens: tokens.New(active),
+		}
 
-func TestUIConsoleSetModelNoChangeSilent(t *testing.T) {
-	t.Parallel()
+		// a real recorder so we can assert what does (and does not) get recorded
+		trPath := filepath.Join(t.TempDir(), "s.jsonl")
+		w, err := session.Create(trPath, session.SessionData{Version: session.Version()})
+		require.NoError(t, err)
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, rec: session.NewRecorder(w), lane: newStateLane(), q: &steerQueue{}}
 
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
+		// re-selecting the same model must not record a change.
+		c.SetModel(active)
+		assert.NotContains(t, readFileString(t, trPath), "model_change")
 
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
+		// selecting a different model still records the switch.
+		c.SetModel(llm.Model{Provider: "p", ID: "other"})
+		assert.Contains(t, readFileString(t, trPath), "model_change")
 	})
 
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	active := llm.Model{Provider: "p", ID: "same"}
-	st := &agent.State{
-		Model:  active,
-		Tokens: tokens.New(active),
-	}
+	t.Run("keeps_session_only", func(t *testing.T) {
+		// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 
-	// a real recorder so we can assert what does (and does not) get recorded
-	trPath := filepath.Join(t.TempDir(), "s.jsonl")
-	w, err := session.Create(trPath, session.SessionData{Version: session.Version()})
-	require.NoError(t, err)
-	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
-	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, rec: session.NewRecorder(w)}
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		userCfg := filepath.Join(home, "config.json")
 
-	// re-selecting the same model must not record a change.
-	c.SetModel(active)
-	assert.NotContains(t, readFileString(t, trPath), "model_change")
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			ui.Close()
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
 
-	// selecting a different model still records the switch.
-	c.SetModel(llm.Model{Provider: "p", ID: "other"})
-	assert.Contains(t, readFileString(t, trPath), "model_change")
-}
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		active := llm.Model{Provider: "p", ID: "first"}
+		st := &agent.State{Model: active, Tokens: tokens.New(active)}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
-func TestUIConsoleSetModelKeepsSessionOnly(t *testing.T) {
-	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+		// the same-model no-op must not create the file.
+		c.SetModel(active)
+		assert.NoFileExists(t, userCfg)
 
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
-	userCfg := filepath.Join(home, "config.json")
+		c.SetModel(llm.Model{Provider: "p", ID: "picked"})
 
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
+		// the change lands as a session override only, so no config layer is written.
+		assert.NoFileExists(t, userCfg)
+		rv, src, ok := set.Explain("model")
+		require.True(t, ok)
+		assert.Equal(t, "session", src)
+		assert.JSONEq(t, `"p/picked"`, string(rv))
 	})
 
-	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
-	require.NoError(t, err)
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	active := llm.Model{Provider: "p", ID: "first"}
-	st := &agent.State{Model: active, Tokens: tokens.New(active)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	t.Run("preserves_reasoning_intent", func(t *testing.T) {
+		// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 
-	// the same-model no-op must not create the file.
-	c.SetModel(active)
-	assert.NoFileExists(t, userCfg)
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
 
-	c.SetModel(llm.Model{Provider: "p", ID: "picked"})
+		inR, inW, err := os.Pipe()
+		require.NoError(t, err)
+		outR, outW, err := os.Pipe()
+		require.NoError(t, err)
+		ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			ui.Close()
+			_ = inR.Close()
+			_ = inW.Close()
+			_ = outR.Close()
+			_ = outW.Close()
+		})
 
-	// the change lands as a session override only, so no config layer is written.
-	assert.NoFileExists(t, userCfg)
-	rv, src, ok := set.Explain("model")
-	require.True(t, ok)
-	assert.Equal(t, "session", src)
-	assert.JSONEq(t, `"p/picked"`, string(rv))
-}
+		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
+		require.NoError(t, err)
+		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
+		reasoning := llm.Model{
+			Provider: "p", ID: "claude",
+			Caps: llm.Capabilities{Reasoning: true},
+		}
+		st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
-func TestUIConsoleSetModelPreservesReasoningIntent(t *testing.T) {
-	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
+		// the user's explicit level choice persists as a session override, the
+		// /reasoning pick owns that leaf now
+		require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
+		c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
 
-	home := t.TempDir()
-	t.Setenv("AJENT_HOME", home)
+		// switching to a model that cannot reason clamps only the live effective level.
+		c.SetModel(llm.Model{Provider: "p", ID: "small"})
+		assert.Equal(t, llm.LevelOff, st.Reasoning.Level)
+		rl, layer, ok := set.Explain("reasoning.level")
+		require.True(t, ok)
+		assert.Equal(t, "session", layer)
+		assert.JSONEq(t, `"high"`, string(rl)) // stored intent survives
 
-	inR, inW, err := os.Pipe()
-	require.NoError(t, err)
-	outR, outW, err := os.Pipe()
-	require.NoError(t, err)
-	ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		ui.Close()
-		_ = inR.Close()
-		_ = inW.Close()
-		_ = outR.Close()
-		_ = outW.Close()
+		// switching back restores the user's original choice.
+		c.SetModel(reasoning)
+		assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
 	})
-
-	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
-	require.NoError(t, err)
-	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	reasoning := llm.Model{
-		Provider: "p", ID: "claude",
-		Caps: llm.Capabilities{Reasoning: true},
-	}
-	st := &agent.State{Model: reasoning, Tokens: tokens.New(reasoning)}
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
-
-	// the user's explicit level choice persists as a session override, the
-	// /reasoning pick owns that leaf now
-	require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
-	c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
-
-	// switching to a model that cannot reason clamps only the live effective level.
-	c.SetModel(llm.Model{Provider: "p", ID: "small"})
-	assert.Equal(t, llm.LevelOff, st.Reasoning.Level)
-	rl, layer, ok := set.Explain("reasoning.level")
-	require.True(t, ok)
-	assert.Equal(t, "session", layer)
-	assert.JSONEq(t, `"high"`, string(rl)) // stored intent survives
-
-	// switching back restores the user's original choice.
-	c.SetModel(reasoning)
-	assert.Equal(t, llm.LevelHigh, st.Reasoning.Level)
 }
 
-// TestUIConsoleMutatorsQueueMidTurn pins a turn inside its tool call and checks
-// that state mutators queue behind it, then land once the drain exits
 func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -254,15 +257,15 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	require.NoError(t, err)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st, q: q}
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, q: q, lane: newStateLane()}
 
 	starts := newStartState(false)
 	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	var drain drainWaiter
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
-	startDrain(ctx, ui, false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
+	startDrain(ctx, wrapUI(t, ui), false, ag, q, []agent.Input{{Text: "run"}}, starts, planHooks{}, &drain)
 
 	<-entered // the turn owns State from here until it settles
 
@@ -286,8 +289,6 @@ func TestUIConsoleMutatorsQueueMidTurn(t *testing.T) {
 	assert.Equal(t, "session", set.Source("model"))
 }
 
-// TestUIConsoleSettledMessages pins the /copy read: live at rest, the last
-// settled copy while a drain goroutine owns State
 func TestUIConsoleSettledMessages(t *testing.T) {
 	t.Parallel()
 
@@ -298,7 +299,7 @@ func TestUIConsoleSettledMessages(t *testing.T) {
 	snap.seed(settled)
 
 	waitReady, takeReady := stagePair(t)
-	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, waitReady, takeReady)
+	q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady, takeReady, noopDrop)
 	c := &uiConsole{st: st, q: q, snap: snap}
 
 	q.offer(agent.Input{Text: "run"}, "run", 0) // marks draining, like the pump
@@ -308,8 +309,6 @@ func TestUIConsoleSettledMessages(t *testing.T) {
 	assert.Equal(t, live, c.SettledMessages())
 }
 
-// TestTurnSnapshotMidTurn pins the copy boundary: reads while a turn streams
-// return the seed, and the turn end republishes the full transcript
 func TestTurnSnapshotMidTurn(t *testing.T) {
 	t.Parallel()
 
@@ -391,7 +390,7 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 	require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 
 	assert.InDelta(t, 0.5, c.st.Model.CompactThreshold, 1e-09)
@@ -399,8 +398,6 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	assert.Equal(t, used, tk.Context().Used)
 }
 
-// Serial: flips the package-wide images gate. The apply must read the value
-// just set, not the stale one, so each flip lands immediately.
 func TestUIConsoleImagesBlockLiveFlip(t *testing.T) {
 	set := loadTestConfig(t)
 	tools.SetImagesEnabled(false)
@@ -450,7 +447,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		st := &agent.State{Model: model, Tokens: tokens.New(model)}
 		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 		require.NoError(t, err)
-		c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
 		require.NoError(t, c.SetSessionSetting("compaction.threshold", 0.5))
 		assert.Equal(t, 100000, st.Tokens.Context().Compact)
@@ -472,7 +469,7 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		st := &agent.State{Model: model, Tokens: tokens.New(model)}
 		set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 		require.NoError(t, err)
-		c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+		c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
 		c.SetReasoning(llm.ReasoningConfig{Level: llm.LevelHigh})
 		require.NoError(t, c.SetSessionSetting("reasoning.level", "high"))
@@ -499,7 +496,6 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 	})
 }
 
-// Serial: flips the package-wide images gate.
 func TestUIConsoleResetImagesBlockBackToConfig(t *testing.T) {
 	set := loadTestConfig(t)
 	tools.SetImagesEnabled(false)
@@ -536,7 +532,7 @@ func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
 	st := &agent.State{Model: big, Tokens: tokens.New(big)}
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
 	c.SetModel(small) // the override this reset must undo
 	assert.Equal(t, "p/small", st.Model.Key())
@@ -548,8 +544,6 @@ func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {
 	assert.Equal(t, "user", layer)
 }
 
-// A resolved flavor retention default must never latch into a config layer:
-// the level pick owns its leaf, the sink writes nothing.
 func TestUIConsoleReasoningRetainDoesNotLatch(t *testing.T) {
 	// not parallel: t.Setenv pins AJENT_HOME for the user layer path
 	t.Setenv("AJENT_HOME", t.TempDir())
@@ -564,7 +558,7 @@ func TestUIConsoleReasoningRetainDoesNotLatch(t *testing.T) {
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
-	c := &uiConsole{ui: ui, set: set, reg: reg, st: st}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, reg: reg, st: st, lane: newStateLane(), q: &steerQueue{}}
 
 	require.Equal(t, llm.RetainAll, st.Reasoning.Retain) // the flavor default
 
@@ -586,7 +580,7 @@ func TestUIConsoleResetRecordsNullSettingChange(t *testing.T) {
 	require.NoError(t, err)
 	set, _, err := config.Load(config.Options{Workspace: t.TempDir()})
 	require.NoError(t, err)
-	c := &uiConsole{ui: ui, set: set, rec: session.NewRecorder(w)}
+	c := &uiConsole{ui: wrapUI(t, ui), set: set, rec: session.NewRecorder(w)}
 
 	require.NoError(t, c.SetSessionSetting("compaction.auto", false))
 	require.NoError(t, c.ResetSessionSetting("compaction.auto"))

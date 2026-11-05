@@ -82,7 +82,7 @@ func (s writeScope) allows(call agent.ToolCall) bool {
 	if _, ok := coreWriteTools[call.Name]; !ok {
 		return false
 	}
-	return s.inScope(callPath(call.Input))
+	return s.toolPathInScope(callPath(call.Input))
 }
 
 // rebase returns the scope a command declaring cwd runs under. An empty cwd keeps
@@ -106,17 +106,30 @@ const shellExpansion = "$`{}"
 // config alias, core.hooksPath. They sit under the roots but are never unattended.
 var vcsDirs = bulk.SliceToSet([]string{".git", ".hg", ".svn"})
 
-// resolveInScope resolves an unresolved path argument and reports whether it lands
-// inside the scope. Empty, unresolvable, glob or expanding paths never do, nor does
-// anything inside a VCS metadata directory. A ~ or ~/ resolves to home, which the
-// roots never cover, while ~user/ is refused outright: bash expands it to another
-// home but PathPolicy leaves it literal, so the two would disagree.
+// resolveInScope resolves a shell-interpreted path argument and reports whether it lands
+// inside the scope. A tilde-leading argument stays refused: bash expands ~ itself, so what
+// such an argument names is unknowable here.
 func (s writeScope) resolveInScope(p string) (string, bool) {
+	if strings.HasPrefix(p, "~") {
+		return "", false
+	}
+	return s.resolveConcretePath(p)
+}
+
+// toolPathInScope reports whether a core writer's path argument lands inside the scope. A
+// tool argument never passes through a shell, so it resolves exactly as write and edit will,
+// tilde expansion included: gate and tool then always name the same file. The expanding-path
+// refusals stay regardless, such spellings are rare enough to prompt instead.
+func (s writeScope) toolPathInScope(p string) bool {
+	_, ok := s.resolveConcretePath(p)
+	return ok
+}
+
+// resolveConcretePath reports whether p names one concrete path landing at or under a root,
+// outside every VCS metadata directory. Empty, glob and expanding paths never do.
+func (s writeScope) resolveConcretePath(p string) (string, bool) {
 	if p == "" || strings.ContainsAny(p, shellExpansion) || tools.HasGlob(p) {
 		return "", false // what it names cannot be known before the shell expands it
-	}
-	if p[0] == '~' {
-		return "", false
 	}
 	full, err := tools.PathPolicy{Cwd: s.cwd}.Resolve(p)
 	if err != nil || !s.contains(full) {

@@ -26,7 +26,7 @@ Goals, in priority order:
 2. A session can fork: rewinding onto an earlier message starts a new branch
    while keeping every prior one reachable.
 
-Goal 2 is what drove most of the shape below: branches, the branch cursor, and
+Goal 2 is what drove most of the shape below: branches, head cursors, and
 the rewind picker all exist for it.
 
 ## The transcript format
@@ -38,8 +38,8 @@ and an opaque payload whose shape follows from the type.
 
 `ParentID` is what makes forking possible: every entry names the one it extends,
 so a transcript is not a linear log but a tree of branches.
-`Branch(entries, id)` walks that chain back to its root and returns it in order;
-it is the *only* read path anything else uses, never raw file order.
+`Branch(entries, id)` walks that chain back to its root and returns it in order.
+It is the *only* read path anything else uses, never raw file order.
 
 The first line of every file is always a `session` entry carrying `SessionData`:
 format version, cwd/workspace, the starting model key, and git branch/commit.
@@ -59,13 +59,13 @@ entry point owns its own surfacing policy (detailed in the resume table below).
 | Type | Payload | Meaning |
 |---|---|---|
 | `session` | `SessionData` | first line of the file: version, workspace, starting model, git state, optional name |
-| `session_name` | `NameData` | a name set or changed after creation (`/session <name>`); the newest one wins |
-| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only); an `injected` flag marks system-provided user text that must not surface as a recallable prompt |
+| `session_name` | `NameData` | a name set or changed after creation (`/session <name>`). The newest one wins |
+| `message` | `MessageData` | one appended message plus its stop reason and usage (assistant only). An `injected` flag marks system-provided user text that must not surface as a recallable prompt, and an `origin` string names a non-typed submitter (`controller`, see `control-design.md`) without changing how the message behaves |
 | `compaction` | `CompactionData` | a context reduction recorded without deleting anything (see `compaction-design.md`) |
 | `model_change` | `ModelData` | a `/model` switch, by canonical key and reason |
-| `setting_change` | `SettingData` | one setting change; the key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON. A JSON null marks a reset: the override was cleared, so replay returns that domain to its unrecorded state instead of applying it |
+| `setting_change` | `SettingData` | one setting change. The key is a config dotted path (e.g. `reasoning`, `tools.enabled`) and the value its JSON. A JSON null marks a reset: the override was cleared, so replay returns that domain to its unrecorded state instead of applying it |
 | `notice` | `NoticeData` | a user-visible notice worth replaying on resume |
-| `custom` | `CustomData` | opaque extension state that must survive a resume; `LatestCustom(branch, type, v)` reads the newest one back and `CustomLanded(branch, type)` reports whether a message follows it, so a feature stores latest-wins state rather than writing its own reverse scan |
+| `custom` | `CustomData` | opaque extension state that must survive a resume. `LatestCustom(branch, type, v)` reads the newest one back and `CustomLanded(branch, type)` reports whether a message follows it, so a feature stores latest-wins state rather than writing its own reverse scan |
 
 Unknown types and unknown payload fields round-trip untouched, so older binaries
 can read files written by newer ones.
@@ -88,23 +88,23 @@ The writer owns the transcript file, its path and the current head id, under a
 mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
-one line under the mutex, so concurrent appends form one linear chain. The
-entry timestamp shares the id's monotonic millisecond: ts-derived ordering
-(`Store.List`, `Stale`) always agrees with append order even when the wall
-clock steps back. The new id becomes the head only *after* a successful write;
-an append that fails to hit disk never advances the cursor.
+one line under the mutex. That write is fenced by an exclusive lock on the
+transcript (see concurrent access below), so concurrent *processes* interleave whole
+lines rather than bytes. The entry timestamp shares the id's monotonic
+millisecond: ts-derived ordering (`Store.List`, `Stale`) always agrees with append
+order even when the wall clock steps back. The new id becomes the head only
+*after* a successful write, so an append that fails to hit disk never advances it.
 
 - **Create** makes a fresh file and writes its `session` entry first.
-- **Open** reopens an existing file for append and recovers the head from the
-  persisted cursor or the tail (see the branch cursor below). **OpenEntries**
-  additionally returns what it parsed, so a resume can rebuild state without
-  reading the file a second time.
-- **Sync** flushes at a turn boundary *and* persists the current head, data
-  before cursor, and it is never called by `Append`. A cursor that could not be
-  written surfaces as an error rather than silently continuing.
-- **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
-  transcript keeps both histories (nothing is deleted) and the new tip becomes
-  the head.
+- **Open** reopens an existing file for append and resolves the head from the
+  file itself (see head cursors below). **OpenEntries** additionally returns what it
+  parsed, so a resume can rebuild state without reading the file a second time.
+- **Sync** fsyncs at a turn boundary and is never called by `Append`.
+- **SetHead(id)** rewinds to an earlier id so later appends fork from it,
+  recording one cursor entry (see below). The transcript keeps both histories
+  (nothing is deleted) and the new tip becomes this writer's head. An empty id
+  starts a new root, which names no branch at all until its first entry.
+- **Close** releases the file. Appends error afterwards.
 
 ## Durability
 
@@ -113,41 +113,49 @@ Two boundaries matter, and they are deliberately different:
 1. **Per message.** The recorder wires `agent.Options.OnMessage` to append one
    `message` entry as soon as the loop produces it (`Recorder.Message`), so every
    completed step is already on disk before the next begins. Durability here is
-   crash-consistent, not fsync-strong: the writes land in the file, but a crash
-   before the turn's `Sync` leaves the cursor behind, and reopen recovers the
-   appended entries from the file tail instead.
-2. **Per turn.** Each `TurnEnd` fsyncs and records the head cursor, so resume
-   continues from exactly where work left off.
+   crash-consistent, not fsync-strong: the writes land in the file, and reopen
+   recovers them from the file tail.
+2. **Per turn.** Each `TurnEnd` fsyncs, so resume continues from exactly where
+   work left off.
 
 Write failures never end a conversation: persistence errors surface as an
 error-level notice through the sink rather than failing the turn. A broken disk
 should degrade to "not recorded", not kill the agent.
 
-## The branch cursor
+## Head cursors
 
-The one mutable piece of an otherwise append-only design is the branch cursor:
-the entry id where work continues after a fork, which is what a rewind updates.
-It is persisted beside its transcript at `<transcript>.head`, written atomically
-(with the containing directory fsynced) on every `SetHead` and at turn
-boundaries, together with the transcript's entry count at write time.
+The one mutable piece of an otherwise append-only design is the branch head: the
+entry id where work continues after a fork, which is what a rewind updates. It is
+persisted as **head cursor entries** in the transcript itself, one per `SetHead`.
 
-**One cursor per transcript, never per directory.** A directory holds every
-session for a workspace, so a shared cursor can only remember one of them.
-Two ajent instances in one workspace overwrite each other's. A sidecar cannot be
-claimed by a sibling, so no session and no concurrent process can steer another.
+A cursor is an ordinary entry of type `head` with no payload: its `ParentID` names
+the entry the head moved to, empty for a new root. Because it is an entry, the
+append path's fencing and durability carry it, nothing writes beside the file, and
+a cursor never changes what any branch means: later entries chain through it,
+replay and the rewind picker skip it, and older binaries round-trip it as an
+unknown type.
 
-Forking onto a new root removes the cursor rather than writing one, so it can
-never point back at the branch just abandoned. `headFor` falls back to tail
-recovery when a cursor is missing, corrupt (including an out-of-bounds count),
-or names an id the file no longer holds, so a lost cursor degrades to "continue
-from the end" instead of losing the branch.
+**Resolution on open** is one rule: the file tail is the tip, unless the last
+entry is a cursor, whose parent names the branch to continue. A rewind that
+landed entries before quitting has already moved the tail, so its cursor rides
+mid-chain and the tail wins, which is exactly right. A missing cursor (a file
+written before cursors existed, or a cursor write that failed) defaults to the
+tail: the abandoned-branch intent is lost, never the data, and every fork stays
+reachable from the rewind picker.
 
-**Stale cursors lose to the tail.** The count in the cursor tells a crash apart
-from a fork: a file that grew past the counted length in one unbroken parent
-chain holds appends that landed after the last `Sync`, so the tail resumes and
-no unsynced turn is lost. Growth that breaks the chain is a rewind or fork, and
-the cursor wins. Sync flushes transcript data before persisting the cursor, so
-a trusted cursor never names an entry that is not durable.
+**Byte-level safety stays inside the append.** Complete-line appends plus an exclusive
+lock on the transcript make concurrent processes interleave entries instead of corrupting
+each other, and a torn tail is quarantined under that same lock before anything else can
+append to it. Readers neither lock nor truncate: they tolerate a partial last line the way
+they always have. The design assumes a local filesystem, which is also what the control
+surface assumes.
+
+**Deletion meets serving.** `--delete` and `--delete-old` consult control discovery
+records first: a session a serving instance holds refuses deletion, `--force` overrides
+that for one named target but never for the sweep, and the sweep lists served sessions
+as skipped. An interactive session with no socket is not guarded, so deleting under one
+degrades honestly: the writer notices at its next append and stops recording with a
+persistence error rather than writing where nothing could read it back.
 
 ## Concurrent access
 
@@ -155,20 +163,22 @@ Nothing in the design locks a transcript to one process. Two ajent instances
 may share a workspace directory or even one session, kept safe without
 coordination by four rules:
 
-1. **Appends interleave whole lines, never bytes.** Each append is one write
-   of a complete line, so concurrent writers land interleaved entries in one
-   tree and nothing is lost or corrupt.
-2. **The cursor is atomic, last writer wins.** A reader sees the old or new
-   cursor, never a torn one. The last cursor to land names the branch a resume
-   continues, and the other instance's entries stay intact in the tree, one
-   rewind away.
-3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a
-   consistent prefix or freshly landed lines, exactly as a serial scan would,
-   and torn tails quarantine themselves on open.
-4. **A parsed snapshot is trusted only while the file is unchanged.** A
-   process holding one (an open's parse, a cached prompt scan) re-reads before
-   building on it whenever the file has grown, so a concurrent writer's
-   entries never land unseen.
+1. **Appends interleave whole lines, never bytes.** Each append is one fenced write
+   of a complete line, so concurrent writers land interleaved entries in one tree and
+   nothing is lost or corrupt.
+2. **Heads are per writer.** Each instance appends from its own in-memory head, so
+   neither can steer the other. The peer's entries stay intact in the tree, one
+   rewind away, whichever branch a resume picks.
+3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a consistent
+   prefix or freshly landed lines, exactly as a serial scan would, and a torn tail
+   quarantines itself on the next open.
+4. **A parsed snapshot is trusted only while the file is unchanged.** A process holding
+   one (an open's parse, a cached prompt scan) re-reads before building on it whenever
+   the file has grown, so a concurrent writer's entries never land unseen.
+
+**Name races** between two `--session <name>` creators settle
+deterministically: the older session id keeps the name and the younger takes a numeric
+suffix through a recorded `session_name` entry before its first prompt.
 
 ## The store
 
@@ -176,7 +186,9 @@ The store maps workspaces to directories under `<config dir>/sessions`: a
 workspace is one `<root>/<slug>-<hash>` directory, so renaming a project does
 not orphan its sessions. The slug flattens the whole workspace path so a
 directory is recognisable at a glance, and it is lossy, so the hash pins identity.
-Names are never parsed back into a workspace.
+Names are never parsed back into a workspace. The root itself is created and pinned to
+owner-only permissions by the shared home-directory helper (see `config-design.md`), so
+a mode that slipped wider is tightened with a startup warning rather than silently kept.
 The store:
 
 - **Create** starts a new session file named by UTC timestamp + id.
@@ -190,9 +202,9 @@ The store:
   an id-less file can never surface as a resumable row. Nor does one whose
   every `session` line fails to decode: that marks the file `Damaged`, and
   listing drops the row.
-- **Find** resolves `--resume`/`--delete` targets: exact id first, then a unique
-  id prefix, and names match exactly only. Ambiguity at any step fails with
-  a clear error naming the candidates (see "Resume modes"). A target matching
+- **Find** resolves `--resume`/`--delete` targets: exact name first (case
+  insensitive), then full id, then a unique id prefix. Ambiguity at either step
+  fails with a clear error naming the target (see "Resume modes"). A target matching
   no row falls back to resolving it as a file path inside the workspace's
   session directory, which is how a damaged transcript stays reachable:
   deletion needs no decode, and a miss names any damaged files present so
@@ -201,7 +213,7 @@ The store:
   nothing, or reaches the session being named. Names are kept narrower than the
   printable set so the exit hint's resume command is never refused at the door.
 - **NameOf** resolves the current name: the newest `session_name` entry, else
-  `SessionData.Name`. See invariant 2 for why it reads raw file order;
+  `SessionData.Name`. See invariant 2 for why it reads raw file order.
   `Info.ID/Started/Model` share that rationale (they identify the file's session
   entry, not a branch).
 - **Stale** judges by `Info.Updated`: the newest entry's timestamp, or the file
@@ -210,8 +222,9 @@ The store:
   never swept: this build cannot read what it would be deleting.
 - **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
   28 days), most recently used first. Its order and selection key are `List`'s
-  already. Removing a session drops its sidecars too (the head cursor and any
-  `.torn` quarantine), leaving siblings and editor history alone.
+  already. Sessions a serving instance holds list as skipped and are re-checked at
+  removal time. Removing a session drops its sidecars too (any `.torn` quarantine),
+  leaving siblings and editor history alone.
 
 **Scans are concurrent and deterministic.** Each transcript parses
 independently, so `List` and `Prompts` walk files through a bounded worker
@@ -265,7 +278,8 @@ the queue, so the lines stay recallable this session rather than being dropped
 by the failed rewrite.
 
 Most rows are bare JSON strings (visible). Argv bootstrap prompts (`ajent
-"prompt"`) and the `-p` one-shot record like typed lines: visible in ↑/↓ and
+"prompt"`), the `-p` one-shot and controller-submitted lines (a prompt sent over
+the control socket) record like typed lines: visible in ↑/↓ and
 Ctrl+R, their turns carrying no `Input.Injected` mark so transcript-derived
 recall includes them too. Only slash commands ride `AppendHidden`, durable yet
 never recalled. A text is excluded from recall only when **every** occurrence
@@ -382,9 +396,9 @@ so an extra one stays visible in the rewind picker. A new root must lead with a
 **Rewinding** is how you start a new branch: picking an earlier message moves
 the writer's `SetHead` to that message's *parent* (so the picked text becomes
 the start of the new branch), rebuilds agent state from that head, redraws the
-UI, replays the restored context, and pre-fills the editor with the full
-original prompt, ready to edit or re-send. The cursor now points at the fork's
-tip, and both it and every earlier branch remain in the file.
+UI, replays the restored context, and pre-fills the editor with the full original
+prompt, ready to edit or re-send. The writer's cursor names the fork's tip, and both
+it and every earlier branch remain in the file.
 
 Every branch switch, rewind and the plan workflow's forks alike, goes through
 one guarded state swap (`WithState`). The swap is refused while a turn owns the
@@ -413,7 +427,7 @@ transcript by name or id (`--resume <id|name>`), or create-or-resume by name
 
 | Invocation | Behaviour |
 |---|---|
-| *(no flag)* | always a brand-new transcript; the previous one is untouched and stays resumable by id or picker |
+| *(no flag)* | always a brand-new transcript. The previous one is untouched and stays resumable by id or picker |
 | `--continue` | auto-resumes the most recent session this build can open, no prompt, and starts fresh if none exists. A newer-format session is skipped with a loud notice naming it, never silently traded for an older conversation. The "just get back to work" path |
 | `--resume` | lists saved sessions (newest first) in a picker showing the first user prompt, started time, model and message count, then resumes the chosen root's leaf. Newer-format rows render disabled as "newer session format". Cancelling or an empty list falls back to fresh |
 | `--resume <id\|name>` | reopens that exact saved transcript directly by name, full id or unique id prefix. Fails fast with a clear error if nothing matches, and with the version hint when the match is blocked behind a newer format |
@@ -464,8 +478,7 @@ An **empty session** (abandoned before its first prompt) is deleted on exit: it
 has nothing to resume and would only be a dead picker row. A **named** session
 is exempt, since `--session` resumes by name. Deleting it would make the same
 command start over instead of returning to the work, and the picker labels it
-rather than showing an empty row. The deletion drops its head cursor too;
-siblings are left untouched.
+rather than showing an empty row. Siblings are left untouched.
 
 ## Deleting sessions
 
@@ -493,13 +506,13 @@ declines rather than deleting blind.
 These are load bearing. Each exists because breaking it produced a real bug.
 
 **1. The transcript is append-only: nothing is ever deleted.** Forks, rewinds
-and compaction only add entries and move the cursor. Deleting would orphan
+and compaction only add entries and move the head. Deleting would orphan
 branches that other tips still point at.
 
 This governs entries *within* a transcript. Retiring a whole session
 (empty-session cleanup, `--delete`, `--delete-old`) is a separate lifecycle
-operation: `Remove` takes the file with its sidecars (the head cursor and any
-torn-tail quarantine) so nothing of it lingers behind.
+operation: `Remove` takes the file with its sidecars (any torn-tail quarantine)
+so nothing of it lingers behind.
 
 **2. Reads go through the branch, never raw file order.** Every consumer (state
 rebuild, replay, info counts) walks from a head id along `ParentID`.
@@ -516,19 +529,15 @@ its entry stays on disk, freeing the old name to create a duplicate.
 `Info.ID/Started/Model` share that rationale: they identify the file (the
 `session` entry in raw order), not any branch.
 
-**3. The live head wins over the file tail, except after a crash between
-Syncs.** They agree only until the first fork. After a rewind, or a plan
-workflow that leaves the cursor on the review branch while the tail is an
-implementation entry, the tail belongs to a different branch. Resume and
-rebuild prefer the writer's head and fall back to the tail only when it no
-longer resolves. One exception: a file that grew past the cursor's recorded
-count in one unbroken parent chain holds appends made after the last `Sync`, so
-the tail wins and no unsynced turn is skipped. The cursor is per transcript, so
-a sibling session can never answer this question for another.
+**3. The cursor wins over the file tail when nothing followed it.** They agree
+until the first fork. After a rewind that landed entries, the tail is the new
+tip and a mid-chain cursor is inert. After a rewind that quit first, the trailing
+cursor names the branch to continue, so the abandoned tail does not win. A crash
+between Syncs needs no rule: the unsynced entries are simply the tail.
 
-**4. The head advances only on success.** An append updates the cursor after a
-successful write, and an fsync records it at turn boundaries. A lost or corrupt
-cursor falls back to tail recovery rather than losing the branch entirely.
+**4. The head advances only on success.** An append updates the head after a
+successful write. A cursor write that fails degrades to losing the move across
+a restart, never the live branch, since every fork stays in the file.
 
 **5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
 `ToolResultBlock`, exactly as in the agent loop, or the next request would be

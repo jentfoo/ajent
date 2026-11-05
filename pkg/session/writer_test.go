@@ -120,11 +120,31 @@ func TestWriterAppendAfterCloseErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "closed")
 }
 
-func TestWriterHeadCursor(t *testing.T) {
+func TestWriterDeletedUnderWriterStopsRecording(t *testing.T) {
 	t.Parallel()
 
-	// SetHead persists the cursor immediately
-	t.Run("set_head_persists_cursor", func(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w.Close() })
+	_, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+	require.NoError(t, aerr)
+
+	require.NoError(t, os.Remove(p))
+	_, err = w.Append(TypeMessage, MessageData{Message: llmText("two")})
+	require.ErrorIs(t, err, ErrTranscriptGone)
+
+	require.NoError(t, w.Sync()) // a gone transcript skips its bookkeeping
+	_, err = w.Append(TypeNotice, NoticeData{Message: "x"})
+	require.ErrorIs(t, err, ErrTranscriptGone) // latched: no path re-check needed
+	require.NoError(t, w.Close())
+}
+
+func TestWriterSetHeadCursor(t *testing.T) {
+	t.Parallel()
+
+	// SetHead records one trailing cursor naming the rewind target
+	t.Run("set_head_records_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -133,14 +153,16 @@ func TestWriterHeadCursor(t *testing.T) {
 
 		w.SetHead(e1.ID) // rewind onto the first message
 
-		cur, ok := readHead(p)
-		require.True(t, ok)
-		assert.Equal(t, e1.ID, cur.ID)
+		entries, _, rerr := Read(p)
+		require.NoError(t, rerr)
+		last := entries[len(entries)-1]
+		require.Equal(t, TypeHead, last.Type)
+		assert.Equal(t, e1.ID, last.ParentID)
 		require.NoError(t, w.Close())
 	})
 
-	// a fork to a new root leaves no cursor to point back at the abandoned branch
-	t.Run("empty_head_drops_cursor", func(t *testing.T) {
+	// a fork to a new root carries an empty parent
+	t.Run("new_root_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -148,28 +170,14 @@ func TestWriterHeadCursor(t *testing.T) {
 		e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
 		require.NoError(t, err)
 		w.SetHead(e1.ID)
-		require.True(t, fileExists(headPath(p)))
 
 		w.SetHead("")
 
-		assert.False(t, fileExists(headPath(p)))
-	})
-
-	// Sync alone must record the appended head at a turn boundary
-	t.Run("sync_persists_cursor_at_turn_boundary", func(t *testing.T) {
-		p := filepath.Join(t.TempDir(), "s.jsonl")
-		w, err := Create(p, SessionData{Version: sessionVersion})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = w.Close() })
-		e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
-		require.NoError(t, err)
-
-		// no SetHead, Sync alone must record the appended head
-		require.NoError(t, w.Sync())
-
-		cur, ok := readHead(p)
-		require.True(t, ok)
-		assert.Equal(t, e1.ID, cur.ID)
+		entries, _, rerr := Read(p)
+		require.NoError(t, rerr)
+		last := entries[len(entries)-1]
+		require.Equal(t, TypeHead, last.Type)
+		assert.Empty(t, last.ParentID)
 	})
 
 	// appends after the last Sync must not be skipped by a reopen
@@ -185,7 +193,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		require.NoError(t, aerr)
 		e3, aerr := w.Append(TypeMessage, MessageData{Message: llmText("three")})
 		require.NoError(t, aerr)
-		// a crash: no Sync, the cursor sidecar still names e1
+		// a crash: no Sync, the cursor still names e1
 		require.NoError(t, w.Close())
 
 		entries, _, rerr := Read(p)
@@ -239,7 +247,7 @@ func TestWriterHeadCursor(t *testing.T) {
 	})
 
 	// a reopen resumes the persisted branch rather than the file tail
-	t.Run("open_recovers_persisted_branch_not_tail", func(t *testing.T) {
+	t.Run("open_recovers_branch_not_tail", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -249,6 +257,7 @@ func TestWriterHeadCursor(t *testing.T) {
 		e2, aerr := w.Append(TypeMessage, MessageData{Message: llmText("two")}) // tail
 		require.NoError(t, aerr)
 		w.SetHead(e1.ID) // fork back to one
+		require.NoError(t, w.Sync())
 		require.NoError(t, w.Close())
 
 		// the file tail is e2 but the cursor points at e1, so a reopen must resume from e1
@@ -295,15 +304,12 @@ func TestWriterHeadCursor(t *testing.T) {
 	})
 }
 
-// TestWriterAppendTimestamp pins the entry ts to the id's monotonic millisecond:
-// metadata ordering must survive a wall clock stepping backward mid-session.
 func TestWriterAppendTimestamp(t *testing.T) {
 	// resets the package counter and clock, so this cannot run in parallel
 
 	t.Run("ts_tracks_monotonic_not_wall", func(t *testing.T) {
 		base := time.Now().Add(time.Hour).UTC()
-		resetIDCounter() // ignore what earlier tests left in the counter
-		t.Cleanup(setClock(base))
+		t.Cleanup(pinClock(base))
 
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
@@ -325,13 +331,44 @@ func TestWriterAppendTimestamp(t *testing.T) {
 	})
 }
 
+func TestAppendFencesTornTailMidSession(t *testing.T) {
+	t.Parallel()
+
+	p := filepath.Join(t.TempDir(), "s.jsonl")
+	w, err := Create(p, SessionData{Version: sessionVersion})
+	require.NoError(t, err)
+	e1, aerr := w.Append(TypeMessage, MessageData{Message: llmText("one")})
+	require.NoError(t, aerr)
+	require.NoError(t, w.Sync())
+
+	// a peer tears mid-write after the open repair already ran
+	line, merr := json.Marshal(e1)
+	require.NoError(t, merr)
+	f, oerr := os.OpenFile(p, os.O_APPEND|os.O_WRONLY, 0)
+	require.NoError(t, oerr)
+	_, werr := f.Write(line[:len(line)/2])
+	require.NoError(t, werr)
+	require.NoError(t, f.Close())
+
+	e2, aerr := w.Append(TypeMessage, MessageData{Message: llmText("two")})
+	require.NoError(t, aerr)
+	require.NoError(t, w.Close())
+
+	assert.Equal(t, e1.ID, e2.ParentID) // chain intact, no glued link
+	entries, warns, rerr := Read(p)
+	require.NoError(t, rerr)
+	assert.Empty(t, warns)
+	assert.Equal(t, []string{e1.ID, e2.ID}, ids(entries)[1:])
+	torn, terr := os.ReadFile(tornPath(p))
+	require.NoError(t, terr)
+	assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
+}
+
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
 }
 
-// TestWriterOpenRepairsTornTail pins the torn-tail fence: a partial write
-// without its newline must never glue the next append onto the stray bytes.
 func TestWriterOpenRepairsTornTail(t *testing.T) {
 	t.Parallel()
 
@@ -374,7 +411,7 @@ func TestWriterOpenRepairsTornTail(t *testing.T) {
 	})
 
 	// a torn tail longer than the scan window falls back to the full backward scan
-	t.Run("open_repairs_torn_tail_beyond_window", func(t *testing.T) {
+	t.Run("torn_tail_repaired_past_window", func(t *testing.T) {
 		for _, n := range []int{tornScanWindow + 1, tornScanWindow + 77, 2*tornScanWindow + 13} {
 			t.Run(fmt.Sprintf("junk_%d", n), func(t *testing.T) {
 				p := filepath.Join(t.TempDir(), "s.jsonl")

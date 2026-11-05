@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // lockWait bounds the poll for a sibling's advisory lock before saving proceeds
@@ -30,7 +32,7 @@ func LockSave() (release func()) {
 	if !flockSupported {
 		return noop
 	}
-	dir, err := Dir()
+	dir, err := paths.Dir()
 	if err != nil {
 		return noop
 	}

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+
+	"github.com/jentfoo/ajent/pkg/paths"
 )
 
 // SecretPerm is the mode a file holding credentials should carry.
@@ -50,7 +52,7 @@ func ReadForSave(path string) (raw []byte, droppedComments bool, err error) {
 // partial file. Missing parent directories are created.
 func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, dirPerm); err != nil {
+	if err := os.MkdirAll(dir, paths.DirPerm); err != nil {
 		return err
 	}
 	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*")

@@ -181,7 +181,8 @@ func (s *questionState) optionBlock(t Theme, width, budget int) ([]string, int) 
 // textLines splits the prompt into rows. Blank lines are dropped so a long
 // question does not burn live-block height on empty separators.
 func (s *questionState) textLines() []string {
-	lines := splitLines(s.text)
+	// a trailing newline splits no row; blank lines drop below
+	lines := strings.Split(strings.TrimSuffix(s.text, "\n"), "\n")
 	out := make([]string, 0, len(lines))
 	for _, ln := range lines {
 		if strings.TrimSpace(ln) == "" {
@@ -302,11 +303,4 @@ func (s *questionState) summary(t Theme) string {
 		return t.Dim.Wrap(noticeMarker + " question declined")
 	}
 	return ""
-}
-
-func splitLines(s string) []string {
-	if !strings.Contains(s, "\n") {
-		return []string{s}
-	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
 }

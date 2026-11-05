@@ -230,7 +230,7 @@ func withMode(o Options, m Mode) Options {
 // runAsk drives the asker for one call and returns its decision.
 func runAsk(b *Barrier, ctx context.Context, name string, input []byte) tools.Decision {
 	ask := b.Asker()
-	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input}, tools.Decision{Action: tools.ActionAsk})
+	return ask(ctx, agent.ToolCall{ID: "c", Name: name, Input: input})
 }
 
 func TestGuardModeMatrix(t *testing.T) {
@@ -753,7 +753,7 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
 		b := newTestBarrierOpts(nil, Options{Mode: ModeAuto, ModeSet: true, Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify})
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		d := runAsk(b, ctx, "bash", []byte(`{"command":"stat f.txt"}`))
 		assert.Equal(t, tools.ActionDeny, d.Action)
@@ -797,8 +797,6 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	})
 }
 
-// TestGrantSessionAllows covers the pre-populated session-allow memory a
-// one-shot seeds from --allow-tools: tool names, whole-bash, and command heads.
 func TestGrantSessionAllows(t *testing.T) {
 	t.Parallel()
 
@@ -1322,8 +1320,10 @@ func TestAskerAuto(t *testing.T) {
 
 	// answering before classification returns cancels the in-flight classifier
 	t.Run("user_answer_cancels_in_flight_classification", func(t *testing.T) {
+		entered := make(chan context.Context, 1)
 		cancelled := make(chan struct{})
 		classify := func(ctx context.Context, _ Subject) Class {
+			entered <- ctx // announce the in-flight call carrying this context
 			<-ctx.Done()
 			close(cancelled)
 			return ClassUnsure
@@ -1335,18 +1335,22 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		waitDialog(t, p).answer(int(optDeny)) // the user answers before classification returns
+		dlg := waitDialog(t, p)
+		select { // the classifier is in flight before answering, so a cancel that
+		// wins the scheduling race legitimately skips the call entirely
+		case <-entered:
+		case <-t.Context().Done():
+			t.Fatal("classification never started")
+		}
+		dlg.answer(int(optDeny)) // the user answers before classification returns
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
-		require.Eventually(t, func() bool {
-			select {
-			case <-cancelled:
-				return true
-			default:
-				return false
-			}
-		}, time.Second, 10*time.Millisecond)
+		select { // deterministic: the answer path cancels before runAsk returns
+		case <-cancelled:
+		case <-t.Context().Done():
+			t.Fatal("answering did not cancel the in-flight classification")
+		}
 	})
 
 	// auto also classifies MCP/extension calls
@@ -1898,6 +1902,30 @@ func TestPrevResolvesOpenDialog(t *testing.T) {
 	assert.Equal(t, tools.ActionAllow, got.Action)
 }
 
+func TestCycleBlockAllBackToAllowAll(t *testing.T) {
+	t.Parallel()
+
+	p := newFakePrompter()
+	b := newTestBarrier(p) // default allow-read
+
+	for range 4 { // allow-read -> auto -> auto+write -> allow-all -> block-all
+		b.Cycle()
+	}
+	require.Equal(t, ModeBlockAll, b.Mode())
+
+	// premise: block-all asks even for a read
+	asked := b.Guard()(t.Context(), call("read", `{}`))
+	require.Equal(t, tools.ActionAsk, asked.Action)
+
+	// step back once: block-all -> allow-all, the reported display state
+	require.Equal(t, ModeAllowAll, b.Prev())
+	require.Equal(t, ModeAllowAll, b.Mode())
+
+	assert.Equal(t, tools.ActionAllow, b.Guard()(t.Context(), call("write", `{}`)).Action)
+	assert.Equal(t, tools.ActionAllow, runAsk(b, t.Context(), "write", []byte(`{}`)).Action)
+	assert.Equal(t, 0, p.count(), "no dialog may open in allow-all")
+}
+
 func TestPrevResetsSessionAllows(t *testing.T) {
 	t.Parallel()
 
@@ -2120,10 +2148,6 @@ func TestCommandRefused(t *testing.T) {
 	})
 }
 
-// TestFuzzCycleDuringAsk hammers every timing of a shift-right (auto -> auto+write)
-// against an in-scope write ask started in auto. Whatever moment the mode change
-// lands relative to the asker's own gate snapshot (before it, during the hold,
-// after open, after registration), the decision must end as Allow.
 func TestFuzzCycleDuringAsk(t *testing.T) {
 	t.Parallel()
 
@@ -2157,10 +2181,6 @@ func TestFuzzCycleDuringAsk(t *testing.T) {
 	}
 }
 
-// TestAskerStaleAskUnderAllowingMode pins the invariant behind the reported bug:
-// a guard verdict made under one mode must be re-validated against the live gate,
-// so an asker entered after auto+write took over never opens a dialog for a
-// workspace write the new mode allows outright.
 func TestAskerStaleAskUnderAllowingMode(t *testing.T) {
 	t.Parallel()
 
@@ -2184,9 +2204,6 @@ func TestAskerStaleAskUnderAllowingMode(t *testing.T) {
 	assert.Zero(t, p.count()) // no dialog flashed
 }
 
-// TestAskerStaleAskStillPromptsWhenModeAsks makes sure the re-validation only
-// short-circuits what the live gate would allow: an out-of-scope write under
-// auto+write still opens its dialog.
 func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
 	t.Parallel()
 
@@ -2209,9 +2226,6 @@ func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
 	assert.Equal(t, tools.ActionDeny, got.Action)
 }
 
-// TestUnattendedAskVerdictAfterModeChange pins the unattended twin of the dialog
-// path's racing-verdict rule: a classification launched under one mode never
-// decides for the next, so only the live gate may allow what it approved
 func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	t.Parallel()
 
@@ -2245,9 +2259,6 @@ func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	}
 }
 
-// TestOpenFailureHonorsModeChange covers the dialogless fallback: a mode change
-// during the typing hold still decides the call, since the unattended path
-// snapshots the live gate rather than the asker's entry mode
 func TestOpenFailureHonorsModeChange(t *testing.T) {
 	t.Parallel()
 

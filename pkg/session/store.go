@@ -14,18 +14,16 @@ import (
 
 	"github.com/go-analyze/bulk"
 
-	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/strutil"
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
 const (
-	sessionDirPerm = 0o700
-	maxSlugLen     = 64
+	sessionsRoot = "sessions"
+	maxSlugLen   = 64
 )
-
-var userHome = os.UserHomeDir // injectable for tests
 
 // ErrNoSessions is returned when a workspace has no saved sessions.
 var ErrNoSessions = errors.New("no sessions for this workspace")
@@ -52,19 +50,27 @@ var ErrNameConflict = errors.New("session name already in use")
 // directory is recognisable, the hash pinning it so a rename never collides.
 type Store struct {
 	root string
+	note string // startup caveat from pinning the root's mode, empty when clean
 }
 
-// NewStore returns the store rooted at <config dir>/sessions.
+// NewStore returns the store rooted at <config dir>/sessions, creating that
+// directory and pinning it to owner-only permissions. Note reports what the
+// pin found for callers with a user-facing surface; read-only lookups may
+// ignore it.
 func NewStore() (*Store, error) {
-	p, err := config.UserPath("sessions")
+	root, note, err := paths.SubDir(sessionsRoot)
 	if err != nil {
 		return nil, err
 	}
-	return &Store{root: p}, nil
+	return &Store{root: root, note: note}, nil
 }
 
 // StoreAt returns a store with an explicit root, for tests.
 func StoreAt(root string) *Store { return &Store{root: root} }
+
+// Note reports the startup caveat pinning the sessions root produced, empty
+// when the directory was clean or newly created.
+func (s *Store) Note() string { return s.note }
 
 // Dir resolves the directory holding one workspace's sessions, creating it.
 func (s *Store) Dir(workspace string) (string, error) {
@@ -72,7 +78,7 @@ func (s *Store) Dir(workspace string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	home, herr := userHome()
+	home, herr := os.UserHomeDir()
 	if herr != nil {
 		home = "" // no home to anchor against, so the path encodes absolute
 	}
@@ -82,7 +88,7 @@ func (s *Store) Dir(workspace string) (string, error) {
 		dir = hash4(abs) // the home directory itself has nothing to encode
 	}
 	d := filepath.Join(s.root, dir)
-	if err := os.MkdirAll(d, sessionDirPerm); err != nil {
+	if err := os.MkdirAll(d, paths.DirPerm); err != nil {
 		return "", err
 	}
 	return d, nil
@@ -111,6 +117,61 @@ func (s *Store) List(workspace string) ([]Info, error) {
 	return listed, nil
 }
 
+// Listed is one saved session found across workspaces: its listing row beside
+// the workspace the transcript itself names, which Info has no field for.
+type Listed struct {
+	Info // Label, Blocked/Damaged and the ordering fields ride along
+
+	Workspace string // first session entry's workspace; empty when it named none
+}
+
+// ListAll returns every saved session under the store root across all
+// workspace directories, most recently used first. The per-workspace listing
+// rules hold unchanged: a newer-format transcript still lists marked Blocked,
+// and one holding entries yet no decodable identity never lists. Workspace
+// comes from each transcript's first session entry.
+func (s *Store) ListAll() ([]Listed, error) {
+	paths, err := s.allTranscriptPaths()
+	if err != nil {
+		return nil, err
+	}
+	rows := scanEach(paths, func(p string) Listed {
+		info, workspace, ok := readRow(p)
+		if !ok {
+			return Listed{}
+		}
+		return Listed{Info: info, Workspace: workspace}
+	})
+	// the same rows List shows per workspace, so a miss here reads as absence
+	listed := bulk.SliceFilterInPlace(func(in Listed) bool { return in.Path != "" && !in.Damaged }, rows)
+	slices.SortStableFunc(listed, func(a, b Listed) int { return updatedFirst(a.Info, b.Info) })
+	return listed, nil
+}
+
+// allTranscriptPaths gathers the .jsonl transcripts of every workspace
+// directory in name order: the one scan ListAll's rows come from.
+func (s *Store) allTranscriptPaths() ([]string, error) {
+	dirs, err := os.ReadDir(s.root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil // no sessions yet is not an error
+		}
+		return nil, err
+	}
+	var paths []string
+	for _, d := range dirs {
+		if !d.IsDir() { // workspace roots are directories; a stray file is nothing to scan
+			continue
+		}
+		tpaths, terr := jsonlPaths(filepath.Join(s.root, d.Name()))
+		if terr != nil && !errors.Is(terr, os.ErrNotExist) { // vanished mid-walk reads as empty
+			return nil, terr
+		}
+		paths = append(paths, tpaths...)
+	}
+	return paths, nil
+}
+
 // transcriptPaths returns workspace's .jsonl files in name order: the scan order
 // every directory walk here keeps so results land deterministic.
 func (s *Store) transcriptPaths(workspace string) ([]string, error) {
@@ -118,27 +179,32 @@ func (s *Store) transcriptPaths(workspace string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	files, err := os.ReadDir(dir)
+	tpaths, err := jsonlPaths(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil // no sessions yet is not an error
 		}
 		return nil, err
 	}
-	names := make([]string, 0, len(files)) // jsonl transcripts are a share of dir entries
+	return tpaths, nil
+}
+
+// jsonlPaths returns dir's transcript files in name order: side files
+// (output-*.txt, editor-history.lines) and directories are not transcripts.
+func jsonlPaths(dir string) ([]string, error) {
+	files, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	tpaths := make([]string, 0, len(files)) // jsonl transcripts are a share of dir entries
 	for _, f := range files {
-		// side files (output-*.txt, editor-history.lines) are not transcripts, and only
-		// non-dir *.jsonl entries surface in the resume picker.
+		// only non-dir *.jsonl entries surface in the resume picker
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".jsonl") {
-			names = append(names, f.Name())
+			tpaths = append(tpaths, filepath.Join(dir, f.Name()))
 		}
 	}
-	slices.Sort(names) // parse in name order so results land deterministic
-	paths := make([]string, len(names))
-	for i, name := range names {
-		paths[i] = filepath.Join(dir, name)
-	}
-	return paths, nil
+	slices.Sort(tpaths) // deterministic scan order
+	return tpaths, nil
 }
 
 // Find returns the session matching target: an exact name first (case
@@ -230,7 +296,7 @@ func (s *Store) findByPath(workspace, target string) (Info, bool) {
 	if err != nil || !fi.Mode().IsRegular() {
 		return Info{}, false
 	}
-	info, ok := readInfo(p)
+	info, _, ok := readRow(p)
 	return info, ok // a damaged classification is exactly what this resolves
 }
 
@@ -289,19 +355,22 @@ func (s *Store) scanInfos(workspace string) ([]Info, []Info, error) {
 		return nil, nil, err
 	}
 	rows := scanEach(paths, func(p string) Info {
-		info, _ := readInfo(p)
+		info, _, _ := readRow(p)
 		return info
 	})
 	// newer-format rows still list (Blocked is not Damaged), unclassifiable ones
 	// carry no Path at all.
-	listed := bulk.SliceFilter(func(in Info) bool { return in.Path != "" && !in.Damaged }, rows)
-	damaged := bulk.SliceFilter(func(in Info) bool { return in.Damaged }, rows)
+	listed, damaged := bulk.SliceSplit(func(in Info) bool { return in.Path != "" && !in.Damaged }, rows)
 	// ordered on last use, with start time only as a tie break. Stable so equal
 	// clocks keep the name order above rather than the ReadDir arrival order.
-	slices.SortStableFunc(listed, func(a, b Info) int {
-		return cmp.Or(b.Updated.Compare(a.Updated), b.Started.Compare(a.Started))
-	})
+	slices.SortStableFunc(listed, updatedFirst)
 	return listed, damaged, nil
+}
+
+// updatedFirst orders listing rows most recently used first, with start time
+// only breaking ties. The one ordering every listing shares.
+func updatedFirst(a, b Info) int {
+	return cmp.Or(b.Updated.Compare(a.Updated), b.Started.Compare(a.Started))
 }
 
 // Damaged returns every transcript in workspace's directory that holds entries
@@ -315,16 +384,16 @@ func (s *Store) Damaged(workspace string) ([]Info, error) {
 	return damaged, nil
 }
 
-// Remove deletes one saved transcript with its sidecars: the branch cursor and
-// any torn-tail quarantine file. Other sessions in the directory (and editor
-// history) are untouched. Sidecar cleanup is best effort: an error means the
-// transcript itself survived.
+// Remove deletes one saved transcript with its sidecars: the torn-tail
+// quarantine file and a legacy cursor sidecar an older build may have left.
+// Other sessions in the directory (and editor history) are untouched. Sidecar
+// cleanup is best effort: an error means the transcript itself survived.
 func (s *Store) Remove(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	_ = removeHead(path) // a session whose transcript is gone must not report as kept
 	_ = os.Remove(tornPath(path))
+	_ = os.Remove(path + legacyHeadSuffix)
 	return nil
 }
 
@@ -360,15 +429,18 @@ func (i Info) Label() string {
 	return i.ID
 }
 
-func readInfo(path string) (Info, bool) {
+// readRow classifies one transcript into its listing row beside the workspace
+// its first session entry recorded, which ListAll carries onto Listed rows. ok
+// is false only for files nothing could ever classify.
+func readRow(path string) (Info, string, bool) {
 	entries, _, err := Read(path)
 	if err != nil {
-		return blockedInfo(path, entries, err)
+		return blockedRow(path, entries, err)
 	}
 	if len(entries) == 0 {
 		// no entries at all: a crash before Create's first write landed, or pure
 		// garbage. Not a session, and nothing this build could ever classify.
-		return Info{}, false
+		return Info{}, "", false
 	}
 	facts := factsOf(entries)
 	var info Info
@@ -380,10 +452,10 @@ func readInfo(path string) (Info, bool) {
 		// row never lists, but it stays reachable by path so the damage can surface
 		// and --delete can remove it deliberately rather than via raw rm.
 		info.Damaged = true
-		return info, true
+		return info, facts.workspace, true
 	}
 	info.ID, info.Started, info.Model = facts.id, facts.started, facts.model
-	for _, e := range Branch(entries, headFor(path, entries)) {
+	for _, e := range Branch(entries, resolveHead(entries)) {
 		if e.Type != TypeMessage {
 			continue
 		}
@@ -398,16 +470,16 @@ func readInfo(path string) (Info, bool) {
 			}
 		}
 	}
-	return info, true
+	return info, facts.workspace, true
 }
 
-// blockedInfo classifies a failed read: only a newer format arrives with its
+// blockedRow classifies a failed read: only a newer format arrives with its
 // entries parsed, and those still identify the file so List and Find can see
 // it. Branch-derived fields stay unset because this build must not interpret
 // what it cannot open.
-func blockedInfo(path string, entries []Entry, err error) (Info, bool) {
+func blockedRow(path string, entries []Entry, err error) (Info, string, bool) {
 	if !errors.Is(err, ErrNewerFormat) || len(entries) == 0 {
-		return Info{}, false // missing or unreadable is simply not a session
+		return Info{}, "", false // missing or unreadable is simply not a session
 	}
 	facts := factsOf(entries)
 	var info Info
@@ -416,7 +488,7 @@ func blockedInfo(path string, entries []Entry, err error) (Info, bool) {
 	info.ID, info.Started, info.Model = facts.id, facts.started, facts.model
 	info.Name = facts.name
 	info.Updated = lastUsed(path, facts.newestTS)
-	return info, true
+	return info, facts.workspace, true
 }
 
 // DescribeDamaged renders the hint naming damaged transcripts: what they are and
@@ -440,11 +512,12 @@ func DescribeDamaged(infos []Info) string {
 // transcript: these fields identify the file as a whole rather than its active
 // branch, like NameOf.
 type fileFacts struct {
-	id       string
-	started  time.Time
-	model    string
-	name     string // newest rename entry, else the session entry's name
-	newestTS int64  // newest entry timestamp, zero when no entry is stamped
+	id        string
+	started   time.Time
+	model     string
+	workspace string // first decodable session entry's workspace, empty when it names none
+	name      string // newest rename entry, else the session entry's name
+	newestTS  int64  // newest entry timestamp, zero when no entry is stamped
 }
 
 // factsOf reads raw file order once: id, start and model come from the first
@@ -465,7 +538,8 @@ func factsOf(entries []Entry) fileFacts {
 			var sd SessionData
 			// a later session entry is a new root and never re-identifies the file
 			if f.id == "" && e.Decode(&sd) == nil {
-				f.id, f.started, f.model, f.name = e.ID, time.UnixMilli(e.TS).UTC(), sd.Model, sd.Name
+				f.id, f.started = e.ID, time.UnixMilli(e.TS).UTC()
+				f.model, f.workspace, f.name = sd.Model, sd.Workspace, sd.Name
 			}
 		case TypeSessionName:
 			var nd NameData

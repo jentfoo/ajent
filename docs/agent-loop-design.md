@@ -333,6 +333,12 @@ Dispatch rules:
 - **Bounded parallelism.** A semaphore channel and a `sync.WaitGroup` cap
   in-flight calls at the host's CPU count. An `errgroup` was considered but
   `golang.org/x/sync` is not in the module, and no new dependencies were wanted.
+- **Headers commit before launch.** Every tool-call header the parallel batch
+  will show paints on the loop goroutine in message order before any call
+  launches, so scrollback reads submission order however the launches race for
+  the sink. A call answered without a header (malformed args, unknown tool)
+  paints none, and an abort that skips a launch closes its committed row with
+  the interrupt marker instead of leaving it open.
 - **Results appended in call order** regardless of completion order. Reordering
   changes the prompt and breaks caching.
 - **Tool errors are results, not failures.** An erroring tool produces a
@@ -428,6 +434,11 @@ Two kinds of mid-turn input:
   to opt in. The live side is the reverse: an injected input is silent at
   delivery unless its producer sets `Input.Echo`, keeping the one-echo rule
   between hosts that echo at submit and steers that land mid-turn.
+- An `Input.Origin` string names a non-typed **submitter** (the control socket's
+  `"controller"`) without any of `Injected`'s behavior changes: the input still
+  groups, echoes and recalls like the user line it emulates. The string is recorded
+  on the message and its transcript entry purely as provenance, and the model never
+  sees it (`control-design.md`).
 - **`Input.Before` and `Input.After`** frame one input. Before is context that
   predates the message, such as staged `!` output or `/init`'s survey. It is a
   `[]MessageInfo` appended ahead of it, so each entry carries its own marks
@@ -453,9 +464,9 @@ it.
   step boundary just before the next model call, after push-steers have been
   drained. Returned inputs are appended as user messages at this same boundary,
   so a host can hand over queued prompts with zero extra step of latency and no
-  drop window (append follows synchronously). It must be cheap and never block;
-  nil disables it. `Input.Delivered` still fires per returned input, exactly as
-  for push-steers.
+  drop window (append follows synchronously). It must be cheap and never
+  block, and nil disables it. `Input.Delivered` still fires per returned
+  input, exactly as for push-steers.
 - **`Options.AwaitInput`**, when set, runs on the loop goroutine at the top of
   each step before any input drains and may block while the user finishes a
   message. It takes the turn's context, so `Interrupt` releases it. Draining

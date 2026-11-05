@@ -166,12 +166,7 @@ func TestClassifierAdapterCancelClosesStream(t *testing.T) {
 	require.Eventually(t, func() bool { return bp.created.Load() >= 1 }, time.Second, time.Millisecond)
 	cancel()
 
-	var got clres
-	select {
-	case got = <-resCh:
-	case <-time.After(time.Second * 3):
-		t.Fatal("Classify did not return after cancellation")
-	}
+	got := <-resCh
 	assert.Equal(t, permit.ClassUnsure, got.c) // cancelled: never a partial "readonly" verdict
 
 	require.Eventually(t, func() bool {
@@ -269,11 +264,7 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 		prompter.mu.Unlock()
 		require.Eventually(t, func() bool { return bp.created.Load() >= createdBefore+1 }, time.Second, time.Millisecond)
 		d.Resolve(0) // "Allow"
-		select {
-		case <-done:
-		case <-time.After(time.Second * 3):
-			t.Fatal("the asker did not return after the dialog was answered")
-		}
+		<-done
 		return got
 	}
 
@@ -296,13 +287,9 @@ func TestUserAllowCancelsClassifierCall(t *testing.T) {
 
 // askCancel drives one barrier asker call and returns its decision.
 func askCancel(b *permit.Barrier, ctx context.Context, input string) tools.Decision {
-	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)}, tools.Decision{Action: tools.ActionAsk})
+	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)})
 }
 
-// TestControlInterruptCancelsStagedShell pins a turn mid-tool so ag.Running()
-// holds, stages a real sleeping shell beside it, and drives one interrupt
-// control through the loop: the interrupt must reach the staged run too, not
-// only the turn.
 func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	t.Parallel()
 
@@ -340,16 +327,18 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 				Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 			})
 
-			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 			stager.Run("sleep 30", false)
 			require.True(t, stager.Pending())
 
 			quit := make(chan struct{})
 			controls := make(chan tui.Control, 4)
-			go controlLoop(context.Background(), ui, controls,
-				newHintBoard(func(string, string) {}), ag,
-				newSteerQueue(&fakeQueueUI{}, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady), stager, nil,
-				func() { close(quit) }, nil)
+			hub := newTestHub(ui)
+			hub.ag = ag
+			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, stager.WaitReady, stager.TakeReady, noopDrop)
+			hub.stager = stager
+			go controlLoop(t.Context(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
@@ -357,7 +346,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 
 			controls <- tc.control
 			require.Eventually(t, func() bool { return !stager.Pending() },
-				5*time.Second, time.Millisecond, "the staged shell must be cancelled")
+				5*time.Second, time.Millisecond)
 
 			// the cancelled command still stages its partial result, marked interrupted
 			msgs := stager.Flush(t.Context())
@@ -369,20 +358,12 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 
 			// the turn itself aborts cleanly
 			close(release)
-			select {
-			case err := <-errCh:
-				require.NoError(t, err)
-			case <-time.After(5 * time.Second):
-				t.Fatal("turn did not finish")
-			}
+			err = <-errCh
+			require.NoError(t, err)
 		})
 	}
 }
 
-// TestControlAbortReleasesHeldReserve pins the interrupt-during-hold path: a
-// directly dispatched prompt parks in the AwaitInput hold before its message
-// lands, so Settled never fires. The queue's abort must release its submit
-// reserve anyway, or the context bar overcounts until the next submit.
 func TestControlAbortReleasesHeldReserve(t *testing.T) {
 	t.Parallel()
 
@@ -425,16 +406,20 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 				Env: agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 			})
 
-			// wired as the driver wires it: submit reserves, clear releases
+			// wired as the driver wires it: submit reserves, clear releases. The
+			// queue takes the hubUI wrapper, whose Interactive gates recovery.
 			waitReady, takeReady := stagePair(t)
-			q := newSteerQueue(ui, st.Tokens.SetSubmit, func() { st.Tokens.SetSubmit(0) }, waitReady, takeReady)
-			stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+			hub := newTestHub(ui)
+			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, waitReady, takeReady, noopDrop)
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 
 			quit := make(chan struct{})
 			controls := make(chan tui.Control, 4)
-			go controlLoop(context.Background(), ui, controls,
-				newHintBoard(func(string, string) {}), ag, q, stager, nil,
-				func() { close(quit) }, nil)
+			hub.ag = ag
+			hub.q = q
+			hub.stager = stager
+			go controlLoop(t.Context(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "held prompt"}) }()
@@ -446,23 +431,77 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			controls <- tc.control
 
 			require.Eventually(t, func() bool { return !st.Tokens.Context().Estimated },
-				5*time.Second, time.Millisecond, "the dropped prompt's reserve must clear")
+				5*time.Second, time.Millisecond)
 			close(release)
 
-			select {
-			case err := <-errCh:
-				require.NoError(t, err) // a clean abort, not a failed turn
-			case <-time.After(5 * time.Second):
-				t.Fatal("turn did not finish")
-			}
+			err = <-errCh
+			require.NoError(t, err) // a clean abort, not a failed turn
 		})
 	}
 }
 
-// TestControlAbortKeepsStagedOutput pins a turn mid-tool with a finished `!`
-// run staged and a prompt queued mid-turn, then drives Esc: the abort recovers
-// the prompt to the editor while the staged output stays in the stager (never
-// consumed at submit), so it still counts on the bar and rides a later delivery.
+func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		control tui.Control
+	}{
+		{"ctrl_c", tui.ControlInterrupt},
+		{"escape", tui.ControlEscape},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ui := newPumpTestUI(t)
+			// a second scripted turn exists so a broken interrupt would run the
+			// queued prompt, not just run out of script
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+				{Events: textTurn("first done")},
+				{Events: textTurn("queued ran")},
+			}}
+			ag, _ := scriptedAgent(p)
+
+			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "esc-staged"})
+			require.NoError(t, err)
+			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
+			fake := &fakeQueueUI{}
+			q := newSteerQueue(fake, func(int) {}, stager.WaitReady, stager.TakeReady, noopDrop)
+
+			stager.Run("sleep 30", false) // output waits for the queued prompt's delivery
+			require.True(t, stager.Pending())
+			assert.False(t, ag.Running()) // the window this pins is between turns
+
+			// the drain runs the first prompt, then waits out the staged command
+			// inside take before delivering the queued one
+			q.offer(agent.Input{Text: "first"}, "first", 0) // marks draining, like the pump
+			require.True(t, q.offer(agent.Input{Text: "queued question"}, "queued question", 0))
+			starts := newStartState(false)
+			var drain drainWaiter
+			startDrain(t.Context(), wrapUI(t, ui), false, ag, q,
+				[]agent.Input{{Text: "first"}}, starts, planHooks{}, &drain)
+			require.Eventually(t, func() bool { return len(p.Requests()) == 1 },
+				5*time.Second, 5*time.Millisecond)
+
+			controls := make(chan tui.Control, 1)
+			quit := make(chan struct{})
+			hub := newTestHub(ui)
+			hub.ag = ag
+			hub.q = q
+			hub.stager = stager
+			go controlLoop(t.Context(), controls,
+				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
+			controls <- tc.control
+
+			require.Eventually(t, func() bool { return q.pending() == 0 },
+				5*time.Second, 5*time.Millisecond)
+			assert.False(t, drain.wait(5*time.Second)) // the drain ended, not stalled
+			assert.Equal(t, []string{"queued question"}, fake.prepended)
+			require.Eventually(t, func() bool { return !stager.Pending() },
+				5*time.Second, 5*time.Millisecond)
+			assert.Len(t, p.Requests(), 1) // the recovered prompt never ran as a turn
+		})
+	}
+}
+
 func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	t.Parallel()
 
@@ -492,21 +531,24 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 		Env:      agent.Environment{Cwd: "/repo", OS: "linux/amd64"},
 	})
 
-	stager := command.NewStager(context.Background(), reg, agent.NopSink{})
+	stager := command.NewStager(t.Context(), reg, agent.NopSink{})
 	var mu sync.Mutex
 	var barEst int
 	stager.SetOnChange(func(est int) { mu.Lock(); barEst = est; mu.Unlock() })
 
 	fake := &fakeQueueUI{}
-	q := newSteerQueue(fake, func(int) {}, func() {}, stager.WaitReady, stager.TakeReady)
+	q := newSteerQueue(fake, func(int) {}, stager.WaitReady, stager.TakeReady, noopDrop)
 	stager.Run("echo boom", false) // output stages while the turn runs
 	q.hold(agent.Input{Text: "why did it fail"}, "why did it fail", 1)
 
 	quit := make(chan struct{})
 	controls := make(chan tui.Control, 4)
-	go controlLoop(context.Background(), ui, controls,
-		newHintBoard(func(string, string) {}), ag, q, stager, nil,
-		func() { close(quit) }, nil)
+	hub := newTestHub(ui)
+	hub.ag = ag
+	hub.q = q
+	hub.stager = stager
+	go controlLoop(t.Context(), controls,
+		newHintBoard(func(string, string) {}), hub, func() { close(quit) })
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
@@ -534,10 +576,6 @@ func TestControlAbortKeepsStagedOutput(t *testing.T) {
 	assert.Contains(t, msgs[0].Message.Content[0].(llm.TextBlock).Text, "User Ran: echo boom")
 
 	close(release) // the interrupted turn still unwinds cleanly
-	select {
-	case err := <-errCh:
-		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("turn did not finish")
-	}
+	err = <-errCh
+	require.NoError(t, err)
 }

@@ -1477,6 +1477,127 @@ func TestUIPromptHistory(t *testing.T) {
 	})
 }
 
+func TestUIPromptHistoryEchoRetires(t *testing.T) {
+	t.Parallel()
+
+	// newEchoUI wires the arrows onto a list the test retargets, the way a
+	// transcript-derived index grows when the shared session records a prompt.
+	newEchoUI := func(t *testing.T) (*UI, func([]string)) {
+		t.Helper()
+
+		var mu sync.Mutex
+		var list []string
+		pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+		u := newTestUI(t, newVT(40, 10), pr)
+		u.SetPromptHistory(func() []string {
+			mu.Lock()
+			defer mu.Unlock()
+			return list
+		})
+		set := func(next []string) {
+			mu.Lock()
+			list = next
+			mu.Unlock()
+		}
+		return u, set
+	}
+	// recallNewest arms the async list load at the buffer's edge, waits for it,
+	// then recalls the newest entry.
+	recallNewest := func(u *UI) {
+		t.Helper()
+		pressKey(u, key{typ: keyUp}) // caret to the buffer's start
+		pressKey(u, key{typ: keyUp}) // at the edge: arms the list load
+		u.waitPromptNav(t)
+		pressKey(u, key{typ: keyUp}) // recall the newest recorded prompt
+	}
+
+	t.Run("cached list retires", func(t *testing.T) {
+		u, set := newEchoUI(t)
+		set([]string{"old newest", "old older"})
+		u.SetInput("draft")
+
+		recallNewest(u)
+		require.Equal(t, "old newest", u.editor.Value())
+		pressKey(u, key{typ: keyDown}) // back to the live draft
+
+		set([]string{"fresh prompt", "old newest", "old older"})
+		u.UserEcho("fresh prompt") // the other surface's submission paints here
+
+		recallNewest(u)
+		assert.Equal(t, "fresh prompt", u.editor.Value())
+	})
+
+	t.Run("empty scope reloads", func(t *testing.T) {
+		u, set := newEchoUI(t)
+		u.SetInput("draft")
+
+		pressKey(u, key{typ: keyUp}) // arms a load over an empty scope
+		pressKey(u, key{typ: keyUp})
+		u.waitPromptNav(t)
+		pressKey(u, key{typ: keyUp}) // empty: falls back to editor history
+
+		set([]string{"late prompt"})
+		u.UserEcho("late prompt")
+
+		recallNewest(u)
+		assert.Equal(t, "late prompt", u.editor.Value())
+	})
+
+	t.Run("mid browse keeps its list", func(t *testing.T) {
+		u, set := newEchoUI(t)
+		set([]string{"old newest", "old older"})
+		u.SetInput("draft")
+
+		recallNewest(u)
+		u.UserEcho("fresh prompt") // arrives while the old list is under thumbs
+
+		pressKey(u, key{typ: keyUp}) // caret to the recalled prompt's start
+		pressKey(u, key{typ: keyUp}) // still the cached list: the older entry
+		assert.Equal(t, "old older", u.editor.Value())
+		pressKey(u, key{typ: keyDown}) // back toward the live buffer: the older entry first
+		pressKey(u, key{typ: keyDown}) // the episode ends at the live draft
+
+		set([]string{"fresh prompt", "old newest", "old older"})
+		recallNewest(u) // the retired scope reloads for the next episode
+		assert.Equal(t, "fresh prompt", u.editor.Value())
+	})
+
+	t.Run("load in flight retires", func(t *testing.T) {
+		var mu sync.Mutex
+		list := []string{"old newest"}
+		var calls int
+		parked, release := make(chan struct{}), make(chan struct{})
+		pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
+		u := newTestUI(t, newVT(40, 10), pr)
+		u.SetPromptHistory(func() []string {
+			mu.Lock()
+			calls++
+			n, l := calls, list
+			mu.Unlock()
+			if n == 1 {
+				close(parked)
+				<-release                     // park the first load so the echo lands mid-flight
+				return []string{"old newest"} // what the source held when the load started
+			}
+			return l
+		})
+		u.SetInput("draft")
+
+		pressKey(u, key{typ: keyUp})
+		pressKey(u, key{typ: keyUp}) // arms the load; the provider parks
+		<-parked
+		u.UserEcho("fresh prompt") // lands before the list delivers
+		mu.Lock()
+		list = []string{"fresh prompt", "old newest"}
+		mu.Unlock()
+		close(release)
+		u.waitPromptNav(t) // the parked delivery lands and retires its own stale list
+
+		recallNewest(u)
+		assert.Equal(t, "fresh prompt", u.editor.Value())
+	})
+}
+
 func TestUIUpArrowFillsLastSentMessage(t *testing.T) {
 	t.Parallel()
 
@@ -2777,9 +2898,6 @@ func TestUICommittedTableCellsSanitized(t *testing.T) {
 	assert.Contains(t, screen, "│ ab    c │")
 }
 
-// TestUIClosedDropsWrites covers the post-close sink guards: after Close
-// restored the terminal, late events from a drain still landing must write
-// nothing and re-arm no spinner.
 func TestUIClosedDropsWrites(t *testing.T) {
 	t.Parallel()
 

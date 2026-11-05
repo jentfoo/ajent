@@ -191,7 +191,7 @@ func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 	maxSteps := a.opts.MaxSteps
 
 	var overflowRetried bool // at most one compaction retry per turn
-	result := TurnResult{Stop: llm.StopUnknown, Usage: llm.Usage{}}
+	result := TurnResult{Stop: llm.StopUnknown}
 
 	// normalize before TurnStart so the sink sees the input as it will land
 	promptInputs = a.normalizeInputs(promptInputs)
@@ -207,8 +207,13 @@ func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 			a.opts.AwaitInput(turnCtx)
 		}
 		if turnCtx.Err() != nil {
-			// interrupt released the hold: this boundary never streams, so nothing
-			// appends, no delivery callback fires, and dropped input stays dropped
+			// interrupt released the hold: nothing appends, so dropped inputs resolve
+			// their own pending rows instead of waiting on a boundary that never comes
+			for _, in := range promptInputs {
+				if in.Dropped != nil {
+					in.Dropped()
+				}
+			}
 			sink.Notice(InterruptedText, LevelInfo)
 			result.Stop = llm.StopAborted
 			break
@@ -390,10 +395,12 @@ func (a *Agent) appendSteer(ctx context.Context, inputs []Input) {
 			visible := in.Injected && !llm.OnlyToolResults(blocks)
 			a.append(MessageInfo{
 				Message:  llm.Message{Role: llm.RoleUser, Content: blocks},
-				Injected: in.Injected, Replayed: visible,
+				Injected: in.Injected, Replayed: visible, Origin: in.Origin,
+				QueueIDs: in.QueueIDs,
 			})
 			if visible && in.Echo != "" {
-				a.sink.UserPrompt(in.Echo)
+				// echo rides InjectContext so a note's live shape matches replay
+				a.sink.InjectContext(in.Echo)
 			}
 		}
 		// delivery is confirmed only when the message actually lands, and fires
@@ -620,7 +627,7 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	if a.opts.Tools == nil {
 		out := make([]llm.ToolResultBlock, len(ordered))
 		for i, c := range ordered {
-			out[i], _ = a.runTool(ctx, sink, c)
+			out[i], _ = a.runTool(ctx, sink, c, nil)
 		}
 		return out, false
 	}
@@ -634,21 +641,29 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 	ends := make([]bool, len(calls)) // written by index, like out
 
 	if parallel {
+		dones := a.paintHeaders(sink, ordered) // commit headers in message order first
 		sem := make(chan struct{}, runtime.NumCPU())
 		var wg sync.WaitGroup
 		for i := range calls {
 			if ctx.Err() != nil {
+				// abort fills the skipped results; their committed headers must close
+				// with the same marker or the rows hang open past the turn
+				for _, d := range dones[i:] {
+					if d != nil {
+						d(interruptedToolResult())
+					}
+				}
 				break // a cancelled batch leaves the rest unanswered, abort fills them
 			}
 			wg.Add(1)
-			go func(i int, c ToolCall) {
+			go func(i int, c ToolCall, done func(ToolResult)) {
 				defer wg.Done()
 				defer func() { // a panicked runTool still releases its slot
 					<-sem
 				}()
 				sem <- struct{}{}
-				out[i], ends[i] = a.runTool(ctx, sink, c)
-			}(i, ordered[i])
+				out[i], ends[i] = a.runTool(ctx, sink, c, done)
+			}(i, ordered[i], dones[i])
 		}
 		wg.Wait()
 		return out, slices.Contains(ends, true)
@@ -658,17 +673,47 @@ func (a *Agent) dispatch(ctx context.Context, sink Sink, calls []llm.ToolCallBlo
 		if ctx.Err() != nil {
 			break // a cancelled batch leaves the rest unanswered, abort fills them
 		}
-		out[i], ends[i] = a.runTool(ctx, sink, c)
+		out[i], ends[i] = a.runTool(ctx, sink, c, nil)
 	}
 	return out, slices.Contains(ends, true)
+}
+
+// paintHeaders commits, on the loop goroutine and in message order, every
+// tool-call header the parallel batch will show: the launches race for the
+// sink otherwise and scrollback reads launch order instead of submission
+// order. A call that runTool answers without a header (malformed args,
+// unknown tool) leaves a nil entry, so nothing paints for it here either.
+func (a *Agent) paintHeaders(sink Sink, calls []ToolCall) []func(ToolResult) {
+	dones := make([]func(ToolResult), len(calls))
+	for i, c := range calls {
+		if !json.Valid(c.Input) {
+			continue // malformed args are answered without a header
+		}
+		tool, ok := a.opts.Tools.Get(c.Name)
+		if !ok {
+			continue // an unknown tool's error result stands alone
+		}
+		dones[i] = sink.ToolStart(c, tool.Label(c), false)
+	}
+	return dones
+}
+
+// interruptedToolResult closes a header committed but never launched: the turn
+// aborted between paint and dispatch, so its row carries the marker abort fills
+// into the transcript result.
+func interruptedToolResult() ToolResult {
+	return ToolResult{Content: llm.BlockList{llm.TextBlock{Text: InterruptedText}}, Display: InterruptedText}
 }
 
 // maxArgsEvidence caps the raw malformed arguments quoted in an error result.
 const maxArgsEvidence = 120
 
 // runTool executes one tool and streams its output to the sink. A malformed or
-// erroring tool is still a result, not a turn failure.
-func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.ToolResultBlock, bool) {
+// erroring tool is still a result, not a turn failure. done is an already
+// committed header hook from paintHeaders; nil paints at execution time, which
+// keeps a serial batch's headers in call order.
+func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall,
+	done func(ToolResult)) (llm.ToolResultBlock, bool) {
 	if a.opts.Tools == nil {
 		return llm.ToolResultBlock{CallID: call.ID, IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: "no tools configured"}}}, false
@@ -691,8 +736,9 @@ func (a *Agent) runTool(ctx context.Context, sink Sink, call ToolCall) (llm.Tool
 	}
 
 	out := NewOutput(sink, call.ID)
-	done := sink.ToolStart(call, tool.Label(call), false)
-	var err error
+	if done == nil {
+		done = sink.ToolStart(call, tool.Label(call), false)
+	}
 	res, err, fault := RecoverTool(ctx, done, sink, call, func() (ToolResult, error) {
 		return tool.Execute(ctx, call, out)
 	})

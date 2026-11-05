@@ -214,7 +214,7 @@ func TestPollOutcome(t *testing.T) {
 	t.Parallel()
 
 	cancelled := func() context.Context {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		return ctx
 	}
@@ -241,12 +241,12 @@ func TestPollOutcome(t *testing.T) {
 			"sub-agent sub-1 aborted", StatusAborted, false},
 		// only an unclaimed poll defers to the interrupt, leaving re-offer armed
 		{"unclaimed_interrupted", cancelled(), Job{}, false, "poll interrupted", StatusRunning, false},
-		{"unclaimed_progress", context.Background(), Job{ID: "sub-1", Status: StatusRunning}, false,
+		{"unclaimed_progress", t.Context(), Job{ID: "sub-1", Status: StatusRunning}, false,
 			progress, StatusRunning, false},
 		// normal paths unchanged
-		{"claimed_summary_live_ctx", context.Background(), Job{ID: "sub-1", Status: StatusDone, Summary: "found it"}, true,
+		{"claimed_summary_live_ctx", t.Context(), Job{ID: "sub-1", Status: StatusDone, Summary: "found it"}, true,
 			"found it", StatusDone, false},
-		{"claimed_blank_summary", context.Background(), Job{ID: "sub-1", Status: StatusDone}, true,
+		{"claimed_blank_summary", t.Context(), Job{ID: "sub-1", Status: StatusDone}, true,
 			placeholder, StatusDone, false},
 	}
 	for _, tc := range tests {
@@ -259,10 +259,6 @@ func TestPollOutcome(t *testing.T) {
 	}
 }
 
-// The both-ready race from subagents-design.md: a turn interrupted as the polled
-// job finishes leaves wait's select with two ready channels and Go picks either,
-// and whichever wins the summary must survive. done is closed and ctx
-// pre-cancelled before wait runs, so select decides uniformly per attempt.
 func TestInterruptedPollDeliversClaimedResult(t *testing.T) {
 	t.Parallel()
 
@@ -288,7 +284,7 @@ func TestInterruptedPollDeliversClaimedResult(t *testing.T) {
 	var delivered int
 	var everClaimed bool
 	for i := 0; i < attempts; i++ {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel() // both select cases ready at entry: the claim races the interrupt
 		res := poll(ctx)
 
