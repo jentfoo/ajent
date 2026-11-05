@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"sync"
-	"time"
 
 	"github.com/go-analyze/bulk"
 
@@ -34,12 +33,6 @@ type Writer struct {
 	watch   func(Entry)      // optional observer of successful appends, app supplied
 	token   string           // this writer's slot token, minted at open
 	started int64            // unix millis the slot was minted at
-
-	peers   func(joined, left []int) // peer-visibility observer, nil drops
-	peerSet map[string]int           // last scan's live peers, token -> pid
-
-	stop    chan struct{} // closed to retire the slot toucher
-	stopped chan struct{} // closed by the toucher on its way out
 
 	mu sync.Mutex
 }
@@ -111,14 +104,12 @@ func openEntries(path string, explicit bool) (*Writer, []Entry, []string, error)
 }
 
 // newWriter stamps one open transcript with a fresh live slot before any entry
-// can append, which is what closes the deletion races, and starts the toucher.
+// can append, which is what closes the deletion races.
 func newWriter(f *os.File, path, head string, headTS int64, entries []Entry) (*Writer, error) {
 	w := &Writer{
 		f: f, path: path, head: head, headTS: headTS, n: len(entries),
 		token: NewID(), started: clock().UnixMilli(),
-		peerSet: map[string]int{},
-		ts:      make(map[string]int64, len(entries)),
-		stop:    make(chan struct{}), stopped: make(chan struct{}),
+		ts: make(map[string]int64, len(entries)),
 	}
 	if rf, rerr := os.Open(path); rerr == nil {
 		w.rf = rf // best effort: tail checks degrade to append-only without it
@@ -129,28 +120,7 @@ func newWriter(f *os.File, path, head string, headTS int64, entries []Entry) (*W
 	if err := w.writeSlotLocked(); err != nil {
 		return nil, err
 	}
-	go w.touchLoop()
 	return w, nil
-}
-
-// touchLoop rewrites the slot on the freshness cadence so liveness survives
-// quiet stretches. Close retires it.
-func (w *Writer) touchLoop() {
-	defer close(w.stopped)
-	t := time.NewTicker(slotTouch)
-	defer t.Stop()
-	for {
-		select {
-		case <-t.C:
-			w.mu.Lock()
-			if !w.closed {
-				_ = w.writeSlotLocked()
-			}
-			w.mu.Unlock()
-		case <-w.stop:
-			return
-		}
-	}
 }
 
 // tornScanWindow is the tail slice read to gate and locate a torn line.
@@ -382,8 +352,8 @@ func (w *Writer) tailTerminated() bool {
 	return one[0] == '\n'
 }
 
-// syncSlot stamps the slot now rather than waiting for the toucher, so a
-// concurrent resume never sees a head this writer already moved past.
+// syncSlot stamps the slot outside a turn boundary, so a concurrent resume
+// never sees a head this writer already moved past.
 func (w *Writer) syncSlot() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -395,7 +365,7 @@ func (w *Writer) syncSlot() {
 // SetHead rewinds to id so later appends branch from it. The transcript keeps
 // both histories and nothing is deleted, while the new tip becomes the slot
 // head. An empty id starts a new root; the slot carries the empty head, ordered
-// by slot write time.
+// by its Started stamp.
 func (w *Writer) SetHead(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -428,10 +398,7 @@ func (w *Writer) entryTS(id string) int64 {
 }
 
 // Sync fsyncs the file at a turn boundary, then records the current head.
-// Data flushes first so the slot never names an entry that is not durable. The
-// peer scan rides the same boundary; its observer runs after the lock is
-// released, since it may re-enter the hub and the hub reads the writer head
-// under the writer lock.
+// Data flushes first so the slot never names an entry that is not durable.
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	if w.closed || w.checkGoneLocked() {
@@ -439,14 +406,7 @@ func (w *Writer) Sync() error {
 		return nil
 	}
 	err := errors.Join(w.f.Sync(), w.writeSlotLocked())
-	var joined, left []int
-	if w.peers != nil {
-		joined, left = w.scanPeersLocked()
-	}
 	w.mu.Unlock()
-	if len(joined) > 0 || len(left) > 0 {
-		w.peers(joined, left)
-	}
 	return err
 }
 
@@ -467,52 +427,17 @@ func (w *Writer) writeSlotLocked() error {
 // LivePeers counts the other live writers on this transcript, excluding this
 // writer's own slot. Exit-time cleanup deletes only when it answers zero.
 func (w *Writer) LivePeers() int {
-	now := clock()
 	mine := w.token
-	peers := bulk.SliceFilter(func(sf slotFresh) bool {
-		return sf.slot.Token != mine && slotLive(sf.slot, sf.mod, now)
-	}, readFreshSlots(w.path))
+	peers := bulk.SliceFilter(func(s headSlot) bool {
+		return s.Token != mine && slotLive(s)
+	}, readSlots(w.path))
 	return len(peers)
 }
 
-// WatchPeers installs the peer-visibility observer: joined and left carry the
-// peers' pids, the callback runs on the syncing goroutine and must not block or
-// append. Nil clears it.
-func (w *Writer) WatchPeers(fn func(joined, left []int)) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.peers = fn
-	w.peerSet = map[string]int{} // rescan from a clean slate under the new observer
-}
-
-// scanPeersLocked diffs the heads directory against the last scan and returns
-// the joined and left peers' pids. Caller holds the lock.
-func (w *Writer) scanPeersLocked() (joined, left []int) {
-	now := clock()
-	live := map[string]int{} // token -> pid, live peers as of this scan
-	for _, sf := range readFreshSlots(w.path) {
-		if sf.slot.Token != w.token && slotLive(sf.slot, sf.mod, now) {
-			live[sf.slot.Token] = sf.slot.PID
-		}
-	}
-	for tok, pid := range live {
-		if _, ok := w.peerSet[tok]; !ok {
-			joined = append(joined, pid)
-		}
-	}
-	for tok, pid := range w.peerSet {
-		if _, ok := live[tok]; !ok {
-			left = append(left, pid)
-		}
-	}
-	w.peerSet = live
-	return joined, left
-}
-
-// Close releases the underlying file and marks the slot inactive, so exit never
-// blocks --delete for the freshness window. The inactive stamp joins the return
-// so a failed write surfaces instead of silently reading live for ten minutes.
-// Idempotent.
+// Close releases the underlying file and marks the slot inactive, so a clean
+// exit reads as gone at once even while the process lives on. The inactive
+// stamp joins the return so a failed write surfaces rather than reading live
+// until process exit. Idempotent.
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	if w.closed {
@@ -530,8 +455,5 @@ func (w *Writer) Close() error {
 		err = errors.Join(err, w.writeSlotLocked())
 	}
 	w.mu.Unlock()
-
-	close(w.stop)
-	<-w.stopped
 	return err
 }

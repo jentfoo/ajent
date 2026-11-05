@@ -3,11 +3,12 @@ package session
 import (
 	"cmp"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
+	"syscall"
 
 	"github.com/go-analyze/bulk"
 
@@ -26,14 +27,7 @@ import (
 const (
 	headsDirSuffix = ".heads"
 
-	// slotTouch is the background rewrite cadence keeping a live slot fresh.
-	slotTouch = time.Minute
-
-	// slotStaleAfter bounds liveness by mtime: a writer silent this long (a crash,
-	// or a laptop asleep past the touch) reads as gone until its next touch.
-	slotStaleAfter = 10 * time.Minute
-
-	// keepDeadSlots bounds how many inactive slots survive a prune: the newest
+	// keepDeadSlots bounds how many dead slots survive a prune: the newest
 	// few are resume cursors, older ones are history nothing reads.
 	keepDeadSlots = 4
 
@@ -42,7 +36,7 @@ const (
 )
 
 // headSlot is one writer's branch head beside its transcript. An empty Head
-// names a new-root fork and orders by slot write time instead of EntryTS.
+// names a new-root fork and orders by the Started stamp instead of EntryTS.
 // Entries is the transcript's entry count at the last write, this writer's own
 // watermark: growth past it in one parent chain from Head is unsynced work, not
 // a fork, and slots are sidecars rather than entries so the json rules for
@@ -52,8 +46,8 @@ type headSlot struct {
 	Head    string `json:"head,omitempty"`
 	EntryTS int64  `json:"entryTs,omitempty"` // head entry stamp, primary slot order
 	Entries int    `json:"entries,omitempty"`
-	PID     int    `json:"pid"`
-	Started int64  `json:"started"` // unix millis, for registry and banners
+	PID     int    `json:"pid"`     // writer process, judged by signal zero
+	Started int64  `json:"started"` // unix millis, order tie-break for empty heads
 	Active  bool   `json:"active"`
 }
 
@@ -103,69 +97,57 @@ func readSlots(sessionPath string) []headSlot {
 	return out
 }
 
-// slotLive reports whether s counts as a live peer as of now, given its file's
-// mtime. An inactive slot is a clean exit, never live however fresh.
-func slotLive(s headSlot, mod time.Time, now time.Time) bool {
-	return s.Active && now.Sub(mod) < slotStaleAfter
+// slotLive reports whether s counts as a live peer: the writer still claims
+// the slot and its process still exists. A clean Close clears Active, a crash
+// leaves it set for a pid that no longer answers, and anything undecidable
+// reads as live so a caller only drops a slot on proof of death.
+func slotLive(s headSlot) bool {
+	return s.Active && PIDAlive(s.PID)
 }
 
-// slotFresh is the read-side twin of writeSlot: the slot plus its file mtime.
-type slotFresh struct {
-	slot headSlot
-	mod  time.Time
-}
-
-// readFreshSlots pairs every slot with its mtime, the freshness and tie-break
-// clock.
-func readFreshSlots(sessionPath string) []slotFresh {
-	var out []slotFresh
-	for _, s := range readSlots(sessionPath) {
-		fi, err := os.Stat(slotPath(headsDir(sessionPath), s.Token))
-		if err != nil {
-			continue
-		}
-		out = append(out, slotFresh{slot: s, mod: fi.ModTime()})
+// PIDAlive reports whether a process with pid exists: signal zero when
+// decidable, anything undecidable (no pid, a permission error, a platform
+// without signals) reads alive, so callers only ever drop on proof of death.
+// The one liveness rule both writer slots and control discovery records judge by.
+func PIDAlive(pid int) bool {
+	if pid <= 0 {
+		return true // no recorded pid: nothing to judge
 	}
-	return out
-}
-
-// gcStaleSlots removes crashed writers' slot files: ones still marked active
-// whose mtime passed the freshness window. A suspended writer's file may be
-// removed racily, which is benign, it rewrites on its next touch. Inactive slots
-// stay for pruneDeadSlots, which bounds them.
-func gcStaleSlots(sessionPath string, now time.Time) {
-	for _, sf := range readFreshSlots(sessionPath) {
-		if sf.slot.Active && now.Sub(sf.mod) >= slotStaleAfter {
-			_ = os.Remove(slotPath(headsDir(sessionPath), sf.slot.Token))
-		}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return true
 	}
+	// the os layer folds ESRCH into os.ErrProcessDone: both spell "no such process"
+	serr := proc.Signal(syscall.Signal(0))
+	return !errors.Is(serr, syscall.ESRCH) && !errors.Is(serr, os.ErrProcessDone)
 }
 
 // newerSlot orders two slots newest first: head entry timestamp when both name
-// a real entry, slot write time otherwise (a new-root fork has no entry to
-// stamp, and the write time is what the overview pins it to), so equal clocks
-// still resolve deterministically.
-func newerSlot(a, b slotFresh) int {
-	if a.slot.Head != "" && b.slot.Head != "" {
-		if c := cmp.Compare(b.slot.EntryTS, a.slot.EntryTS); c != 0 {
+// a real entry, the Started stamp otherwise (a new-root fork has no entry to
+// stamp, and its mint time is what pins it), so equal clocks still resolve
+// deterministically.
+func newerSlot(a, b headSlot) int {
+	if a.Head != "" && b.Head != "" {
+		if c := cmp.Compare(b.EntryTS, a.EntryTS); c != 0 {
 			return c
 		}
 	}
-	return b.mod.Compare(a.mod)
+	return cmp.Compare(b.Started, a.Started)
 }
 
-// pruneDeadSlots drops inactive slots beyond the newest few, so the directory
-// holds live writers and recent cursors rather than one file per historical
-// open. Only writer opens prune: readers never mutate.
+// pruneDeadSlots drops dead slots beyond the newest few. A crashed writer's
+// slot counts as dead here too, so the directory holds live writers and recent
+// cursors rather than one file per historical open. Only writer opens prune:
+// readers never mutate.
 func pruneDeadSlots(sessionPath string) {
-	dead := bulk.SliceFilter(func(sf slotFresh) bool { return !sf.slot.Active },
-		readFreshSlots(sessionPath))
+	dead := bulk.SliceFilter(func(s headSlot) bool { return !slotLive(s) },
+		readSlots(sessionPath))
 	if len(dead) <= keepDeadSlots {
 		return
 	}
 	slices.SortStableFunc(dead, newerSlot)
-	for _, sf := range dead[keepDeadSlots:] {
-		_ = os.Remove(slotPath(headsDir(sessionPath), sf.slot.Token))
+	for _, s := range dead[keepDeadSlots:] {
+		_ = os.Remove(slotPath(headsDir(sessionPath), s.Token))
 	}
 }
 
@@ -174,9 +156,7 @@ func pruneDeadSlots(sessionPath string) {
 // running writer. Read errors count as no peers, matching the store's
 // best-effort sidecar handling.
 func LiveWriters(sessionPath string) int {
-	now := clock()
-	return len(bulk.SliceFilter(func(sf slotFresh) bool { return slotLive(sf.slot, sf.mod, now) },
-		readFreshSlots(sessionPath)))
+	return len(bulk.SliceFilter(slotLive, readSlots(sessionPath)))
 }
 
 // legacyCursor is the pre-slot cursor shape, parsed only to migrate it.
@@ -211,11 +191,10 @@ func entryIndex(entries []Entry, id string) int {
 }
 
 // resolveOpenHead settles a transcript's writer-slot bookkeeping for an open
-// (legacy cursor migration, stale-file GC, dead-slot prune) and returns the
-// head — with its entry stamp — this open continues from.
+// (legacy cursor migration, dead-slot prune) and returns the head, with its
+// entry stamp, this open continues from.
 func resolveOpenHead(path string, entries []Entry, explicit bool) (string, int64) {
 	migrateLegacyHead(path)
-	gcStaleSlots(path, clock())
 	pruneDeadSlots(path)
 	head := headForEntries(path, entries, explicit)
 	if head == "" {
@@ -239,20 +218,18 @@ func resolveOpenHead(path string, entries []Entry, explicit bool) (string, int64
 // while crash recovery still applies. Read-only: listing and prompt scans
 // share it and never touch slot files.
 func headForEntries(sessionPath string, entries []Entry, explicit bool) string {
-	now := clock()
-	live, dead := bulk.SliceSplit(func(sf slotFresh) bool { return slotLive(sf.slot, sf.mod, now) },
-		readFreshSlots(sessionPath))
+	live, dead := bulk.SliceSplit(slotLive, readSlots(sessionPath))
 	if !explicit {
 		slices.SortStableFunc(live, newerSlot)
-		for _, sf := range live {
-			if sf.slot.Head != "" {
-				return sf.slot.Head
+		for _, s := range live {
+			if s.Head != "" {
+				return s.Head
 			}
 		}
 	}
 	slices.SortStableFunc(dead, newerSlot)
 	if len(dead) > 0 {
-		if head, ok := extendDeadHead(entries, dead[0].slot); ok {
+		if head, ok := extendDeadHead(entries, dead[0]); ok {
 			return head
 		}
 	}

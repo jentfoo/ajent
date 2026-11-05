@@ -104,14 +104,13 @@ order even when the wall clock steps back. The new id becomes the head only
   head.
 - **Sync** flushes at a turn boundary *and* rewrites the writer's head slot, data
   before slot, and it is never called by `Append`. A slot that could not be written
-  surfaces as an error rather than silently continuing. The turn boundary is also
-  where a writer notices peers arriving and leaving.
+  surfaces as an error rather than silently continuing.
 - **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
   transcript keeps both histories (nothing is deleted) and the new tip becomes
   this writer's head. An empty id starts a new root, which names no branch at all
   until its first entry.
-- **Close** retires the slot immediately, so a clean exit never blocks `--delete`
-  for the freshness window.
+- **Close** retires the slot immediately, so a clean exit reads as gone at once
+  even while the process lives on.
 
 ## Durability
 
@@ -136,14 +135,14 @@ The one mutable piece of an otherwise append-only design is the branch head: the
 entry id where work continues after a fork, which is what a rewind updates. It is
 persisted beside its transcript as one **head slot per writer**, keyed by a *slot
 token* minted when the file opens for append and rewritten atomically on every
-`SetHead`, at turn boundaries, and on a periodic touch.
+`SetHead` and at turn boundaries.
 
 **Per-writer, never shared.** A slot exists before this writer's first entry can land,
 so a peer is visible from its earliest possible write, which is what closes the deletion
 races. Two ajent processes on one session each own a slot, so neither can overwrite or
-steer the other. A slot counts as live while its writer claims it and keeps touching it,
-and a clean exit retires it at once. A writer suspended past the freshness window reads
-as stale until its next touch brings it back.
+steer the other. A slot is live while its writer claims it and its process answers
+signal zero, the same rule control discovery judges a serving instance by, so a crash
+reads as gone at once and a clean exit retires the slot at Close.
 
 **Head resolution on open** is a total order:
 
@@ -162,8 +161,8 @@ as stale until its next touch brings it back.
    than adopted.
 4. The file tail.
 
-Ordering is by the head entry's time with slot write time as tie-breaker, so a writer
-mid new-root fork still sorts. Tails that older writers left unsynced do not
+Ordering is by the head entry's time with the slot's start stamp as tie-breaker, so a
+writer mid new-root fork still sorts. Tails that older writers left unsynced do not
 auto-continue, they stay reachable from the rewind picker. Slots are sidecars rather
 than entries, so the frozen corpus and its payload rules are untouched. A session
 recorded before slots existed resumes where it left off by seeding one retired slot
@@ -203,10 +202,7 @@ coordination by four rules:
    one (an open's parse, a cached prompt scan) re-reads before building on it whenever
    the file has grown, so a concurrent writer's entries never land unseen.
 
-**Peer visibility** rides the turn boundary: a writer diffs the slot directory against
-what it saw last time and surfaces joins and leaves as transient notices rather than
-entries, published through the ephemeral notice family so attached terminals see them too
-(see `control-design.md`). **Name races** between two `--session <name>` creators settle
+**Name races** between two `--session <name>` creators settle
 deterministically: the older session id keeps the name and the younger takes a numeric
 suffix through a recorded `session_name` entry before its first prompt.
 

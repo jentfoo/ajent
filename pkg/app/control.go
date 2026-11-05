@@ -49,10 +49,6 @@ const (
 	// connects), replacing rather than stacking across connections.
 	controlNoticeKey = "control"
 
-	// peerNoticeKey keys the shared-session join and leave notices, so repeated
-	// joins replace rather than stack.
-	peerNoticeKey = "peers"
-
 	// gcStaleRegistry is how old a registry file must be before its writer can
 	// be judged dead, so a starting instance's files are never judged by a racer.
 	// Collection is passive: the recorded PID is the liveness proof, never a dial,

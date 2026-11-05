@@ -106,20 +106,6 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	} else if rec.note != "" {
 		ui.Notify(rec.note, tui.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
-	if rec != nil && rec.w != nil {
-		// peer visibility: joins and leaves of other writers on this transcript
-		// surface as transient notices at turn boundaries, never recorded, so
-		// attached terminals see them through the ephemeral notice family too
-		rec.w.WatchPeers(func(joined, left []int) {
-			for _, pid := range joined {
-				ui.NotifyKeyed(peerNoticeKey, fmt.Sprintf("another ajent opened this session (pid %d)", pid), tui.LevelInfo)
-			}
-			for _, pid := range left {
-				ui.NotifyKeyed(peerNoticeKey, fmt.Sprintf("another ajent left this session (pid %d)", pid), tui.LevelInfo)
-			}
-		})
-	}
-
 	// one app-lifetime root ties every derived operation (the prompt pump, staged
 	// shell runs, setup probes) to process shutdown. cancel fires when quit does,
 	// and again on any return path via the defer, so tool work dies with the app.

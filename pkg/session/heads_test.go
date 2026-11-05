@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -183,7 +184,7 @@ func TestMigrateLegacyHead(t *testing.T) {
 func TestLiveWriters(t *testing.T) {
 	t.Parallel()
 
-	t.Run("counts_active_fresh_slots", func(t *testing.T) {
+	t.Run("counts_active_live_pid", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		s := slotEntries(t, p, "t1", "a", 5, 3)
 		s.Active = true
@@ -191,16 +192,13 @@ func TestLiveWriters(t *testing.T) {
 		assert.Equal(t, 1, LiveWriters(p))
 	})
 
-	t.Run("inactive_stale_do_not_count", func(t *testing.T) {
+	t.Run("inactive_and_crashed_do_not_count", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		slotEntries(t, p, "dead", "a", 5, 3) // written inactive: a clean exit
 		assert.Equal(t, 0, LiveWriters(p))
 
-		stale := headSlot{Token: "crashed", Head: "a", Active: true}
-		require.NoError(t, writeSlot(p, stale))
-		// backdate past the freshness window without touching the file again
-		past := time.Now().Add(-2 * slotStaleAfter)
-		require.NoError(t, os.Chtimes(slotPath(headsDir(p), "crashed"), past, past))
+		crashed := headSlot{Token: "crashed", Head: "a", PID: reapChild(t), Active: true}
+		require.NoError(t, writeSlot(p, crashed))
 		assert.Equal(t, 0, LiveWriters(p))
 	})
 }
@@ -208,39 +206,31 @@ func TestLiveWriters(t *testing.T) {
 func TestSlotLive(t *testing.T) {
 	t.Parallel()
 
-	now := time.UnixMilli(1_800_000_000_000)
-	fresh := now.Add(-time.Second)
-	stale := now.Add(-2 * slotStaleAfter)
-
-	t.Run("active_is_live", func(t *testing.T) {
-		assert.True(t, slotLive(headSlot{Active: true}, fresh, now))
+	t.Run("active_live_pid", func(t *testing.T) {
+		assert.True(t, slotLive(headSlot{Active: true, PID: os.Getpid()}))
 	})
 
 	t.Run("clean_exit_dead", func(t *testing.T) {
-		assert.False(t, slotLive(headSlot{Active: false}, fresh, now))
+		assert.False(t, slotLive(headSlot{Active: false, PID: os.Getpid()}))
 	})
 
-	t.Run("crashed_writer_stale", func(t *testing.T) {
-		assert.False(t, slotLive(headSlot{Active: true}, stale, now))
+	t.Run("crashed_writer_dead", func(t *testing.T) {
+		assert.False(t, slotLive(headSlot{Active: true, PID: reapChild(t)}))
+	})
+
+	t.Run("no_pid_undecidable_reads_live", func(t *testing.T) {
+		assert.True(t, slotLive(headSlot{Active: true}))
 	})
 }
 
-func TestGcStaleSlots(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	crashed := headSlot{Token: "crashed", Head: "a", Active: true}
-	require.NoError(t, writeSlot(p, crashed))
-	past := time.Now().Add(-2 * slotStaleAfter)
-	crashedPath := slotPath(headsDir(p), "crashed")
-	require.NoError(t, os.Chtimes(crashedPath, past, past))
-	keep := headSlot{Token: "kept", Head: "a"} // inactive: the resume cursor
-	require.NoError(t, writeSlot(p, keep))
-
-	gcStaleSlots(p, time.Now())
-
-	assert.False(t, fileExists(crashedPath))
-	assert.True(t, fileExists(slotPath(headsDir(p), "kept")))
+// reapChild returns a pid that no longer exists, the only proof of death the
+// pid rule accepts.
+func reapChild(t *testing.T) int {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "true")
+	require.NoError(t, cmd.Start())
+	require.NoError(t, cmd.Wait())
+	return cmd.Process.Pid
 }
 
 func TestRemoveSlotsDropsDirectory(t *testing.T) {
