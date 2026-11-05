@@ -200,7 +200,6 @@ func TestStoreList(t *testing.T) {
 		hh, hherr := NewEditorHistory(s, ws, "")
 		require.NoError(t, hherr)
 		hh.Append("/model")
-		slotEntries(t, w.Path(), "t1", txID, 0, 0) // the branch slot sidecar
 
 		list, lerr := s.List(ws)
 		require.NoError(t, lerr)
@@ -313,9 +312,7 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	require.NoError(t, w2.Sync())
 	require.NoError(t, w2.Close())
 
-	require.NotEmpty(t, readSlots(w2.Path())) // each session carries its own slots
-
-	// removing the empty w2 takes its file and slots, leaving w1 whole
+	// removing the empty w2 takes its file, leaving w1 whole
 	rerr := s.Remove(w2.Path())
 	require.NoError(t, rerr)
 
@@ -323,35 +320,33 @@ func TestStoreRemoveDeletesOneSession(t *testing.T) {
 	require.NoError(t, lerr)
 	assert.Len(t, list, 1)
 	assert.NotEqual(t, removedID, list[0].ID)
-
-	assert.Empty(t, readSlots(w2.Path()))
-	assert.NotEmpty(t, readSlots(w1.Path())) // the sibling's slots are untouched
+	assert.NoFileExists(t, w2.Path())
+	assert.FileExists(t, w1.Path()) // the sibling's transcript is untouched
 }
 
-func TestStoreRemoveCursorBestEffort(t *testing.T) {
+// an unremovable sidecar must not report a session as kept once its transcript
+// is gone: DeleteSession would exit non-zero and delete-old sweeps would
+// under-count. A read-only directory stands in for the cleanup failure.
+func TestStoreRemoveSidecarBestEffort(t *testing.T) {
 	t.Parallel()
 
-	// a stuck cursor sidecar must not report a session as kept once its transcript
-	// is gone: DeleteSession would exit non-zero and delete-old sweeps would
-	// under-count. An unremovable directory stands in for the cleanup failure.
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
 	w, err := s.Create(ws, SessionData{Version: sessionVersion})
 	require.NoError(t, err)
 	_, aerr := w.Append(TypeMessage, MessageData{Message: llm.Text(llm.RoleUser, "gone soon")})
 	require.NoError(t, aerr)
-	require.NoError(t, w.Sync()) // the append's cursor sidecar
 	require.NoError(t, w.Close())
-
-	head := headsDir(w.Path())
-	require.NoError(t, os.RemoveAll(head)) // the writer's own slot is inside
-	require.NoError(t, os.Mkdir(head, paths.DirPerm))
-	require.NoError(t, os.WriteFile(filepath.Join(head, "lock"), []byte("x"), 0o600))
+	torn := tornPath(w.Path())
+	// a non-empty directory stands in for the cleanup failure: os.Remove on it
+	// fails while the transcript beside it still deletes
+	require.NoError(t, os.Mkdir(torn, paths.DirPerm))
+	require.NoError(t, os.WriteFile(filepath.Join(torn, "half-line"), []byte("x"), 0o600))
 
 	require.NoError(t, s.Remove(w.Path()))
 
-	_, serr := os.Stat(w.Path())
-	assert.True(t, os.IsNotExist(serr)) // the transcript itself is gone
+	assert.NoFileExists(t, w.Path()) // the transcript itself is gone
+	assert.DirExists(t, torn)        // the stuck sidecar survives, best effort
 	list, lerr := s.List(ws)
 	require.NoError(t, lerr)
 	assert.Empty(t, list) // and nothing surfaces in the picker
@@ -378,16 +373,14 @@ func TestStoreRemoveTakesTornSidecar(t *testing.T) {
 	require.NoError(t, f.Close())
 	w2, oerr := Open(w.Path())
 	require.NoError(t, oerr)
-	require.NoError(t, w2.Sync()) // leave the branch cursor sidecar behind too
+	w2.SetHead(w2.Head()) // leave a head cursor behind too
 	require.NoError(t, w2.Close())
-	require.True(t, fileExists(headsDir(w.Path())))
 	require.True(t, fileExists(tornPath(w.Path())))
 
 	// removing the session takes every sidecar with it
 	require.NoError(t, s.Remove(w.Path()))
 
 	assert.False(t, fileExists(w.Path()))
-	assert.False(t, fileExists(headsDir(w.Path())))
 	assert.False(t, fileExists(tornPath(w.Path())))
 }
 
@@ -1134,7 +1127,7 @@ func TestStoreFindByPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, w.Close())
 
-		for _, p := range []string{headsDir(w.Path()), tornPath(w.Path())} {
+		for _, p := range []string{tornPath(w.Path()), w.Path() + ".head"} {
 			_, ferr := s.Find(ws, p) // only .jsonl transcripts resolve by path
 			assert.ErrorIs(t, ferr, ErrNotFound)
 		}

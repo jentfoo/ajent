@@ -43,11 +43,9 @@ var controlMethods = guardMethods(map[string]controlMethod{
 	ctl.MethodInterrupt:   {seat: true, lane: true, priority: true, handle: (*controlConn).interruptCall},
 	ctl.MethodModeCycle:   {seat: true, lane: true, handle: (*controlConn).modeCycleCall},
 	ctl.MethodModeSet:     {seat: true, lane: true, handle: (*controlConn).modeSetCall},
-	ctl.MethodInputSet:    {seat: true, lane: true, handle: (*controlConn).inputSetCall},
 	ctl.MethodQueueRecall: {seat: true, lane: true, handle: (*controlConn).queueRecallCall},
 	ctl.MethodRewind:      {seat: true, lane: true, handle: (*controlConn).rewindCall},
 	ctl.MethodResolve:     {seat: true, handle: (*controlConn).resolveCall}, // answers stay off the lane
-	ctl.MethodSeatYield:   {seat: true, handle: (*controlConn).yieldCall},
 	ctl.MethodToolsSet:    {seat: true, lane: true, handle: (*controlConn).toolsSetCall},
 	ctl.MethodModelSet:    {seat: true, lane: true, handle: (*controlConn).modelSetCall},
 	ctl.MethodSettingsSet: {seat: true, lane: true, handle: (*controlConn).settingsSetCall},
@@ -130,23 +128,6 @@ func (s *controlServer) attach(c *controlConn, params []byte) (ctl.AttachResult,
 	return ctl.AttachResult{Control: true}, nil
 }
 
-// yield releases the control seat this connection holds, so a script can hand
-// the session back without dropping its socket. Releasing a seat it does not
-// hold is a benign no-op. Like disconnect release, this spends no event number:
-// the holder already knows, the registry rewrite is what tells pickers, and a
-// seat.lost with no successor would read as a takeover to anyone matching From.
-func (s *controlServer) yield(c *controlConn) {
-	s.mu.Lock()
-	if s.seat != c {
-		s.mu.Unlock()
-		return
-	}
-	s.seat = nil
-	s.seatHolder = ""
-	s.mu.Unlock()
-	s.writeRegistry()
-}
-
 // seatHeldError builds the takeover-capable refusal: the code is dedicated and
 // the holder rides its own field, so a script can decide between force
 // reattach, waiting and exiting without parsing prose.
@@ -210,21 +191,12 @@ func (c *controlConn) modeCycleCall(params []byte) (any, *ctl.Error) {
 	return c.srv.modeCycle(params)
 }
 
-func (c *controlConn) inputSetCall(params []byte) (any, *ctl.Error) {
-	return c.srv.inputSet(params)
-}
-
 func (c *controlConn) queueRecallCall([]byte) (any, *ctl.Error) {
 	return c.srv.queueRecall()
 }
 
 func (c *controlConn) rewindCall(params []byte) (any, *ctl.Error) {
 	return c.srv.rewind(params)
-}
-
-func (c *controlConn) yieldCall([]byte) (any, *ctl.Error) {
-	c.srv.yield(c)
-	return nil, nil
 }
 
 // resolveCall adapts the resolve method onto the registry shape.
@@ -234,8 +206,7 @@ func (c *controlConn) resolveCall(params []byte) (any, *ctl.Error) {
 
 // submit routes one line exactly as typed in the editor: prompts, /commands,
 // !shell and !! all keep their existing behavior, and a turn already running
-// steers or queues per the pump's rules. A dialog holding the editor refuses,
-// the same rule input.set applies.
+// steers or queues per the pump's rules. A dialog holding the editor refuses.
 func (s *controlServer) submit(params []byte) (any, *ctl.Error) {
 	var p ctl.SubmitParams
 	if rerr := decodeParams(params, &p); rerr != nil {
@@ -275,24 +246,6 @@ func (s *controlServer) modeCycle(params []byte) (any, *ctl.Error) {
 		return ctl.ModeResult{}, nil // no gate exists: nothing to cycle
 	}
 	return ctl.ModeResult{Mode: s.hub.ModeCycle(p.Back).String()}, nil
-}
-
-// inputSet prefills the editor. A dialog holding the editor refuses naming its
-// kind, and a serve run has no editor at all. During an active turn the text
-// simply sits in the editor, matching local typing.
-func (s *controlServer) inputSet(params []byte) (any, *ctl.Error) {
-	var p ctl.InputSetParams
-	if rerr := decodeParams(params, &p); rerr != nil {
-		return nil, rerr
-	}
-	if !s.hub.Interactive() {
-		return nil, ctl.Errf(ctl.CodeUnavailable, "serve mode has no editor to prefill")
-	}
-	if rerr := s.inputHeld(); rerr != nil {
-		return nil, rerr
-	}
-	s.hub.ui.SetInput(p.Text)
-	return nil, nil
 }
 
 // queueRecall runs the body behind Alt+Up on one lane: the newest queued
@@ -449,8 +402,7 @@ func decodeParams(raw []byte, v any) *ctl.Error {
 	return nil
 }
 
-// inputHeld refuses while a dialog holds the editor; submit and input.set both
-// apply the rule.
+// inputHeld refuses while a dialog holds the editor; submit applies the rule.
 func (s *controlServer) inputHeld() *ctl.Error {
 	if held, ok := s.hub.ui.dialogs.holding(); ok {
 		return ctl.Errf(ctl.CodeUnavailable,

@@ -111,9 +111,7 @@ func rootID(entries []session.Entry) string {
 
 // exitLabel ends the run's recording, reporting "" so no resume hint names a
 // dropped transcript. Any other transcript returns the label a `--resume`
-// command takes. Closing the writer first marks the slot inactive, so this exit
-// never blocks a concurrent --delete, and the empty-session cleanup only fires
-// when no peer still holds the file live.
+// command takes. Closing the writer first ends appends before the read.
 func (r *sessRec) exitLabel() string {
 	if r == nil || r.w == nil {
 		return ""
@@ -126,12 +124,9 @@ func (r *sessRec) exitLabel() string {
 	if r.store != nil && session.NameOf(entries) == "" &&
 		!slices.ContainsFunc(entries, func(e session.Entry) bool { return e.Type == session.TypeMessage }) {
 		// unnamed and holding no message: removed with its sidecars so it never
-		// becomes a dead picker row or steals "most recent" -- but a live peer's
-		// open beats this exit's cleanup
-		if r.w.LivePeers() == 0 {
-			_ = r.store.Remove(r.w.Path())
-			return ""
-		}
+		// becomes a dead picker row or steals "most recent"
+		_ = r.store.Remove(r.w.Path())
+		return ""
 	}
 	return labelOf(entries)
 }
@@ -307,7 +302,7 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 		}
 		// implicit resume: a live peer's slot head is adopted, so a second
 		// --continue forks from the running tip and diverges independently
-		w, snap, err := openSnapshotMode(list[i].Path, session.OpenEntriesImplicit)
+		w, snap, err := openSnapshotMode(list[i].Path, session.OpenEntries)
 		var note string
 		if err == nil && i > 0 {
 			note = skipNewerNote(i, list[0]) // rows sorting above the resumed one are all blocked

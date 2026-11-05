@@ -12,7 +12,7 @@ session data from the transcript file. This document records only the decisions 
 ## What it is
 
 A serving session binds a socket under the ajent home, named for the session and for this
-instance's writer slot token (`session-design.md`), so two instances of one session never
+instance's writer token (`session-design.md`), so two instances of one session never
 share a path (see `config-design.md` for the control directory). Any number of
 connections may observe what the session emits, and one at a time holds the **control
 seat** to mutate: submit a prompt, interrupt, set or cycle the permission mode, reshape
@@ -51,14 +51,14 @@ The dependency edges are load-bearing.
 - **The server and both front ends stay in `pkg/app`.** They sit on the seams that
   already decouple the turn loop from its terminal (the session hub and the interaction
   broker), so agent, tools and permit never learn a socket exists.
-- **`pkg/session` never imports control code.** Writer slots are a file mechanism in
-  their own right. The socket path derives from the writer's token across that existing
+- **`pkg/session` never imports control code.** The writer's per-open token is a file
+  mechanism in its own right. The socket path derives from it across that existing
   seam, never the reverse.
 
 ## One routing path for writes
 
 Each write verb runs the implementation the keyboard already uses: editor submission, Esc,
-Shift+Tab, typing into the editor, the tail of double-Esc, answering a dialog. There is
+Shift+Tab, the tail of double-Esc, answering a dialog. There is
 deliberately no second dispatch, so remote behavior shares local behavior and its tests,
 and a controller cannot reach a state the operator cannot produce by hand. Four rules
 keep that single path honest under concurrent controllers.
@@ -126,7 +126,7 @@ none of the injected flag's behavior changes (`prompt-design.md`).
 
 Ownership is single-writer and keyed to the connection rather than the process. EOF
 releases it immediately, so a dead controller never wedges a session and a replacement
-needs no timeout, and an explicit yield hands it back. Every write refuses an observer
+needs no timeout, and closing the socket hands it back. Every write refuses an observer
 while naming the holder in a coded field, so a script can choose between takeover,
 waiting and exiting without parsing prose. A forced takeover announces itself to all
 observers, which lets the displaced holder downgrade without probing and everyone learn
@@ -211,7 +211,7 @@ too.
 ## Bulk history comes from the file
 
 There is deliberately no transcript method on the socket. The greeting names the recorded
-file and this instance's slot token, and every snapshot carries the head to branch by, so
+file and this instance's writer token, and every snapshot carries the head to branch by, so
 catch-up reads the same append-only transcript at local speed with no size bound crossing
 the wire (see `session-design.md`). Only appends after a connection's snapshot announce as
 events, and an append is idempotent by entry id, so an entry that arrives both as a live

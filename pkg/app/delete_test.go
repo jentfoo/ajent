@@ -2,6 +2,9 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,7 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/llm"
+	"github.com/jentfoo/ajent/pkg/paths"
 	"github.com/jentfoo/ajent/pkg/session"
 )
 
@@ -77,27 +82,34 @@ func TestRunDelete(t *testing.T) {
 	})
 }
 
-func TestRunDeleteGatesOnLiveWriters(t *testing.T) {
-	t.Run("live_delete_refuses_then_forces", func(t *testing.T) {
-		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "shared")
-		w, err := store.Create(ws, session.SessionData{Version: session.Version()})
+func TestRunDeleteGatesOnServedSessions(t *testing.T) {
+	// writeServedRecord fakes one serving instance's discovery record for id, so
+	// the delete gate sees a live serve without binding a socket.
+	writeServedRecord := func(t *testing.T, id string) {
+		t.Helper()
+		base, _, err := paths.SubDir(paths.ControlDirName)
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = w.Close() })
-		// reopen the saved transcript the way a second ajent would: a live slot
-		// now stands beside the saved session
-		peer, err := store.Find(ws, "shared")
-		require.NoError(t, err)
-		live, err := session.Open(peer.Path)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = live.Close() })
+		reg := filepath.Join(base, id, "deadbee.json")
+		require.NoError(t, os.MkdirAll(filepath.Dir(reg), paths.DirPerm))
+		b, merr := json.Marshal(client.Instance{
+			SessionID: id, PID: os.Getpid(), Token: "deadbee", Socket: filepath.Join(filepath.Dir(reg), "deadbee.sock"),
+			StartedAt: time.Now().Add(-2 * time.Minute).UnixMilli(),
+		})
+		require.NoError(t, merr)
+		require.NoError(t, os.WriteFile(reg, b, 0o600))
+	}
 
-		err = session.DeleteSession(&bytes.Buffer{}, store, ws, "shared", false)
+	t.Run("served_delete_refuses_then_forces", func(t *testing.T) {
+		store, ws := deleteWorkspace(t)
+		id := writeDeletableSession(t, store, ws, "shared")
+		writeServedRecord(t, id)
+
+		err := session.DeleteSession(&bytes.Buffer{}, store, ws, "shared", false, servedSessions())
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "live in 1 running ajent instance")
+		assert.Contains(t, err.Error(), "served by a running ajent instance")
 
 		code := RunDelete(&bytes.Buffer{}, strings.NewReader(""), DeleteOptions{Target: "shared"})
-		assert.Equal(t, ExitUsage, code) // the refusal is a usage error, live session kept
+		assert.Equal(t, ExitUsage, code) // the refusal is a usage error, served session kept
 
 		code = RunDelete(&bytes.Buffer{}, strings.NewReader(""), DeleteOptions{Target: "shared", Force: true})
 		assert.Equal(t, ExitOK, code)
@@ -106,27 +118,20 @@ func TestRunDeleteGatesOnLiveWriters(t *testing.T) {
 		assert.Empty(t, bulk.SliceFilter(func(in session.Info) bool { return in.Name == "shared" }, list))
 	})
 
-	t.Run("sweep_skips_live_rows", func(t *testing.T) {
+	t.Run("sweep_skips_served_rows", func(t *testing.T) {
 		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "")
-		list, err := store.List(ws)
-		require.NoError(t, err)
-		require.Len(t, list, 1)
-		livePath := list[0].Path
-		// a live writer's slot marks the transcript live regardless of mtime
-		live, err := session.Open(livePath)
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = live.Close() })
+		id := writeDeletableSession(t, store, ws, "")
+		writeServedRecord(t, id)
 
 		// a cutoff past now marks the fresh session stale, isolating the
-		// liveness gate from the age window
+		// served gate from the age window
 		var buf bytes.Buffer
 		cutoff := time.Now().UTC().Add(time.Hour)
-		require.NoError(t, session.DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, cutoff))
+		require.NoError(t, session.DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, cutoff, servedSessions()))
 		assert.Contains(t, buf.String(), "live, skipped")
 		assert.Contains(t, buf.String(), "Nothing to delete")
 		rows, lerr := store.List(ws)
 		require.NoError(t, lerr)
-		assert.Len(t, rows, 1) // the live row survived
+		assert.Len(t, rows, 1) // the served row survived
 	})
 }

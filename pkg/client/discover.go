@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/go-analyze/bulk"
@@ -21,8 +22,8 @@ import (
 // instance after listen, and the one remaining dial is the final connect.
 type Instance = ctl.Instance
 
-// Dir returns <config>/<control socket dir> without creating it.
-func Dir() (string, error) {
+// dir returns <config>/<control socket dir> without creating it.
+func dir() (string, error) {
 	home, err := paths.Home()
 	if err != nil {
 		return "", err
@@ -34,7 +35,7 @@ func Dir() (string, error) {
 // id. A corrupt or truncated file reads as absent, and nothing here dials, so
 // discovery costs one directory read.
 func Discover() ([]Instance, error) {
-	dir, err := Dir()
+	dir, err := dir()
 	if err != nil {
 		return nil, err
 	}
@@ -145,9 +146,22 @@ func InstanceDead(in Instance) bool {
 	return pidDead(in.PID)
 }
 
-// pidDead reports whether no process with pid exists, by the one shared
-// liveness rule session.PIDAlive defines.
-func pidDead(pid int) bool { return !session.PIDAlive(pid) }
+// pidDead reports whether no process with pid exists, judged with signal
+// zero: it delivers nothing, EPERM means a live process this user cannot
+// signal (a PID reuse by another user), and anything undecidable reads as
+// alive. The os layer folds ESRCH into os.ErrProcessDone, so both spellings
+// of "no such process" count.
+func pidDead(pid int) bool {
+	if pid <= 0 {
+		return false // no recorded pid: nothing to judge, leave the record
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = proc.Signal(syscall.Signal(0))
+	return errors.Is(err, syscall.ESRCH) || errors.Is(err, os.ErrProcessDone)
+}
 
 // DiscoverLive is Discover without the dead records: every instance whose
 // recorded pid still answers signal zero past its first minute. It never dials

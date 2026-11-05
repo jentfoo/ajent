@@ -19,16 +19,16 @@ import (
 // too: deletion needs no decode, and it is the escape hatch that frees a name a
 // blocked transcript would otherwise hold forever. The same path handle removes
 // a damaged transcript whose identity cannot decode, which resolution reaches
-// by nothing else. A session held live by another writer refuses deletion (the
-// error names the instance count) unless force is set.
-func DeleteSession(out io.Writer, store *Store, cwd, target string, force bool) error {
+// by nothing else. live reports whether a running instance serves the session
+// (nil for no check); a served session refuses deletion unless force is set.
+func DeleteSession(out io.Writer, store *Store, cwd, target string, force bool, live func(id string) bool) error {
 	info, err := store.Find(cwd, target)
 	if err != nil { // the not-found wording (with any damaged hint) passes through verbatim
 		return err
 	}
-	if live := LiveWriters(info.Path); live > 0 && !force {
-		return fmt.Errorf("session %s is live in %d running ajent instance(s); detach or pass --force",
-			info.Label(), live)
+	if live != nil && !force && live(info.ID) {
+		return fmt.Errorf("session %s is served by a running ajent instance; stop it or pass --force",
+			info.Label())
 	}
 	if err := store.Remove(info.Path); err != nil {
 		return err
@@ -48,10 +48,10 @@ func DeleteSession(out io.Writer, store *Store, cwd, target string, force bool) 
 
 // DeleteOldSessions removes every unnamed session last used before cutoff, after
 // listing them and reading a confirmation from in. An unreadable answer declines.
-// Sessions a writer holds live are listed as skipped rather than deleted, and
+// Sessions live reports as served are listed as skipped rather than deleted, and
 // re-checked at Remove time so a session that went live while the user read the
 // list never loses its file.
-func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cutoff time.Time) error {
+func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cutoff time.Time, live func(id string) bool) error {
 	stale, err := store.Stale(cwd, cutoff)
 	if err != nil {
 		return err
@@ -68,10 +68,14 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 	}
 	rows := make([]oldRow, 0, len(stale))
 	for _, info := range stale {
-		rows = append(rows, oldRow{info: info, live: LiveWriters(info.Path) > 0})
+		var served bool
+		if live != nil {
+			served = live(info.ID)
+		}
+		rows = append(rows, oldRow{info: info, live: served})
 	}
-	live, removable := bulk.SliceSplit(func(r oldRow) bool { return r.live }, rows)
-	for _, r := range live {
+	served, removable := bulk.SliceSplit(func(r oldRow) bool { return r.live }, rows)
+	for _, r := range served {
 		_, _ = fmt.Fprintf(out, "  %s  %s (live, skipped)\n", r.info.Label(), describeInfo(r.info))
 	}
 	if len(removable) == 0 {
@@ -95,7 +99,7 @@ func DeleteOldSessions(out io.Writer, in io.Reader, store *Store, cwd string, cu
 	var errs []error
 	var removed int
 	for _, r := range removable {
-		if LiveWriters(r.info.Path) > 0 { // went live between the listing and here
+		if live != nil && live(r.info.ID) { // went live between the listing and here
 			_, _ = fmt.Fprintf(out, "Skipped %s (now live).\n", r.info.Label())
 			continue
 		}

@@ -132,8 +132,10 @@ func TestForkTo(t *testing.T) {
 			err = r.forkTo(serveUI, ag, reg, entries[0].ID, m)
 		})
 		require.NoError(t, err)
-		// the fork moved and recorded its model entry chained from the new head
-		after := readEntriesRewind(t, p)
+		// the fork moved and recorded its model entry chained from the new head;
+		// head cursors are chain markers, filtered from the count
+		after := bulk.SliceFilter(func(e session.Entry) bool { return e.Type != session.TypeHead },
+			readEntriesRewind(t, p))
 		require.Len(t, after, 4)
 		last := after[len(after)-1]
 		assert.Equal(t, session.TypeModelChange, last.Type)
@@ -462,7 +464,10 @@ func TestPlanWorkflowBranchesPerPhase(t *testing.T) {
 	require.NoError(t, err)
 
 	// two roots: the session line, plus the independent implementation round.
-	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool { return e.ParentID == "" }, entries), 2)
+	// head cursors chain markers, never roots of their own
+	assert.Len(t, bulk.SliceFilter(func(e session.Entry) bool {
+		return e.ParentID == "" && e.Type != session.TypeHead
+	}, entries), 2)
 }
 
 func TestPlanKickoffsStayUnexpanded(t *testing.T) {

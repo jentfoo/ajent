@@ -109,22 +109,6 @@ func newServeRig(t *testing.T, local localDialogs) *controlRig {
 	return finishControlRig(t, hub, broker, true)
 }
 
-// newInteractiveRig builds an interactive rig whose broker races a scripted
-// local surface, for dialog tests that need a terminal and a controllable
-// racer at once.
-func newInteractiveRig(t *testing.T, local localDialogs) *controlRig {
-	t.Helper()
-	shortHome(t)
-
-	term, _ := pipeUI(t)
-	broker := newInteractionBroker(local, nil, nil)
-	hub := newSessionHub(hubDeps{
-		ui: term, dialogs: broker, workspace: "/repo",
-		cwd: "/repo", acct: tokens.New(llm.Model{}),
-	})
-	return finishControlRig(t, hub, broker, false)
-}
-
 // finishControlRig opens the rig's transcript and binds the server onto an
 // already-built hub and broker, wiring the driver-time switch callback a
 // rewind needs for its head event.
@@ -526,17 +510,6 @@ func TestControlRegistryTracksInstanceState(t *testing.T) {
 	reg = controlRegistry{}
 	require.NoError(t, json.Unmarshal(raw, &reg))
 	assert.True(t, reg.SeatHeld)
-	started := reg.StartedAt
-
-	// yield hands the seat back and the registry follows
-	rp = c.call("y", ctl.MethodSeatYield, map[string]any{})
-	require.Nil(t, rp.Error)
-	raw, err = os.ReadFile(rig.srv.regPath)
-	require.NoError(t, err)
-	reg = controlRegistry{} // reuse merges: absent fields must not keep old values
-	require.NoError(t, json.Unmarshal(raw, &reg))
-	assert.False(t, reg.SeatHeld)
-	assert.Equal(t, started, reg.StartedAt) // stamped once, rewrites never drift it
 
 	// close removes this instance's own files only
 	rig.srv.Close("test")

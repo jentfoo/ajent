@@ -16,7 +16,7 @@ found as a warning. Callers surface that warning beside their other startup outp
 the notice line interactively, stderr under serve and CLI paths.
 
 The control directory holds one subdirectory per served session, and inside it one socket
-plus one discovery record per running instance, named for that instance's writer slot
+plus one discovery record per running instance, named for that instance's writer
 token (see `session-design.md`). Per-instance naming is what lets two processes serve
 one session at a time and keeps every removal scoped to the remover's own token. The
 layout belongs to the control surface (see `control-design.md`), and the directory is

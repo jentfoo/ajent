@@ -17,8 +17,8 @@ prompt source at all. See the README's control socket section for the operator-s
 
 A serving session binds one unix socket per instance at
 `<ajent home>/control/<session-id>/<token8>.sock`, with its discovery record
-`<token8>.json` beside it (see `config-design.md`). The token is the writer slot token, so
-two instances of one session never share a path. The directory is 0700 and the socket 0600,
+`<token8>.json` beside it (see `config-design.md`). The token is the writer's per-open
+token, so two instances of one session never share a path. The directory is 0700 and the socket 0600,
 and accept admits same-user peers only: the kernel's peer credentials are checked, and any
 other uid gets a `refused` event then a close. A platform that cannot attest credentials
 refuses every connection.
@@ -78,7 +78,7 @@ you are not offered, and payload fields rather than erroring on them.
 |---|---|
 | `unknown-method` | no such method |
 | `bad-request` | malformed or invalid params (empty submit line, empty rewind head, out-of-range dialog index, two answer shapes at once) |
-| `unavailable` | valid now-refused call: a dialog holds input, serve mode has no editor, a turn owns the loop, the queue cannot take an item, no gate exists for `mode.set`, or the session is shutting down |
+| `unavailable` | valid now-refused call: a dialog holds input, a turn owns the loop, the queue cannot take an item, no gate exists for `mode.set`, or the session is shutting down |
 | `seat-held` | another controller owns the seat, with `Error.Holder` naming it |
 | `observer` | write from a connection without the seat, with `Error.Holder` naming its holder when one holds it |
 | `not-found` | unknown target (rewind head entry id, interaction id, model or settings key) |
@@ -132,7 +132,7 @@ so picking costs one directory read and never dials. Fields are additive only.
 | `workspace`, `model` | where it runs and the model key in effect at that write |
 | `startedAt` | instance start time, unix milliseconds |
 | `pid` | serving process id, the liveness proof |
-| `token` | writer slot token, whose tail names this instance's two files |
+| `token` | writer token, whose tail names this instance's two files |
 | `socket` | absolute socket path to dial |
 | `seatHeld` | whether some controller holds the control seat right now |
 
@@ -167,11 +167,9 @@ but runs off the lane, because its first resolution wins against local surfaces.
 | `interrupt` | none → `{stopped?}` | yes | yes, priority |
 | `mode.cycle` | `{back?}` → `{mode?}` | yes | yes |
 | `mode.set` | `{mode}` → `{mode}` | yes | yes |
-| `input.set` | `{text}` → void | yes | yes |
 | `queue.recall` | none → `{id?, text?}` | yes | yes |
 | `session.rewind` | `{head}` → `{head}` | yes | yes |
 | `interaction.resolve` | `{id, index? \| indexes? \| text? \| cancel, chat?}` → void | yes | no |
-| `seat.yield` | none → void | yes | no |
 | `tools.set` | `{names}` → `{rows}` | yes | yes |
 | `model.set` | `{model}` → `{model}` | yes | yes |
 | `settings.set` | `{key, value, persist?}` → `{row}` | yes | yes |
@@ -220,11 +218,6 @@ Params and results with their wire keys:
   re-evaluating open approval dialogs under the new mode. `{mode}` names the mode now in
   effect and the same change announces as a `permission` event. An empty result means no gate
   exists at all. See [Vocabularies](#vocabularies) for the mode names and cycle order.
-- **`input.set`** `{text}` prefills the host editor's buffer under local typing semantics, so
-  text simply sits there during an active turn. Refuses `unavailable` in serve mode (no
-  editor) or while a dialog holds input. Your own draft is not a wire concept: this writes the
-  session's editor, which is what a keyboard-only driver wants and an attached terminal does
-  not need.
 - **`queue.recall`** pops the newest queued prompt for your own surface to edit, like Alt+Up.
   `{id,text}` names the row that left and its text, because the reply's watermark supersedes
   that same row's `queue.dropped` event (cause `recalled`). An empty result means nothing was
@@ -247,8 +240,6 @@ Params and results with their wire keys:
   settled id is `settled`, and a never-seen id is `not-found`. Wrong-shape strictness matters
   because the permission barrier reads an unknown index as denial. Secret answers never echo
   back in any event.
-- **`seat.yield`** releases the seat without dropping your socket, so another controller can
-  take it while you keep watching. A no-op when you do not hold it.
 - **`tools.set`** `{names}` reshapes the enabled tool set through the same apply `/tools`
   uses, widen-only by construction: before this run's first dispatched prompt `names` is a
   free replacement (names left out disable, an empty list disables everything). After it
@@ -383,7 +374,7 @@ reply's `seq` is the snapshot's own number: head and view-model fields were take
 
 Poll-only facts have no change event by design: session identity, workspace, cwd and the
 usage totals, whose ledger accumulates silently because per-turn usage rides `turn.end`.
-Refresh those by resnapshotting. Seat release, whether by disconnect or `seat.yield`, spends
+Refresh those by resnapshotting. Seat release by disconnect spends
 no event number. It rewrites the discovery record instead, so a reconnecting or newly attached
 controller reads seat state from the next snapshot rather than waiting for an event.
 
@@ -549,7 +540,6 @@ error (`*ctl.Error`) rather than a transport failure.
 
 | symbol | contract |
 |---|---|
-| `Dir() (string, error)` | the control directory under the ajent home, without creating it |
 | `Discover() ([]Instance, error)` | every live instance's registry record, sorted by session id. A corrupt or truncated file reads as absent, and nothing here dials |
 | `DiscoverLive() ([]Instance, error)` | Discover without the dead records: every instance whose recorded pid still answers signal zero past its first minute. It never dials and never collects; removing a dead record stays the serving instances' passive sweep |
 | `InstanceDead(in Instance) bool` | the record-only liveness test: a record at least one minute old whose recorded pid fails signal zero. Anything undecidable (no usable pid, a permission error, a reused pid) reads as alive, so a caller only drops a record on proof of death |
@@ -590,11 +580,9 @@ context and surfaces wire refusals unchanged.
 | `ModelSet(ctx, model string) (ctl.ModelSetResult, error)` | `model.set` | the model the session-only switch resolved to |
 | `Settings(ctx) (ctl.SettingsData, error)` | `settings.get` | the `/settings` rows with values, sources and editability |
 | `SettingsSet(ctx, ctl.SettingsSetParams) (ctl.SettingsSetResult, error)` | `settings.set` | the row after the applied change, with `Persist` optionally copying to `user`/`project` |
-| `InputSet(ctx, text string) error` | `input.set` | prefills the served run's editor buffer under local typing semantics; serve mode refuses with `unavailable` |
 | `Rewind(ctx, head string) (string, error)` | `session.rewind` | the new head id |
 | `QueueRecall(ctx) (ctl.RecallResult, error)` | `queue.recall` | the popped row whole: its `ID` names the queue entry that left, so a controller tracking pending rows resolves them by id. Zero result when nothing was queued |
 | `Resolve(ctx, ctl.ResolveParams) error` | `interaction.resolve` | pass exactly one answer shape with the dialog `ID` |
-| `YieldSeat(ctx) error` | `seat.yield` | releases the seat without dropping the socket; a no-op when this connection holds none |
 | `ReadBranch(path, head string) ([]session.Entry, error)` | package-level | read one transcript file and return its chain under `head`, oldest first, tolerating a torn final line |
 
 Every method in the table above has a typed wrapper. `Call` remains the escape hatch for any

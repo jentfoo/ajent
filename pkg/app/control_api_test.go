@@ -62,7 +62,7 @@ func TestControlAttach(t *testing.T) {
 
 		// every write method refuses the observer, each naming the holder
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind,
+			ctl.MethodModeSet, ctl.MethodQueueRecall, ctl.MethodRewind,
 			ctl.MethodResolve, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			rp = two.call("obs-"+m, m, map[string]any{})
 			require.NotNil(t, rp.Error)
@@ -156,7 +156,7 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("write_methods_require_seat", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt, ctl.MethodModeCycle,
-			ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall, ctl.MethodRewind,
+			ctl.MethodModeSet, ctl.MethodQueueRecall, ctl.MethodRewind,
 			ctl.MethodResolve, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
@@ -175,7 +175,7 @@ func TestControlMethods(t *testing.T) {
 
 	t.Run("mutating_verbs_run_the_lane", func(t *testing.T) {
 		for _, m := range []string{ctl.MethodSubmit, ctl.MethodInterrupt,
-			ctl.MethodModeCycle, ctl.MethodModeSet, ctl.MethodInputSet, ctl.MethodQueueRecall,
+			ctl.MethodModeCycle, ctl.MethodModeSet, ctl.MethodQueueRecall,
 			ctl.MethodRewind, ctl.MethodToolsSet, ctl.MethodModelSet, ctl.MethodSettingsSet} {
 			entry, ok := controlMethods[m]
 			require.True(t, ok)
@@ -411,61 +411,6 @@ func wireControlPump(t *testing.T, rig *controlRig, prov llm.Provider, turn agen
 		newStartState(false), q, newStateLane(), gate, st, nil, &once, func() {}, planHooks{}, &drain)
 }
 
-func TestControlInputSet(t *testing.T) {
-	// not parallel: the rig pins AJENT_HOME
-
-	t.Run("prefill", func(t *testing.T) {
-		rig := newControlRig(t, nil)
-		c := dialControl(t, rig.path)
-		c.hello()
-		attachControl(t, c, "p")
-
-		rp := c.call("i1", ctl.MethodInputSet, map[string]any{"text": "draft me"})
-		require.Nil(t, rp.Error) // accepted: the editor holds the text, no echo exists
-	})
-
-	t.Run("held_by_dialog", func(t *testing.T) {
-		blocker := &pickBlocker{held: make(chan struct{}), release: make(chan struct{})}
-		rig := newInteractiveRig(t, blocker)
-		c := dialControl(t, rig.path)
-		c.hello()
-		attachControl(t, c, "p")
-		t.Cleanup(func() { close(blocker.release) }) // the racer always ends
-
-		picking := make(chan error, 1)
-		go func() {
-			_, perr := rig.broker.Pick(t.Context(), "pick one", []tui.PickItem{{Label: "a"}, {Label: "b"}}, tui.PickOptions{})
-			picking <- perr
-		}()
-		<-blocker.held
-
-		rp := c.call("i2", ctl.MethodInputSet, map[string]any{"text": "no"})
-		require.NotNil(t, rp.Error)
-		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
-		assert.Contains(t, rp.Error.Message, "pick")
-
-		// the held dialog still resolves: cancel reaches its caller as cancelled
-		pend := c.collect(ctl.EventInteractionPending, 1)[0]
-		var pd ctl.InteractionPendingData
-		require.NoError(t, pend.Decode(&pd))
-		rp = c.call("r1", ctl.MethodResolve, map[string]any{"id": pd.ID, "cancel": true})
-		require.Nil(t, rp.Error)
-		assert.ErrorIs(t, <-picking, tui.ErrCancelled)
-	})
-
-	t.Run("serve_refused", func(t *testing.T) {
-		rig := newServeRig(t, nil)
-		c := dialControl(t, rig.path)
-		c.hello()
-		attachControl(t, c, "s")
-
-		rp := c.call("i", ctl.MethodInputSet, map[string]any{"text": "x"})
-		require.NotNil(t, rp.Error)
-		assert.Equal(t, ctl.CodeUnavailable, rp.Error.Code)
-		assert.Contains(t, rp.Error.Message, "no editor")
-	})
-}
-
 func TestControlQueueRecall(t *testing.T) {
 	// not parallel: the rig pins AJENT_HOME
 
@@ -539,24 +484,6 @@ func TestControlQueueRecall(t *testing.T) {
 			}
 		}
 	})
-}
-
-// pickBlocker holds one pick dialog open until released or cancelled, the
-// interactive local racer for input-held tests.
-type pickBlocker struct {
-	scriptedLocal
-	held    chan struct{}
-	release chan struct{}
-}
-
-func (p *pickBlocker) PickContext(ctx context.Context, _ string, _ []tui.PickItem, _ tui.PickOptions) (int, error) {
-	close(p.held)
-	select {
-	case <-p.release:
-		return 0, nil
-	case <-ctx.Done():
-		return 0, tui.ErrCancelled
-	}
 }
 
 func TestControlResolve(t *testing.T) {

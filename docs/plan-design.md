@@ -220,7 +220,7 @@ typed prompt (replay and provenance rules: `prompt-design.md`).
 
 Ending a workflow leaves HEAD at the review tip while the file tail is an
 implementation entry. Resume follows the live head over the tail, the same
-divergence a rewind already produces (`session-design.md`, writer slots).
+divergence a rewind already produces (`session-design.md`, head cursors).
 
 ## Compaction
 

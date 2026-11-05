@@ -6,6 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-analyze/bulk"
+
+	"github.com/jentfoo/ajent/pkg/client"
 	"github.com/jentfoo/ajent/pkg/config"
 	"github.com/jentfoo/ajent/pkg/session"
 )
@@ -19,6 +22,21 @@ type DeleteOptions struct {
 	Force   bool   // --force: delete a live session's transcript anyway
 }
 
+// servedSessions reports whether a session id has a live serving instance,
+// from discovery records alone. A discovery failure reads as none served: the
+// refusal is protection, not a gate nothing may bypass.
+func servedSessions() func(id string) bool {
+	insts, err := client.DiscoverLive()
+	if err != nil {
+		return nil
+	}
+	ids := bulk.SliceToSetBy(func(i client.Instance) string { return i.SessionID }, insts)
+	return func(id string) bool {
+		_, ok := ids[id]
+		return ok
+	}
+}
+
 // RunDelete removes saved sessions per --delete or --delete-old and returns
 // the process exit code. Progress goes to out. In answers the sweep's confirmation.
 func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
@@ -27,10 +45,10 @@ func RunDelete(out io.Writer, in io.Reader, o DeleteOptions) int {
 		stderrNote(store.Note())
 		cwd := config.Cwd()
 		if o.Target != "" {
-			err = session.DeleteSession(out, store, cwd, o.Target, o.Force)
+			err = session.DeleteSession(out, store, cwd, o.Target, o.Force, servedSessions())
 		} else {
 			cutoff := time.Now().UTC().AddDate(0, 0, -o.OldDays)
-			err = session.DeleteOldSessions(out, in, store, cwd, cutoff)
+			err = session.DeleteOldSessions(out, in, store, cwd, cutoff, servedSessions())
 		}
 	}
 	if err != nil {

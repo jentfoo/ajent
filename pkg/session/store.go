@@ -384,16 +384,14 @@ func (s *Store) Damaged(workspace string) ([]Info, error) {
 	return damaged, nil
 }
 
-// Remove deletes one saved transcript with its sidecars: the writer-slot
-// directory, any torn-tail quarantine file, and a legacy pre-slot cursor an
-// older build may have left. Other sessions in the directory (and editor
-// history) are untouched. Sidecar cleanup is best effort: an error means the
-// transcript itself survived.
+// Remove deletes one saved transcript with its sidecars: the torn-tail
+// quarantine file and a legacy cursor sidecar an older build may have left.
+// Other sessions in the directory (and editor history) are untouched. Sidecar
+// cleanup is best effort: an error means the transcript itself survived.
 func (s *Store) Remove(path string) error {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	removeSlots(path) // a session whose transcript is gone must not report as kept
 	_ = os.Remove(tornPath(path))
 	_ = os.Remove(path + legacyHeadSuffix)
 	return nil
@@ -457,7 +455,7 @@ func readRow(path string) (Info, string, bool) {
 		return info, facts.workspace, true
 	}
 	info.ID, info.Started, info.Model = facts.id, facts.started, facts.model
-	for _, e := range Branch(entries, headForEntries(path, entries, true)) {
+	for _, e := range Branch(entries, resolveHead(entries)) {
 		if e.Type != TypeMessage {
 			continue
 		}

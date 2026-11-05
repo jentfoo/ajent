@@ -134,21 +134,17 @@ func TestWriterDeletedUnderWriterStopsRecording(t *testing.T) {
 	_, err = w.Append(TypeMessage, MessageData{Message: llmText("two")})
 	require.ErrorIs(t, err, ErrTranscriptGone)
 
-	require.NoError(t, w.Sync()) // bookkeeping skips a gone transcript
+	require.NoError(t, w.Sync()) // a gone transcript skips its bookkeeping
 	_, err = w.Append(TypeNotice, NoticeData{Message: "x"})
 	require.ErrorIs(t, err, ErrTranscriptGone) // latched: no path re-check needed
-
-	require.NoError(t, os.RemoveAll(headsDir(p)))
-	w.syncSlot()
-	assert.NoFileExists(t, headsDir(p)) // the slot never resurrects the sidecar
 	require.NoError(t, w.Close())
 }
 
-func TestWriterHeadSlot(t *testing.T) {
+func TestWriterSetHeadCursor(t *testing.T) {
 	t.Parallel()
 
-	// SetHead rewrites the slot immediately
-	t.Run("set_head_persists_slot", func(t *testing.T) {
+	// SetHead records one trailing cursor naming the rewind target
+	t.Run("set_head_records_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -157,14 +153,16 @@ func TestWriterHeadSlot(t *testing.T) {
 
 		w.SetHead(e1.ID) // rewind onto the first message
 
-		slots := readSlots(p)
-		require.Len(t, slots, 1)
-		assert.Equal(t, e1.ID, slots[0].Head)
+		entries, _, rerr := Read(p)
+		require.NoError(t, rerr)
+		last := entries[len(entries)-1]
+		require.Equal(t, TypeHead, last.Type)
+		assert.Equal(t, e1.ID, last.ParentID)
 		require.NoError(t, w.Close())
 	})
 
-	// a fork to a new root carries an empty head, ordered by slot write time
-	t.Run("empty_head_keeps_slot", func(t *testing.T) {
+	// a fork to a new root carries an empty parent
+	t.Run("new_root_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		w, err := Create(p, SessionData{Version: sessionVersion})
 		require.NoError(t, err)
@@ -175,26 +173,11 @@ func TestWriterHeadSlot(t *testing.T) {
 
 		w.SetHead("")
 
-		slots := readSlots(p)
-		require.Len(t, slots, 1)
-		assert.Empty(t, slots[0].Head)
-	})
-
-	// Sync alone must record the appended head at a turn boundary
-	t.Run("sync_persists_head_per_turn", func(t *testing.T) {
-		p := filepath.Join(t.TempDir(), "s.jsonl")
-		w, err := Create(p, SessionData{Version: sessionVersion})
-		require.NoError(t, err)
-		t.Cleanup(func() { _ = w.Close() })
-		e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
-		require.NoError(t, err)
-
-		// no SetHead, Sync alone must record the appended head
-		require.NoError(t, w.Sync())
-
-		slots := readSlots(p)
-		require.Len(t, slots, 1)
-		assert.Equal(t, e1.ID, slots[0].Head)
+		entries, _, rerr := Read(p)
+		require.NoError(t, rerr)
+		last := entries[len(entries)-1]
+		require.Equal(t, TypeHead, last.Type)
+		assert.Empty(t, last.ParentID)
 	})
 
 	// appends after the last Sync must not be skipped by a reopen
@@ -210,7 +193,7 @@ func TestWriterHeadSlot(t *testing.T) {
 		require.NoError(t, aerr)
 		e3, aerr := w.Append(TypeMessage, MessageData{Message: llmText("three")})
 		require.NoError(t, aerr)
-		// a crash: no Sync, the slot still names e1
+		// a crash: no Sync, the cursor still names e1
 		require.NoError(t, w.Close())
 
 		entries, _, rerr := Read(p)
@@ -379,53 +362,6 @@ func TestAppendFencesTornTailMidSession(t *testing.T) {
 	torn, terr := os.ReadFile(tornPath(p))
 	require.NoError(t, terr)
 	assert.Equal(t, string(line[:len(line)/2]), string(torn)) // bytes preserved
-}
-
-func TestCreateStampsSlotWithSessionHead(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	w, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = w.Close() })
-
-	slots := readSlots(p)
-	require.Len(t, slots, 1)
-	assert.True(t, slots[0].Active)
-	assert.Equal(t, w.Head(), slots[0].Head)
-	assert.NotEmpty(t, slots[0].Head)
-}
-
-func TestSetHeadPeerEntryKeepsStamp(t *testing.T) {
-	t.Parallel()
-
-	p := filepath.Join(t.TempDir(), "s.jsonl")
-	wa, err := Create(p, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = wa.Close() })
-
-	// the second writer opens before the peer's entry exists, so the id is
-	// absent from its open-time map
-	wb, oerr := Open(p)
-	require.NoError(t, oerr)
-	t.Cleanup(func() { _ = wb.Close() })
-
-	e1, aerr := wa.Append(TypeMessage, MessageData{Message: llmText("peer")})
-	require.NoError(t, aerr)
-	require.NoError(t, wa.Sync())
-
-	wb.SetHead(e1.ID)
-
-	var mine headSlot
-	found := false
-	for _, s := range readSlots(p) {
-		if s.Token == wb.Token() {
-			mine, found = s, true
-		}
-	}
-	require.True(t, found)
-	assert.Equal(t, e1.ID, mine.Head)
-	assert.Equal(t, e1.TS, mine.EntryTS)
 }
 
 func fileExists(p string) bool {

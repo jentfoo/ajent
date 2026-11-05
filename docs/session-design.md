@@ -26,8 +26,8 @@ Goals, in priority order:
 2. A session can fork: rewinding onto an earlier message starts a new branch
    while keeping every prior one reachable.
 
-Goal 2 is what drove most of the shape below: branches, the per-writer head
-slots, and the rewind picker all exist for it.
+Goal 2 is what drove most of the shape below: branches, head cursors, and
+the rewind picker all exist for it.
 
 ## The transcript format
 
@@ -89,28 +89,22 @@ mutex so concurrent appends form one linear chain.
 
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
 one line under the mutex. That write is fenced by an exclusive lock on the
-transcript (see writer slots below), so concurrent *processes* interleave whole
+transcript (see concurrent access below), so concurrent *processes* interleave whole
 lines rather than bytes. The entry timestamp shares the id's monotonic
 millisecond: ts-derived ordering (`Store.List`, `Stale`) always agrees with append
 order even when the wall clock steps back. The new id becomes the head only
 *after* a successful write, so an append that fails to hit disk never advances it.
 
-- **Create** makes a fresh file, registers the writer's slot (see below), then
-  writes its `session` entry first.
-- **Open** reopens an existing file for append and recovers the head through the
-  slot order (see writer slots below). **OpenEntries** additionally returns what it
-  parsed, so a resume can rebuild state without reading the file a second time. The
-  implicit form behind `--continue` is the one shape allowed to adopt a live peer's
-  head.
-- **Sync** flushes at a turn boundary *and* rewrites the writer's head slot, data
-  before slot, and it is never called by `Append`. A slot that could not be written
-  surfaces as an error rather than silently continuing.
-- **SetHead(id)** rewinds to an earlier id so later appends fork from it. The
-  transcript keeps both histories (nothing is deleted) and the new tip becomes
-  this writer's head. An empty id starts a new root, which names no branch at all
-  until its first entry.
-- **Close** retires the slot immediately, so a clean exit reads as gone at once
-  even while the process lives on.
+- **Create** makes a fresh file and writes its `session` entry first.
+- **Open** reopens an existing file for append and resolves the head from the
+  file itself (see head cursors below). **OpenEntries** additionally returns what it
+  parsed, so a resume can rebuild state without reading the file a second time.
+- **Sync** fsyncs at a turn boundary and is never called by `Append`.
+- **SetHead(id)** rewinds to an earlier id so later appends fork from it,
+  recording one cursor entry (see below). The transcript keeps both histories
+  (nothing is deleted) and the new tip becomes this writer's head. An empty id
+  starts a new root, which names no branch at all until its first entry.
+- **Close** releases the file. Appends error afterwards.
 
 ## Durability
 
@@ -119,54 +113,35 @@ Two boundaries matter, and they are deliberately different:
 1. **Per message.** The recorder wires `agent.Options.OnMessage` to append one
    `message` entry as soon as the loop produces it (`Recorder.Message`), so every
    completed step is already on disk before the next begins. Durability here is
-   crash-consistent, not fsync-strong: the writes land in the file, but a crash
-   before the turn's `Sync` leaves the slot behind, and reopen recovers the
-   appended entries from the file tail instead.
-2. **Per turn.** Each `TurnEnd` fsyncs and rewrites the head slot, so resume
-   continues from exactly where work left off.
+   crash-consistent, not fsync-strong: the writes land in the file, and reopen
+   recovers them from the file tail.
+2. **Per turn.** Each `TurnEnd` fsyncs, so resume continues from exactly where
+   work left off.
 
 Write failures never end a conversation: persistence errors surface as an
 error-level notice through the sink rather than failing the turn. A broken disk
 should degrade to "not recorded", not kill the agent.
 
-## Writer slots
+## Head cursors
 
 The one mutable piece of an otherwise append-only design is the branch head: the
 entry id where work continues after a fork, which is what a rewind updates. It is
-persisted beside its transcript as one **head slot per writer**, keyed by a *slot
-token* minted when the file opens for append and rewritten atomically on every
-`SetHead` and at turn boundaries.
+persisted as **head cursor entries** in the transcript itself, one per `SetHead`.
 
-**Per-writer, never shared.** A slot exists before this writer's first entry can land,
-so a peer is visible from its earliest possible write, which is what closes the deletion
-races. Two ajent processes on one session each own a slot, so neither can overwrite or
-steer the other. A slot is live while its writer claims it and its process answers
-signal zero, the same rule control discovery judges a serving instance by, so a crash
-reads as gone at once and a clean exit retires the slot at Close.
+A cursor is an ordinary entry of type `head` with no payload: its `ParentID` names
+the entry the head moved to, empty for a new root. Because it is an entry, the
+append path's fencing and durability carry it, nothing writes beside the file, and
+a cursor never changes what any branch means: later entries chain through it,
+replay and the rewind picker skip it, and older binaries round-trip it as an
+unknown type.
 
-**Head resolution on open** is a total order:
-
-1. An explicit open (`--resume <id|name>`, rewind, plan fork) skips rule 2, so the
-   session the caller named is the one that opens. The resume target locates a
-   file rather than naming a head, and rewind and plan fork set the head
-   themselves.
-2. The newest live slot head, adopted by an implicit open. A second `--continue`
-   beside a running session resumes from that writer's tip and then diverges on
-   its own branch, which is the collaborative behavior rather than an error. A
-   peer with no head yet names nothing to adopt, so adoption falls to the next
-   live writer.
-3. The newest retired slot head, extended to the file tail when that writer's own
-   unsynced appends still form one unbroken chain from its head. Crash recovery is
-   per writer: entries interleaved from a peer break the chain and are skipped rather
-   than adopted.
-4. The file tail.
-
-Ordering is by the head entry's time with the slot's start stamp as tie-breaker, so a
-writer mid new-root fork still sorts. Tails that older writers left unsynced do not
-auto-continue, they stay reachable from the rewind picker. Slots are sidecars rather
-than entries, so the frozen corpus and its payload rules are untouched. A session
-recorded before slots existed resumes where it left off by seeding one retired slot
-from the legacy cursor on first open.
+**Resolution on open** is one rule: the file tail is the tip, unless the last
+entry is a cursor, whose parent names the branch to continue. A rewind that
+landed entries before quitting has already moved the tail, so its cursor rides
+mid-chain and the tail wins, which is exactly right. A missing cursor (a file
+written before cursors existed, or a cursor write that failed) defaults to the
+tail: the abandoned-branch intent is lost, never the data, and every fork stays
+reachable from the rewind picker.
 
 **Byte-level safety stays inside the append.** Complete-line appends plus an exclusive
 lock on the transcript make concurrent processes interleave entries instead of corrupting
@@ -175,13 +150,12 @@ append to it. Readers neither lock nor truncate: they tolerate a partial last li
 they always have. The design assumes a local filesystem, which is also what the control
 surface assumes.
 
-**Deletion meets liveness.** `--delete` and `--delete-old` consult live slots first.
-Deleting a session another writer holds refuses with the number of active instances,
-`--force` overrides that for one named target but never for the sweep, and the sweep lists
-live sessions as skipped. Exit-time empty-session cleanup fires only when no peer holds
-the file. A writer whose transcript is deleted under it anyway notices at its next append
-and stops recording with a persistence error rather than writing where nothing could read
-it back.
+**Deletion meets serving.** `--delete` and `--delete-old` consult control discovery
+records first: a session a serving instance holds refuses deletion, `--force` overrides
+that for one named target but never for the sweep, and the sweep lists served sessions
+as skipped. An interactive session with no socket is not guarded, so deleting under one
+degrades honestly: the writer notices at its next append and stops recording with a
+persistence error rather than writing where nothing could read it back.
 
 ## Concurrent access
 
@@ -192,9 +166,9 @@ coordination by four rules:
 1. **Appends interleave whole lines, never bytes.** Each append is one fenced write
    of a complete line, so concurrent writers land interleaved entries in one tree and
    nothing is lost or corrupt.
-2. **Heads are per writer.** Each instance's slot carries its own branch, and resume
-   resolves through the slot order above. The other instance's entries stay intact in
-   the tree, one rewind away, whichever branch wins the resume.
+2. **Heads are per writer.** Each instance appends from its own in-memory head, so
+   neither can steer the other. The peer's entries stay intact in the tree, one
+   rewind away, whichever branch a resume picks.
 3. **Reads are uncoordinated and tolerant.** A scan racing an append sees a consistent
    prefix or freshly landed lines, exactly as a serial scan would, and a torn tail
    quarantines itself on the next open.
@@ -248,9 +222,9 @@ The store:
   never swept: this build cannot read what it would be deleting.
 - **DeleteOld** sweeps unnamed sessions before a caller-supplied cutoff (default
   28 days), most recently used first. Its order and selection key are `List`'s
-  already. Sessions another writer holds live list as skipped and are re-checked at
-  removal time. Removing a session drops its sidecars too (the slot directory and any
-  `.torn` quarantine), leaving siblings and editor history alone.
+  already. Sessions a serving instance holds list as skipped and are re-checked at
+  removal time. Removing a session drops its sidecars too (any `.torn` quarantine),
+  leaving siblings and editor history alone.
 
 **Scans are concurrent and deterministic.** Each transcript parses
 independently, so `List` and `Prompts` walk files through a bounded worker
@@ -423,7 +397,7 @@ so an extra one stays visible in the rewind picker. A new root must lead with a
 the writer's `SetHead` to that message's *parent* (so the picked text becomes
 the start of the new branch), rebuilds agent state from that head, redraws the
 UI, replays the restored context, and pre-fills the editor with the full original
-prompt, ready to edit or re-send. The writer's slot now names the fork's tip, and both
+prompt, ready to edit or re-send. The writer's cursor names the fork's tip, and both
 it and every earlier branch remain in the file.
 
 Every branch switch, rewind and the plan workflow's forks alike, goes through
@@ -504,8 +478,7 @@ An **empty session** (abandoned before its first prompt) is deleted on exit: it
 has nothing to resume and would only be a dead picker row. A **named** session
 is exempt, since `--session` resumes by name. Deleting it would make the same
 command start over instead of returning to the work, and the picker labels it
-rather than showing an empty row. The cleanup fires only when no live peer still holds
-the file, and it drops the slot directory with it. Siblings are left untouched.
+rather than showing an empty row. Siblings are left untouched.
 
 ## Deleting sessions
 
@@ -538,9 +511,8 @@ branches that other tips still point at.
 
 This governs entries *within* a transcript. Retiring a whole session
 (empty-session cleanup, `--delete`, `--delete-old`) is a separate lifecycle
-operation, gated on live writer slots: `Remove` takes the file with its
-sidecars (the slot directory and any torn-tail quarantine) so nothing of it
-lingers behind.
+operation: `Remove` takes the file with its sidecars (any torn-tail quarantine)
+so nothing of it lingers behind.
 
 **2. Reads go through the branch, never raw file order.** Every consumer (state
 rebuild, replay, info counts) walks from a head id along `ParentID`.
@@ -557,20 +529,15 @@ its entry stays on disk, freeing the old name to create a duplicate.
 `Info.ID/Started/Model` share that rationale: they identify the file (the
 `session` entry in raw order), not any branch.
 
-**3. The live head wins over the file tail, except after a crash between
-Syncs.** They agree only until the first fork. After a rewind, or a plan
-workflow that leaves the head on the review branch while the tail is an
-implementation entry, the tail belongs to a different branch. Resume and rebuild
-follow the slot order (live writer, newest retired slot, tail), and an explicit
-target always wins. One exception: a file holding one unbroken chain of appends past
-a retired writer's last sync point was written after that sync, so the tail wins and
-no unsynced turn is skipped. Slots are per writer, so a sibling session can never
-answer this question for another.
+**3. The cursor wins over the file tail when nothing followed it.** They agree
+until the first fork. After a rewind that landed entries, the tail is the new
+tip and a mid-chain cursor is inert. After a rewind that quit first, the trailing
+cursor names the branch to continue, so the abandoned tail does not win. A crash
+between Syncs needs no rule: the unsynced entries are simply the tail.
 
 **4. The head advances only on success.** An append updates the head after a
-successful write, and an fsync rewrites the slot at turn boundaries. A lost or stale
-slot falls back through the slot order to tail recovery rather than losing the branch
-entirely.
+successful write. A cursor write that fails degrades to losing the move across
+a restart, never the live branch, since every fork stays in the file.
 
 **5. Rebuilt context stays well formed.** Every `ToolCallBlock` is matched by a
 `ToolResultBlock`, exactly as in the agent loop, or the next request would be

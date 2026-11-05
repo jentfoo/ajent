@@ -349,11 +349,6 @@ type ModeSetParams struct {
 	Mode string `json:"mode"`
 }
 
-// InputSetParams prefills the editor buffer.
-type InputSetParams struct {
-	Text string `json:"text"`
-}
-
 // RewindParams rewinds onto one earlier transcript entry.
 type RewindParams struct {
 	Head string `json:"head"` // entry id from the transcript tree

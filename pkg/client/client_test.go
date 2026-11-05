@@ -32,7 +32,6 @@ type fakeSession struct {
 	head           string
 	sessionID      string
 	recall         ctl.RecallResult      // canned queue.recall answer
-	input          string                // last input.set text received
 	hangState      bool                  // never answer state.get: the close-wakeup test hangs on it
 	hung           chan struct{}         // closed once a hangState request reaches serveConn
 	toolsSet       []string              // last tools.set names received
@@ -90,13 +89,6 @@ func waitEvent(t *testing.T, events <-chan ctl.Event) ctl.Event {
 
 // Path reports the socket path this fake listens on.
 func (f *fakeSession) Path() string { return f.ln.Addr().String() }
-
-// inputText reports the last input.set text the fake received.
-func (f *fakeSession) inputText() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.input
-}
 
 // toolsSetNames reports the last tools.set names the fake received.
 func (f *fakeSession) toolsSetNames() []string {
@@ -187,18 +179,8 @@ func (f *fakeSession) serveConn(conn net.Conn) {
 		case ctl.MethodInterrupt:
 			_ = enc.Encode(ctl.Reply{ID: req.ID,
 				Result: mustJSON(ctl.InterruptResult{Stopped: "turn"})})
-		case ctl.MethodInputSet:
-			var p ctl.InputSetParams
-			if json.Unmarshal(req.Params, &p) == nil {
-				f.mu.Lock()
-				f.input = p.Text
-				f.mu.Unlock()
-			}
-			_ = enc.Encode(ctl.Reply{ID: req.ID})
 		case ctl.MethodQueueRecall:
 			_ = enc.Encode(ctl.Reply{ID: req.ID, Result: mustJSON(f.recall)})
-		case ctl.MethodSeatYield:
-			_ = enc.Encode(ctl.Reply{ID: req.ID})
 		case ctl.MethodToolsSet:
 			var p ctl.ToolsSetParams
 			_ = json.Unmarshal(req.Params, &p)
@@ -370,23 +352,6 @@ func TestQueueRecall(t *testing.T) {
 		require.NoError(t, err)
 		assert.Zero(t, res)
 	})
-}
-
-func TestInputSet(t *testing.T) {
-	t.Parallel()
-	f := newFakeSession(t)
-	conn, _, _ := f.dial(t)
-
-	require.NoError(t, conn.InputSet(t.Context(), "draft text"))
-	assert.Equal(t, "draft text", f.inputText())
-}
-
-func TestYieldSeat(t *testing.T) {
-	t.Parallel()
-	f := newFakeSession(t)
-	conn, _, _ := f.dial(t)
-
-	require.NoError(t, conn.YieldSeat(t.Context()))
 }
 
 func TestToolsSetCarriesNames(t *testing.T) {

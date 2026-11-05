@@ -20,6 +20,11 @@ const (
 	TypeSettingChange Type = "setting_change"
 	TypeNotice        Type = "notice"
 	TypeCustom        Type = "custom"
+	// TypeHead is a branch cursor: no payload, the parent id names the entry a
+	// rewind or fork moved the head to and an empty parent a new root. A cursor
+	// is an ordinary tree node later entries chain through, replay ignores it,
+	// and only SetHead writes one.
+	TypeHead Type = "head"
 )
 
 // sessionVersion is the transcript format. A reader refuses a larger major.

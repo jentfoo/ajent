@@ -46,7 +46,7 @@ func TestDeleteSession(t *testing.T) {
 		writeDeletableSession(t, store, ws, "fix-parser")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "fix-parser", false))
+		require.NoError(t, DeleteSession(&buf, store, ws, "fix-parser", false, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestDeleteSession(t *testing.T) {
 		id := writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, id[:10], false))
+		require.NoError(t, DeleteSession(&buf, store, ws, id[:10], false, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -72,7 +72,7 @@ func TestDeleteSession(t *testing.T) {
 		keep := writeDeletableSession(t, store, ws, "keep-me")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "drop-me", false))
+		require.NoError(t, DeleteSession(&buf, store, ws, "drop-me", false, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -84,7 +84,7 @@ func TestDeleteSession(t *testing.T) {
 		store, ws := deleteWorkspace(t)
 
 		var buf bytes.Buffer
-		err := DeleteSession(&buf, store, ws, "no-such-session", false)
+		err := DeleteSession(&buf, store, ws, "no-such-session", false, nil)
 		assert.ErrorContains(t, err, "no session matches")
 	})
 
@@ -95,7 +95,7 @@ func TestDeleteSession(t *testing.T) {
 		writeNewer(t, store, ws, "future-work")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, "future-work", false))
+		require.NoError(t, DeleteSession(&buf, store, ws, "future-work", false, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -110,7 +110,7 @@ func TestDeleteSession(t *testing.T) {
 		damaged := writeDamaged(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteSession(&buf, store, ws, damaged.Path, false))
+		require.NoError(t, DeleteSession(&buf, store, ws, damaged.Path, false, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -127,7 +127,7 @@ func TestDeleteSession(t *testing.T) {
 		damaged := writeDamaged(t, store, ws, "")
 
 		var buf bytes.Buffer
-		err := DeleteSession(&buf, store, ws, "no-such-session", false)
+		err := DeleteSession(&buf, store, ws, "no-such-session", false, nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), damaged.Path)
 	})
@@ -145,7 +145,7 @@ func TestDeleteOldSessions(t *testing.T) {
 		keep := writeDeletableSession(t, store, ws, "keep-me")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, future, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -159,7 +159,7 @@ func TestDeleteOldSessions(t *testing.T) {
 		writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("n\n"), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("n\n"), store, ws, future, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -172,7 +172,7 @@ func TestDeleteOldSessions(t *testing.T) {
 		writeDeletableSession(t, store, ws, "")
 
 		var buf bytes.Buffer
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader(""), store, ws, future))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader(""), store, ws, future, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestDeleteOldSessions(t *testing.T) {
 
 		var buf bytes.Buffer
 		past := time.Now().UTC().AddDate(0, 0, -28)
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, past))
+		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("y\n"), store, ws, past, nil))
 
 		list, err := store.List(ws)
 		require.NoError(t, err)
