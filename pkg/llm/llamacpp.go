@@ -175,13 +175,17 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 // them, in which case every listed model stays available.
 type openAIModels struct {
 	Data []struct {
-		ID     string `json:"id"`
-		Object string `json:"object"`
-		Status struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		OwnedBy string `json:"owned_by"`
+		Status  struct {
 			Value string `json:"value"` // llama.cpp router: "loaded" or "unloaded"
 		} `json:"status"`
 		Meta struct {
-			NCtx int `json:"n_ctx"`
+			NCtx      int `json:"n_ctx"`
+			LlamaSwap *struct {
+				Name string `json:"name"`
+			} `json:"llamaswap"`
 		} `json:"meta"`
 		Architecture struct {
 			InputModalities []string `json:"input_modalities"`
@@ -192,9 +196,10 @@ type openAIModels struct {
 // parseOpenAIModels turns the standard /v1/models list into model entries. It is
 // the common denominator every chat-completions server speaks, so it backs up a
 // flavor whose own endpoint cannot describe what is loaded (a llama.cpp router). A
-// router marks models it has not yet swapped in as unloaded. Those are dropped so
-// only actually-available models surface. Its meta.n_ctx carries the real context
-// window, which beats configuration for that field.
+// llama.cpp router marks models it has not yet swapped in as unloaded, whereas
+// llama-swap proxies load unloaded models on demand when a turn is requested.
+// Its meta.n_ctx carries the real context window, which beats configuration for
+// that field.
 func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 	var wire openAIModels
 	if err := json.Unmarshal(body, &wire); err != nil {
@@ -206,11 +211,16 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 		if d.ID == "" {
 			continue
 		}
-		// a plain OpenAI server reports no status, and only an explicit unloaded drops it
-		if d.Status.Value == "unloaded" {
+		isLlamaSwap := d.OwnedBy == "llama-swap" || d.Meta.LlamaSwap != nil
+		// a plain OpenAI server reports no status; llama-swap loads models on demand
+		if d.Status.Value == "unloaded" && !isLlamaSwap {
 			continue
 		}
-		m := ModelConfig{ID: d.ID, Name: d.ID}
+		name := d.ID
+		if d.Meta.LlamaSwap != nil && d.Meta.LlamaSwap.Name != "" {
+			name = d.Meta.LlamaSwap.Name
+		}
+		m := ModelConfig{ID: d.ID, Name: name}
 		var input []Modality
 		for _, mod := range d.Architecture.InputModalities {
 			switch Modality(mod) {
@@ -230,3 +240,4 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 	}
 	return out, nil
 }
+
