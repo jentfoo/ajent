@@ -176,16 +176,14 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 type openAIModels struct {
 	Data []struct {
 		ID      string `json:"id"`
+		Name    string `json:"name"`
 		Object  string `json:"object"`
 		OwnedBy string `json:"owned_by"`
 		Status  struct {
 			Value string `json:"value"` // llama.cpp router: "loaded" or "unloaded"
 		} `json:"status"`
 		Meta struct {
-			NCtx      int `json:"n_ctx"`
-			LlamaSwap *struct {
-				Name string `json:"name"`
-			} `json:"llamaswap"`
+			NCtx int `json:"n_ctx"`
 		} `json:"meta"`
 		Architecture struct {
 			InputModalities []string `json:"input_modalities"`
@@ -211,14 +209,14 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 		if d.ID == "" {
 			continue
 		}
-		isLlamaSwap := d.OwnedBy == "llama-swap" || d.Meta.LlamaSwap != nil
+		isLlamaSwap := d.OwnedBy == "llama-swap"
 		// a plain OpenAI server reports no status; llama-swap loads models on demand
 		if d.Status.Value == "unloaded" && !isLlamaSwap {
 			continue
 		}
 		name := d.ID
-		if d.Meta.LlamaSwap != nil && d.Meta.LlamaSwap.Name != "" {
-			name = d.Meta.LlamaSwap.Name
+		if d.Name != "" {
+			name = d.Name
 		}
 		m := ModelConfig{ID: d.ID, Name: name}
 		var input []Modality

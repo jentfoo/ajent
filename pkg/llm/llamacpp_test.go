@@ -179,7 +179,7 @@ func TestParseOpenAIModels(t *testing.T) {
 	})
 
 	t.Run("llamaswap_keeps_unloaded_models_and_uses_display_name", func(t *testing.T) {
-		body := []byte(`{"object":"list","data":[{"id":"qwen3.6:35b-a3b","object":"model","owned_by":"llama-swap","meta":{"llamaswap":{"aliases":["qwen-3.6"],"name":"Qwen 3.6 35B A3B (UD-Q4_K_XL)"}},"status":{"value":"unloaded"}},{"id":"gemma-4:26b-a4b","object":"model","owned_by":"llama-swap","status":{"value":"unloaded"}}]}`)
+		body := []byte(`{"object":"list","data":[{"id":"qwen3.6:35b-a3b","name":"Qwen 3.6 35B A3B (UD-Q4_K_XL)","object":"model","owned_by":"llama-swap","status":{"value":"unloaded"}},{"id":"gemma-4:26b-a4b","object":"model","owned_by":"llama-swap","status":{"value":"unloaded"}}]}`)
 		got, err := parseOpenAIModels(body)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
