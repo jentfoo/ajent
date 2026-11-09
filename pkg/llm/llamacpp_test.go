@@ -345,4 +345,3 @@ func TestCompatProviderCountTokens(t *testing.T) {
 		assert.ErrorIs(t, err, ErrNoTokenizer)
 	})
 }
-

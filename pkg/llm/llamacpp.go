@@ -240,4 +240,3 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 	}
 	return out, nil
 }
-
