@@ -516,6 +516,19 @@ registry's `Close` fans out to every tool, so agent shutdown cancels the root
 and every background group is killed. The temp log files are deliberately left
 behind: they are small and they are the record.
 
+Live runs are counted per process on the tool: one up at start, one down when
+the `Wait` goroutine reaps an exit whatever the cause. The count is
+**per-process truth only**: background runs die with the process, so a resumed
+session starts at zero and nothing replays them from the transcript.
+
+An optional observer (`tools.Options.Backgrounds`) receives that count on every
+change; zero clears. Publishing a bare number keeps `pkg/tools` free of
+front-end dependencies: the app renders one aggregated status segment (no age
+note, as nothing repaints between events). That segment outlives turns and only
+an exit event or `Close` empties it, since Esc never kills a background run. A
+publish landing past teardown is dropped, so quit cannot be repainted behind
+itself.
+
 The timeout ceiling follows the caller: model calls default to two minutes and
 cap at the maximum declared in the schema, while a user-initiated run (a staged
 `!` line, marked by `WithUserInitiated`) may name any explicit ceiling through

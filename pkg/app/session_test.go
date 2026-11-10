@@ -709,7 +709,7 @@ func TestResumeRestoresRecordedToolSet(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	toolsReg, terr := builtinTools(set, reg, nil, nil)
+	toolsReg, terr := builtinTools(set, reg, nil, nil, nil)
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
@@ -776,7 +776,7 @@ func TestResumeRestoresEmptyToolSet(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	toolsReg, terr := builtinTools(set, reg, nil, nil)
+	toolsReg, terr := builtinTools(set, reg, nil, nil, nil)
 	require.NoError(t, terr)
 
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}

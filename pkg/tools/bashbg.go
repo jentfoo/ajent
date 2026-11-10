@@ -24,6 +24,31 @@ func (t *bashTool) ensureBg() context.Context {
 func (t *bashTool) Close() {
 	t.ensureBg()
 	t.bgStop()
+
+	// the flag and the clear share bgMu: a publish already in flight lands
+	// first, every later one sees closed. A run dying during quit must not
+	// re-add the segment behind a torn-down UI.
+	t.bgMu.Lock()
+	defer t.bgMu.Unlock()
+	t.bgClosed = true
+	t.bgLive = 0
+	if fn := t.backgrounds; fn != nil {
+		fn(0)
+	}
+}
+
+// bgAdd moves the live-run count and republishes it through the observer,
+// dropped once Close has cleared the UI so a straggler cannot repaint.
+func (t *bashTool) bgAdd(delta int) {
+	t.bgMu.Lock()
+	defer t.bgMu.Unlock()
+	if t.bgClosed {
+		return
+	}
+	t.bgLive += delta
+	if fn := t.backgrounds; fn != nil {
+		fn(t.bgLive)
+	}
 }
 
 // executeBackground starts the command detached from the call context and
@@ -64,10 +89,12 @@ func (t *bashTool) executeBackground(root context.Context, cwd string, p bashPar
 	}
 
 	pid := cmd.Process.Pid
+	t.bgAdd(1)
 	// os/exec writes straight into the two files (no copy goroutines), so Wait
 	// returns as soon as bash exits and the handles are safe to reuse then
 	go func() {
 		waitErr := cmd.Wait()
+		t.bgAdd(-1) // every exit path lands here, before any log work
 		status := strings.TrimSpace(exitStatus(waitErr, cmd.ProcessState))
 		if status == "" {
 			status = "exit status 0"

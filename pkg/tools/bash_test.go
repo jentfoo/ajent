@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -521,6 +522,121 @@ func TestBashBackground(t *testing.T) {
 		entries, readErr := os.ReadDir(spillDir)
 		require.NoError(t, readErr) // both spills were created before Start failed
 		assert.Empty(t, entries)    // a failed start removes them again
+	})
+}
+
+// bgCountRecorder collects the live counts a background observer receives.
+type bgCountRecorder struct {
+	mu     sync.Mutex
+	counts []int
+}
+
+func (r *bgCountRecorder) observe(running int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.counts = append(r.counts, running)
+}
+
+// history returns every published count in order.
+func (r *bgCountRecorder) history() []int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.counts)
+}
+
+// pidFromResult extracts a background run's pid from its start result, for kill
+// tests and cleanup.
+func pidFromResult(t *testing.T, res agent.ToolResult) int {
+	t.Helper()
+
+	m := regexp.MustCompile(`pid (\d+)`).FindStringSubmatch(textOf(res))
+	require.Len(t, m, 2)
+	pid, err := strconv.Atoi(m[1])
+	require.NoError(t, err)
+	return pid
+}
+
+func TestBashBackgroundTracking(t *testing.T) {
+	t.Parallel()
+
+	// one start publishes exactly one live run
+	t.Run("start_adds_one", func(t *testing.T) {
+		rec := &bgCountRecorder{}
+		tool := &bashTool{policy: PathPolicy{Cwd: t.TempDir()}, sessionID: "bg-track-start",
+			backgrounds: rec.observe}
+		c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"sleep 30","background":true}`)}
+		res, err := tool.Execute(t.Context(), c, &captureOutput{})
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		var counts []int
+		require.Eventually(t, func() bool {
+			counts = rec.history()
+			return len(counts) > 0 && counts[len(counts)-1] == 1
+		}, 5*time.Second, 10*time.Millisecond)
+		assert.Equal(t, []int{1}, counts)
+
+		pid := pidFromResult(t, res)
+		t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	})
+
+	// a natural exit drops through the same Wait goroutine
+	t.Run("natural_exit_removes", func(t *testing.T) {
+		rec := &bgCountRecorder{}
+		tool := &bashTool{policy: PathPolicy{Cwd: t.TempDir()}, sessionID: "bg-track-exit",
+			backgrounds: rec.observe}
+		c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"echo hi","background":true}`)}
+		res, err := tool.Execute(t.Context(), c, &captureOutput{})
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		require.Eventually(t, func() bool {
+			return slices.Equal([]int{1, 0}, rec.history())
+		}, 5*time.Second, 10*time.Millisecond, "start then exit must publish 1 then 0")
+	})
+
+	// a killed run leaves the same [1 0] trail
+	t.Run("killed_pid_removes", func(t *testing.T) {
+		rec := &bgCountRecorder{}
+		tool := &bashTool{policy: PathPolicy{Cwd: t.TempDir()}, sessionID: "bg-track-kill",
+			backgrounds: rec.observe}
+		c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"sleep 30","background":true}`)}
+		res, err := tool.Execute(t.Context(), c, &captureOutput{})
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		pid := pidFromResult(t, res)
+		require.Eventually(t, func() bool {
+			return slices.Equal([]int{1}, rec.history())
+		}, 5*time.Second, 10*time.Millisecond)
+		require.NoError(t, syscall.Kill(pid, syscall.SIGTERM))
+		assertEventuallyGone(t, pid)
+		require.Eventually(t, func() bool {
+			return slices.Equal([]int{1, 0}, rec.history())
+		}, 5*time.Second, 10*time.Millisecond)
+	})
+
+	// Close clears the count itself and a death racing quit cannot re-add it
+	t.Run("close_clears_and_guards", func(t *testing.T) {
+		rec := &bgCountRecorder{}
+		tool := &bashTool{policy: PathPolicy{Cwd: t.TempDir()}, sessionID: "bg-track-close",
+			backgrounds: rec.observe}
+		c := agent.ToolCall{ID: "c", Name: "bash", Input: []byte(`{"command":"sleep 300","background":true}`)}
+		res, err := tool.Execute(t.Context(), c, &captureOutput{})
+		require.NoError(t, err)
+		require.False(t, res.IsError)
+
+		pid := pidFromResult(t, res)
+		require.Eventually(t, func() bool {
+			return slices.Equal([]int{1}, rec.history())
+		}, 5*time.Second, 10*time.Millisecond)
+
+		tool.Close()
+		assert.Equal(t, []int{1, 0}, rec.history()) // Close itself clears the segment
+
+		// the shutdown kill reaping later must stay silent
+		assertEventuallyGone(t, pid)
+		assert.Equal(t, []int{1, 0}, rec.history())
 	})
 }
 

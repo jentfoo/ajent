@@ -106,7 +106,7 @@ func TestBuiltinTools(t *testing.T) {
 	reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
 	var warns []string
-	breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) })
+	breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) }, nil)
 	require.NoError(t, err)
 	require.NotNil(t, breg)
 
@@ -155,7 +155,7 @@ func TestBuiltinToolsDiffEcho(t *testing.T) {
 		require.NoError(t, set.SetSession("tools.diffEcho", "never"))
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
-		breg, err := builtinTools(set, reg, nil, func(string) {})
+		breg, err := builtinTools(set, reg, nil, func(string) {}, nil)
 		require.NoError(t, err)
 		assert.NotContains(t, writeOverwrite(t, breg), "@@")
 	})
@@ -166,7 +166,7 @@ func TestBuiltinToolsDiffEcho(t *testing.T) {
 		reg, _ := llm.NewRegistry(llm.File{}, nil, llm.RegistryOptions{})
 
 		var warns []string
-		breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) })
+		breg, err := builtinTools(set, reg, nil, func(msg string) { warns = append(warns, msg) }, nil)
 		require.NoError(t, err)
 		require.Len(t, warns, 1)
 		assert.Contains(t, warns[0], `unknown tools.diffEcho "noisy"`)

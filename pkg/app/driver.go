@@ -194,7 +194,10 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 
 	// ask_user rides the TUI's question queue, so it never pre-empts a permission
 	// dialog. It stays disabled until a workflow enables it.
-	toolsReg, terr := builtinTools(set, reg, askUser(dialogs), func(msg string) { ui.Notify(msg, tui.LevelWarn) })
+	// background bash runs publish one aggregated status segment: the tool owns
+	// the count, this side owns the wording and placement.
+	toolsReg, terr := builtinTools(set, reg, askUser(dialogs), func(msg string) { ui.Notify(msg, tui.LevelWarn) },
+		func(running int) { ui.SetStatusSegment(bashBgSegment(running)) })
 	if terr != nil {
 		ui.Notify("tools disabled: "+terr.Error(), tui.LevelWarn)
 	}

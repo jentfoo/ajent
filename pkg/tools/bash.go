@@ -58,12 +58,20 @@ var ShellExamples = []string{ToolLs, ToolGrep, ToolFind, "diff", "wc"}
 // keeps cd and state from confusing later calls.
 type bashTool struct {
 	policy        PathPolicy
-	sessionID     string   // names the spill and background-log directory
-	limit         Limit    // zero means BashOutput, overridable for tests
-	shellExamples []string // common commands the description may name, startup-fixed
-	bgOnce        sync.Once
-	bgCtx         context.Context // root for background commands, cancelled by Close
-	bgStop        context.CancelFunc
+	sessionID     string            // names the spill and background-log directory
+	limit         Limit             // zero means BashOutput, overridable for tests
+	shellExamples []string          // common commands the description may name, startup-fixed
+	backgrounds   func(running int) // live background count observer, nil disables publishing
+
+	bgOnce sync.Once
+	bgCtx  context.Context // root for background commands, cancelled by Close
+	bgStop context.CancelFunc
+
+	// bgMu guards both fields and serializes every publish against Close's clear,
+	// so a stale count cannot land after a newer one or past teardown
+	bgMu     sync.Mutex
+	bgLive   int  // live background runs, published after each change
+	bgClosed bool // set by Close: no publish may follow its clear
 }
 
 var _ agent.Tool = (*bashTool)(nil)

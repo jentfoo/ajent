@@ -88,10 +88,11 @@ func RunHeadless(o HeadlessOptions) int {
 		notify(rec.note, agent.LevelWarn) // e.g. --continue skipped newer-format sessions
 	}
 
-	// ask_user has nobody to ask: no Ask func, excluded from every scope below
+	// ask_user has nobody to ask: no Ask func, excluded from every scope below.
+	// Headless also passes no background observer: there is no status row.
 	toolsReg, terr := builtinTools(o.Set, o.Reg, nil, func(msg string) {
 		_, _ = fmt.Fprintln(errw, msg)
-	})
+	}, nil)
 	if terr != nil {
 		_, _ = fmt.Fprintln(errw, terr)
 		rec.exitLabel() // tool-set failure: drop the transcript opened before it

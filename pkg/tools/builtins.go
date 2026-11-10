@@ -46,6 +46,9 @@ type Options struct {
 	// Vision reports the active model's image capability, consulted live by
 	// read. nil disables read's image arm entirely.
 	Vision func() bool
+	// Backgrounds observes the live background bash run count after every start,
+	// exit and Close (zero clears). nil skips publishing (headless).
+	Backgrounds func(running int)
 	// DiffEcho selects when write/edit results echo a unified diff of the
 	// change; zero takes the default.
 	DiffEcho DiffEcho
@@ -71,7 +74,12 @@ func Builtins(opts Options) (*Registry, error) {
 	reg.Register(&readTool{policy: policy, tracker: tracker, vision: opts.Vision}, true)
 	reg.Register(&writeTool{policy: policy, tracker: tracker, echo: opts.DiffEcho}, true)
 	reg.Register(&editTool{policy: policy, tracker: tracker, echo: opts.DiffEcho}, true)
-	reg.Register(&bashTool{policy: policy, sessionID: opts.SessionID, shellExamples: opts.ShellCommands}, true)
+	reg.Register(&bashTool{
+		policy:        policy,
+		sessionID:     opts.SessionID,
+		shellExamples: opts.ShellCommands,
+		backgrounds:   opts.Backgrounds,
+	}, true)
 	reg.Register(&findTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&grepTool{policy: policy, sessionID: opts.SessionID}, false)
 	reg.Register(&lsTool{policy: policy, tracker: tracker, sessionID: opts.SessionID}, false)
