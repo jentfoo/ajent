@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/strutil"
 )
 
@@ -39,6 +40,10 @@ type Segment struct {
 
 	Order    int // display position, ascending. Ties keep insertion order.
 	Priority int // collapse and drop step: 0 goes first, then 1, 2…, negative last
+
+	// Counts carries machine-readable tallies beside prose (subagents publishes
+	// running, queued and done). Never rendered; for control surfaces.
+	Counts map[string]int
 }
 
 // Status is the state rendered on the line below the input field.
@@ -241,14 +246,7 @@ func partTexts(parts []part, collapsed []int) []string {
 // splitRow divides the block into row one's pieces (everything up to and including the
 // model) and the segments that may take a second row.
 func splitRow(parts []part) (head, tail []part) {
-	for _, p := range parts {
-		if p.order <= orderModel {
-			head = append(head, p)
-		} else {
-			tail = append(tail, p)
-		}
-	}
-	return head, tail
+	return bulk.SliceSplit(func(p part) bool { return p.order <= orderModel }, parts)
 }
 
 // withoutPart returns the parts minus the given index, remapping nothing: callers drop by

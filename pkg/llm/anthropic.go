@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/go-analyze/bulk"
 )
 
 const (
@@ -459,13 +461,8 @@ func anthropicDeferredNames(tools []ToolSchema, caps Capabilities) map[string]st
 	if !hasImmediate {
 		return map[string]struct{}{} // all promoted, so nothing is deferred
 	}
-	set := make(map[string]struct{}, 4)
-	for _, t := range tools {
-		if t.Deferred {
-			set[t.Name] = struct{}{}
-		}
-	}
-	return set
+	deferred := bulk.SliceFilter(func(t ToolSchema) bool { return t.Deferred }, tools)
+	return bulk.SliceToSetBy(func(t ToolSchema) string { return t.Name }, deferred)
 }
 
 // anthropicTools converts tool schemas. Strict tools are rewritten to the strict

@@ -23,7 +23,7 @@ func TestSinkFanout(t *testing.T) {
 		a.opts.Tools = set
 
 		var one, two recordingSink
-		a.sink = &fanoutSink{sinks: []Sink{&one, &two}}
+		a.sink = Fanout(func() []Sink { return []Sink{&one, &two} })
 
 		require.NoError(t, a.Prompt(t.Context(), Input{Text: "run"}))
 		assert.Equal(t, one.calls, two.calls)
@@ -35,7 +35,7 @@ func TestSinkFanout(t *testing.T) {
 	// the ToolStart done closure reaches every member even when a member returns its own per-call closure
 	t.Run("tool_done_calls_every_closure", func(t *testing.T) {
 		var one, two recordingSink
-		fan := &fanoutSink{sinks: []Sink{&one, &two}}
+		fan := Fanout(func() []Sink { return []Sink{&one, &two} }).(*fanoutSink)
 		done := fan.ToolStart(ToolCall{Name: "bash"}, "", false)
 		assert.NotNil(t, done)
 		done(ToolResult{})

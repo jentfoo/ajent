@@ -16,7 +16,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/command"
 	"github.com/jentfoo/ajent/pkg/llm"
-	"github.com/jentfoo/ajent/pkg/refs"
 	"github.com/jentfoo/ajent/pkg/subagent"
 	"github.com/jentfoo/ajent/pkg/tokens"
 	"github.com/jentfoo/ajent/pkg/tools"
@@ -146,12 +145,8 @@ func TestInitControllerStart(t *testing.T) {
 		require.NotNil(t, line.input)
 		require.Eventually(t, func() bool { return !h.ctl.running() }, 5*time.Second, time.Millisecond)
 
-		select {
-		case ctx := <-h.ctxs: // the happy path unwinds its child too, not just aborts
-			require.ErrorIs(t, ctx.Err(), context.Canceled)
-		case <-time.After(5 * time.Second):
-			t.Fatal("survey never reached a tool call")
-		}
+		ctx := <-h.ctxs // the happy path unwinds its child too, not just aborts
+		require.ErrorIs(t, ctx.Err(), context.Canceled)
 	})
 
 	t.Run("second_run_reuses_no_ids", func(t *testing.T) {
@@ -198,14 +193,20 @@ func TestInitControllerStart(t *testing.T) {
 
 	t.Run("submit_drops_after_shutdown", func(t *testing.T) {
 		h := newInitHarness(t)
-		for i := 0; i < cap(h.pump); i++ { // fill so a naive send would block forever
-			h.pump <- pumpLine{kind: command.KindCommand, rest: "filler"}
-		}
 		root, cancel := context.WithCancel(t.Context())
-		cancel()
+		cancel() // the run is over: the handoff must drop rather than block
+		h.ctl.deps.send = func(l pumpLine) {
+			if root.Err() != nil {
+				return // the driver's send drops once the app root is canceled
+			}
+			select {
+			case h.pump <- l:
+			case <-root.Done():
+			}
+		}
 
-		require.NotPanics(t, func() { h.ctl.submit(root, agent.Input{Text: "late result"}) })
-		assert.Len(t, h.pump, cap(h.pump)) // the late survey result never joined
+		require.NotPanics(t, func() { h.ctl.submit(agent.Input{Text: "late result"}) })
+		assert.Empty(t, h.pump) // the late survey result never joined
 	})
 
 	t.Run("nil_controller_never_aborts", func(t *testing.T) {
@@ -249,11 +250,7 @@ func TestInitControllerStart(t *testing.T) {
 		h.ctl = newInitController(h.ctl.deps)
 
 		h.ctl.start(t.Context())
-		select {
-		case <-spawning:
-		case <-time.After(5 * time.Second):
-			t.Fatal("survey never spawned")
-		}
+		<-spawning
 		require.True(t, h.ctl.abort()) // the snapshot cannot hold this child's id
 
 		close(release)
@@ -390,6 +387,8 @@ func newHoldManager(t *testing.T) *subagent.Manager {
 type initHarness struct {
 	ctl  *initController
 	pump chan pumpLine
+	// send hands lines to pump the way the driver's stamped sender would
+	send func(pumpLine)
 
 	// held blocks agent_poll until the test releases it, and polling closes once to
 	// announce that a survey really reached its spawn step.
@@ -411,11 +410,7 @@ func (h *initHarness) hold() { h.held = make(chan struct{}) }
 func (h *initHarness) awaitPolling(t *testing.T) {
 	t.Helper()
 
-	select {
-	case <-h.polling:
-	case <-time.After(5 * time.Second):
-		t.Fatalf("survey never polled; notices: %v", h.notices())
-	}
+	<-h.polling
 }
 
 func newInitHarness(t *testing.T) *initHarness {
@@ -430,6 +425,12 @@ func newInitHarness(t *testing.T) *initHarness {
 	require.NoError(t, err)
 
 	h := &initHarness{pump: make(chan pumpLine, 4), polling: make(chan struct{})}
+	h.send = func(l pumpLine) {
+		select {
+		case h.pump <- l:
+		default: // full: drop, the driver's own send drops on root cancel
+		}
+	}
 	reg.RegisterFrom(tools.SourceBuiltin, &initStub{name: "agent_start", run: func(context.Context, agent.ToolCall) agent.ToolResult {
 		return agent.ToolResult{
 			Content: llm.BlockList{llm.TextBlock{Text: "started"}},
@@ -461,7 +462,8 @@ func newInitHarness(t *testing.T) *initHarness {
 	}}, true)
 
 	h.ctl = newInitController(initDeps{
-		cwd: dir, toolsReg: reg, sink: agent.NopSink{}, pump: h.pump,
+		cwd: dir, toolsReg: reg, sink: agent.NopSink{}, send: h.send,
+		ag: agent.New(&agent.State{Tokens: tokens.New(llm.Model{})}, agent.Options{}),
 		notify: func(msg string, _ tui.Level) {
 			h.mu.Lock()
 			h.msgs = append(h.msgs, msg)
@@ -477,13 +479,8 @@ func newInitHarness(t *testing.T) *initHarness {
 func (h *initHarness) awaitPump(t *testing.T) pumpLine {
 	t.Helper()
 
-	select {
-	case line := <-h.pump:
-		return line
-	case <-time.After(5 * time.Second):
-		t.Fatalf("survey never reached the pump; notices: %v", h.notices())
-		return pumpLine{}
-	}
+	line := <-h.pump
+	return line
 }
 
 // callIDs returns the tool_use id of every call block in msgs.
@@ -528,112 +525,4 @@ func (t *initStub) Mode() agent.ExecutionMode   { return agent.ModeParallel }
 func (t *initStub) Close()                      {}
 func (t *initStub) Execute(ctx context.Context, call agent.ToolCall, _ agent.Output) (agent.ToolResult, error) {
 	return t.run(ctx, call), nil
-}
-
-func TestPromptInput(t *testing.T) {
-	t.Parallel()
-
-	surveyed := []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "survey pair")}}
-
-	t.Run("assembled_input_skips_expansion", func(t *testing.T) {
-		var armed int
-		line := pumpLine{
-			kind:   command.KindPrompt,
-			rest:   "/init",
-			input:  &agent.Input{Text: "distill this", Before: surveyed, Injected: true},
-			onTurn: func() { armed++ },
-		}
-		// a nil expander proves this path never reaches @ expansion
-		in, echo, pending := promptInput(line, nil, func(string) { t.Error("unexpected notice") })
-		assert.Zero(t, pending)
-
-		assert.Equal(t, "distill this", in.Text)
-		assert.True(t, in.Injected)
-		assert.True(t, in.Prepared)    // assembled by its sender, the seam must not re-expand
-		assert.Equal(t, "/init", echo) // a label, not the whole instruction
-		assert.Equal(t, 1, armed)      // armed as it becomes a turn
-		// the survey's own pairs ride unchanged; staged shell output attaches at
-		// delivery now, never at the submit seam
-		assert.Equal(t, surveyed, in.Before)
-	})
-
-	t.Run("assembled_input_without_hook", func(t *testing.T) {
-		line := pumpLine{kind: command.KindPrompt, input: &agent.Input{Text: "x"}}
-		in, echo, _ := promptInput(line, nil, func(string) {})
-		assert.Equal(t, "x", in.Text)
-		assert.True(t, in.Prepared)
-		assert.Empty(t, echo)
-	})
-
-	t.Run("typed_prompt_expands", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644))
-		reg, err := tools.Builtins(tools.Options{Cwd: dir})
-		require.NoError(t, err)
-		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
-
-		line := pumpLine{kind: command.KindPrompt, rest: "look at @a.go"}
-		in, echo, pending := promptInput(line, expander, func(string) {})
-
-		assert.Contains(t, in.Text, "@a.go")
-		assert.Equal(t, in.Text, echo) // a typed prompt echoes itself
-		assert.False(t, in.Injected)
-		assert.True(t, in.Prepared) // expanded here, the seam must not re-expand
-		assert.Positive(t, pending) // the read is sized before it lands
-		assert.Empty(t, in.Before)  // staged shell output attaches at delivery, not submit
-		require.NotNil(t, in.After)
-		assert.Equal(t, []string{"ref-1-r-a.go"}, callIDs(in.After(t.Context())))
-	})
-
-	t.Run("expansion_notices_surface", func(t *testing.T) {
-		dir := t.TempDir()
-		reg, err := tools.Builtins(tools.Options{Cwd: dir})
-		require.NoError(t, err)
-		expander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
-
-		var warned []string
-		line := pumpLine{kind: command.KindPrompt, rest: "see @missing.go"}
-		_, _, _ = promptInput(line, expander, func(n string) { warned = append(warned, n) })
-		require.Len(t, warned, 1)
-		assert.Contains(t, warned[0], "missing.go")
-	})
-
-	// only dispatched prompts reach this path: escaped text that looks like a
-	// command or shell line was already classified, so it echoes verbatim
-	dir := t.TempDir()
-	reg, err := tools.Builtins(tools.Options{Cwd: dir})
-	require.NoError(t, err)
-	echoExpander := refs.NewExpander(reg, agent.NopSink{}, tools.PathPolicy{Cwd: dir}, nil)
-	for _, tc := range []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"prompt_echoes", "refactor the parser", "refactor the parser"},
-		{"blank_prompt_silent", "   ", ""},
-		{"escaped_shell_echos", "!git status", "!git status"},
-		{"multiline_echos_verbatim", "line one\nline two", "line one\nline two"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			line := pumpLine{kind: command.KindPrompt, rest: tc.in}
-			_, echo, _ := promptInput(line, echoExpander, func(string) {})
-			assert.Equal(t, tc.want, echo)
-		})
-	}
-}
-
-func TestSubmitEstimate(t *testing.T) {
-	t.Parallel()
-
-	text := agent.Input{Text: "a short prompt"}
-	textOnly := submitEstimate(text, 0)
-	assert.Positive(t, textOnly)
-
-	withBefore := text
-	withBefore.Before = []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, strings.Repeat("payload ", 200))}}
-	// injected pairs are the larger half of a survey, the bucket must count them
-	assert.Greater(t, submitEstimate(withBefore, 0), textOnly)
-
-	// @ reads have not run yet, so their measured size is carried in separately
-	assert.Equal(t, textOnly+500, submitEstimate(text, 500))
 }

@@ -24,7 +24,7 @@ func TestCopyText(t *testing.T) {
 		}
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText(t.Context(), plainTestUI(t), "payload")
+		notice, level, ok := copyText(t.Context(), wrapUI(t, plainTestUI(t)), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "copied to the clipboard", notice)
 		assert.Equal(t, tui.LevelInfo, level)
@@ -38,15 +38,13 @@ func TestCopyText(t *testing.T) {
 		}
 		t.Cleanup(func() { clipboardWrite = real })
 
-		notice, level, ok := copyText(t.Context(), plainTestUI(t), "payload")
+		notice, level, ok := copyText(t.Context(), wrapUI(t, plainTestUI(t)), "payload")
 		assert.True(t, ok)
 		assert.Equal(t, "no clipboard writer on PATH", notice)
 		assert.Equal(t, tui.LevelError, level)
 	})
 }
 
-// TestCopySelectionNoPicker pins the silent no-op: a ctrl+x that outlived its
-// picker copies nothing and reports nothing.
 func TestCopySelectionNoPicker(t *testing.T) {
 	t.Parallel()
 

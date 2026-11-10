@@ -14,6 +14,23 @@ func setClock(t time.Time) func() {
 	return func() { clock = old }
 }
 
+// pinClock pins the clock at t and rewinds the monotonic floor so ids adopt the
+// pinned time outright; the returned restore puts both back, keeping a future
+// stamp from leaking into later tests through lastMS.
+func pinClock(t time.Time) func() {
+	mu.Lock()
+	oldFloor := lastMS
+	mu.Unlock()
+	restoreClock := setClock(t)
+	resetIDCounter()
+	return func() {
+		restoreClock()
+		mu.Lock()
+		lastMS = oldFloor
+		mu.Unlock()
+	}
+}
+
 // resetIDCounter drops the monotonic floor so the next NewID adopts the pinned
 // clock outright, regardless of what earlier tests left in it.
 func resetIDCounter() {
@@ -69,8 +86,7 @@ func TestNewULID(t *testing.T) {
 
 	t.Run("ms_matches_embedded_id", func(t *testing.T) {
 		base := time.Now().Add(time.Hour).UTC()
-		resetIDCounter()
-		t.Cleanup(setClock(base))
+		t.Cleanup(pinClock(base))
 
 		id, ms := newULID()
 
@@ -81,8 +97,7 @@ func TestNewULID(t *testing.T) {
 	// a wall clock stepping backward holds the timestamp while ids still advance
 	t.Run("backward_clock_holds_ms", func(t *testing.T) {
 		base := time.Now().Add(time.Hour).UTC()
-		resetIDCounter()
-		t.Cleanup(setClock(base))
+		t.Cleanup(pinClock(base))
 
 		id1, ms1 := newULID()
 		setClock(base.Add(-time.Minute)) // the wall clock steps backward

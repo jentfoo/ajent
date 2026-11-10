@@ -1,0 +1,367 @@
+package app
+
+import (
+	"bufio"
+	"encoding/json"
+	"net"
+	"os"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/jentfoo/ajent/pkg/ctl"
+	"github.com/jentfoo/ajent/pkg/version"
+)
+
+// outgoing is one queued socket line: an event or a request reply, never both.
+// The event is a shared frame, so one publish encodes its line once across
+// every connection that receives it.
+type outgoing struct {
+	event *evFrame
+	reply *ctl.Reply
+}
+
+// write emits one line into w.
+func (o outgoing) write(w *bufio.Writer) error {
+	line, err := o.line()
+	if err != nil {
+		return err
+	}
+	_, werr := w.Write(line)
+	return werr
+}
+
+// line returns the outgoing's newline-terminated encoding: the event's shared
+// line verbatim, a reply encoded here since replies are per connection, never
+// shared.
+func (o outgoing) line() ([]byte, error) {
+	if o.event != nil {
+		return o.event.bytes()
+	}
+	return ctl.EncodeLine(o.reply)
+}
+
+// Stage bounds: the soft item count where a stalled writer is checked, and the
+// hard item and byte caps where the stage drops outright. A healthy writer
+// draining in batches keeps the stage near empty, so a burst that momentarily
+// outruns its wake-ups is absorbed, while a peer that stopped reading backs
+// the writer up until the soft bound plus the stall window trips.
+const (
+	stageSoftItems   = connQueue
+	stageHardItems   = 4096
+	stageHardBytes   = 8 << 20 // 8MB
+	controlStallWait = 100 * time.Millisecond
+	// controlWriteWait bounds one blocked flush: a peer whose buffers stay
+	// full this long is gone, so the write fails and the connection drops.
+	controlWriteWait = 5 * time.Second
+)
+
+// controlConn serves one observer: a reader goroutine dispatching requests and
+// one writer goroutine draining an ordered stage through a buffered writer.
+// Every line, event or reply, passes the stage in arrival order, so the socket
+// carries one total order matching the hub's seq. A peer that stops reading
+// backs the writer up until the stage bound trips and drops the connection;
+// nothing on the session side ever blocks on it but Close's bounded flush join.
+type controlConn struct {
+	srv   *controlServer
+	conn  net.Conn
+	bw    *bufio.Writer
+	done  chan struct{} // closed on detach: nothing further is accepted
+	wrote chan struct{} // closed when the writer loop returns
+	once  sync.Once
+	lis   *evListener
+
+	stageMu    sync.Mutex
+	stage      []outgoing // ordered handoff to the writer
+	stageBytes int
+	lastWrite  atomic.Int64 // unix nano of the writer's last successful flush
+	kick       chan struct{}
+}
+
+// newControlConn admits nc: delivery registers first so nothing published in
+// between is missed, then the hello line lands before the writer starts, its
+// seq the watermark the stream continues from. Callers follow with start.
+func newControlConn(srv *controlServer, nc net.Conn) *controlConn {
+	bw := bufio.NewWriterSize(nc, 4096)
+	c := &controlConn{
+		srv: srv, conn: nc, bw: bw,
+		done: make(chan struct{}), wrote: make(chan struct{}),
+		kick: make(chan struct{}, 1),
+	}
+	var seq uint64
+	c.lis, seq = srv.hub.evListen(c.deliver)
+	c.lastWrite.Store(time.Now().UnixNano()) // the stall window starts at attach
+	snap := srv.hub.Snapshot()
+	if line, err := ctl.EncodeLine(ctl.NewEvent(ctl.EventHello, seq, ctl.Hello{
+		Protocol:  ctl.Protocol,
+		Session:   ctl.Session{ID: snap.SessionID, Name: snap.SessionName},
+		Workspace: snap.Workspace, Cwd: snap.Cwd,
+		Interactive: srv.hub.Interactive(), Serve: srv.serve,
+		PID: os.Getpid(), Version: version.Version,
+		TranscriptPath: srv.transcriptPath,
+		Token:          srv.token,
+	})); err == nil {
+		_, _ = bw.Write(line)
+	}
+	_ = c.flushBuffer() // the hello must land before anything can queue behind it
+	return c
+}
+
+// start runs the connection's loops.
+func (c *controlConn) start() {
+	go c.readLoop()
+	go c.writeLoop()
+}
+
+// deliver stages one event, sharing its frame with every other connection. It
+// runs on the publishing goroutine, under the hub's lock, so it never blocks:
+// a full stage drops the connection asynchronously. The exit event stages past
+// every bound, so an attached terminal can always say "session ended"
+// definitively.
+func (c *controlConn) deliver(f *evFrame) {
+	if !c.stageOutgoing(outgoing{event: f}, f.ev.Name == ctl.EventSessionExit) {
+		go c.detach(false) // off the hub lock: detach unregisters under it
+	}
+}
+
+// reply stages one request answer, encoding the result first so an
+// unencodable value becomes a legible error, never a half-written line.
+func (c *controlConn) reply(id string, seq uint64, result any, rerr *ctl.Error) {
+	var raw []byte
+	if rerr == nil && result != nil {
+		b, err := json.Marshal(result)
+		if err != nil {
+			rerr = ctl.Errf(ctl.CodeUnavailable, "encoding result: %v", err)
+		} else {
+			raw = b
+		}
+	}
+	rp := ctl.Reply{ID: id, Seq: seq, Result: raw, Error: rerr}
+	if !c.stageOutgoing(outgoing{reply: &rp}, false) {
+		go c.detach(false)
+	}
+}
+
+// stageOutgoing appends one line to the ordered stage and kicks the writer,
+// reporting false once the connection is detached or a bound tripped: the
+// hard caps always drop, the soft item count drops only when the writer has
+// not flushed for controlStallWait, which is the peer-stopped-reading shape.
+// reserved bypasses every bound: the exit event can never be the drop. The
+// detach check shares the stage lock with close(done), so a line stages
+// entirely before Close's final drain or refuses after it, never stranding
+// between the two.
+func (c *controlConn) stageOutgoing(out outgoing, reserved bool) bool {
+	c.stageMu.Lock()
+	defer c.stageMu.Unlock()
+	select {
+	case <-c.done:
+		return false
+	default:
+	}
+	size := out.size()
+	if !reserved {
+		if len(c.stage) >= stageHardItems || c.stageBytes+size > stageHardBytes {
+			return false
+		}
+		if len(c.stage) >= stageSoftItems && c.stalledLocked() {
+			return false
+		}
+	}
+	c.stage = append(c.stage, out)
+	c.stageBytes += size
+	select {
+	case c.kick <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+// stalledLocked reports whether the writer has stopped making progress.
+// Caller holds stageMu.
+func (c *controlConn) stalledLocked() bool {
+	last := c.lastWrite.Load()
+	if last == 0 {
+		return false // the writer has not flushed yet, not evidence of a stall
+	}
+	return time.Since(time.Unix(0, last)) > controlStallWait
+}
+
+// size approximates one line's encoded weight for the byte bound.
+func (o outgoing) size() int {
+	if o.event != nil {
+		return len(o.event.ev.Data) + 64
+	}
+	return len(o.reply.Result) + 64
+}
+
+// detach tears the connection down exactly once. flush leaves the socket open
+// while the writer drains its staged lines (session.exit), with Close joining
+// that a bounded while; otherwise the peer is gone and the socket closes at
+// once.
+func (c *controlConn) detach(flush bool) {
+	c.once.Do(func() {
+		c.srv.hub.evUnlisten(c.lis)
+		c.srv.remove(c)
+		// under the stage lock, so a line stages entirely before done closes or
+		// refuses after it: the writer's final drain sees every staged line
+		c.stageMu.Lock()
+		close(c.done)
+		c.stageMu.Unlock()
+		if !flush {
+			_ = c.conn.Close()
+			return
+		}
+		go func() {
+			<-c.wrote // writer drained what remained
+			_ = c.conn.Close()
+		}()
+	})
+}
+
+// writeControlRefusal sends one refused event in place of hello, so a peer the
+// identity check turned away reads why instead of a bare EOF. Best effort under
+// the standard write bound: the close that follows is the authoritative signal.
+func writeControlRefusal(nc net.Conn, reason error) {
+	_ = nc.SetWriteDeadline(time.Now().Add(controlWriteWait))
+	bw := bufio.NewWriterSize(nc, 512)
+	if line, err := ctl.EncodeLine(ctl.NewEvent(ctl.EventRefused, 0,
+		ctl.RefusedData{Reason: reason.Error()})); err == nil {
+		_, _ = bw.Write(line)
+	}
+	_ = bw.Flush()
+	_ = nc.SetWriteDeadline(time.Time{})
+}
+
+// readLoop decodes requests until the peer goes away or the line turns to
+// garbage, dispatching each on this goroutine.
+func (c *controlConn) readLoop() {
+	dec := ctl.NewDecoder(c.conn)
+	for {
+		var req ctl.Request
+		if err := dec.Decode(&req); err != nil {
+			c.detach(false)
+			return
+		}
+		c.dispatch(req)
+	}
+}
+
+// writeLoop drains the stage to the socket, one flush per batch, so a burst
+// publisher cannot outpace the syscall rate. After detach it runs one final
+// drain: staging ended with the barrier, so that pass covers every line that
+// will ever stage, and each blocked flush fails at its write deadline.
+func (c *controlConn) writeLoop() {
+	defer close(c.wrote)
+	for {
+		select {
+		case <-c.kick:
+			if err := c.drain(); err != nil {
+				c.detach(false)
+				return
+			}
+		case <-c.done:
+			_ = c.drain()
+			return
+		}
+	}
+}
+
+// drain writes everything staged so far, one batch per pass. The write
+// deadline spans the whole batch (writing into the buffer can flush
+// mid-line), and each pass stamps the progress the stall check reads. It
+// reports the first write error.
+func (c *controlConn) drain() error {
+	for {
+		c.stageMu.Lock()
+		if len(c.stage) == 0 {
+			c.stageMu.Unlock()
+			return c.flushBuffer()
+		}
+		batch := c.stage
+		c.stage = nil
+		c.stageBytes = 0
+		c.stageMu.Unlock()
+
+		_ = c.conn.SetWriteDeadline(time.Now().Add(controlWriteWait))
+		var err error
+		for _, out := range batch {
+			if err = out.write(c.bw); err != nil {
+				break
+			}
+		}
+		if err == nil {
+			err = c.bw.Flush()
+		}
+		_ = c.conn.SetWriteDeadline(time.Time{})
+		if err != nil {
+			return err
+		}
+		c.lastWrite.Store(time.Now().UnixNano())
+	}
+}
+
+// flushBuffer flushes what the buffer already holds, under the deadline, so a
+// peer that already stalled drops here instead of wedging the writer.
+func (c *controlConn) flushBuffer() error {
+	_ = c.conn.SetWriteDeadline(time.Now().Add(controlWriteWait))
+	err := c.bw.Flush()
+	_ = c.conn.SetWriteDeadline(time.Time{})
+	if err == nil {
+		c.lastWrite.Store(time.Now().UnixNano())
+	}
+	return err
+}
+
+// refuseSeat replies with the seat refusal when the method needs the control
+// seat and another connection holds it, reporting whether it refused.
+func (c *controlConn) refuseSeat(req ctl.Request, seat bool) bool {
+	if !seat {
+		return false
+	}
+	if rerr := c.srv.seatRefusal(c); rerr != nil {
+		c.reply(req.ID, c.srv.hub.evWatermark(), nil, rerr)
+		return true
+	}
+	return false
+}
+
+// dispatch answers one request through the method registry. Off-lane calls
+// run here. Lane calls enqueue on the control executor, whose pop-time run
+// revalidates the seat so a takeover can never leave a success after its
+// effect. Reads reply with the seq their result was taken at, writes reply
+// with the watermark after their mutation, superseding its events.
+func (c *controlConn) dispatch(req ctl.Request) {
+	m, ok := controlMethods[req.Method]
+	if !ok {
+		c.reply(req.ID, c.srv.hub.evWatermark(), nil,
+			ctl.Errf(ctl.CodeUnknownMethod, "unknown method %q", req.Method))
+		return
+	}
+	if m.lane {
+		run := c.srv.exec.runPriority
+		if !m.priority {
+			run = c.srv.exec.run
+		}
+		if !run(func() {
+			if c.refuseSeat(req, m.seat) {
+				return
+			}
+			result, rerr := m.handle(c, req.Params)
+			c.reply(req.ID, c.srv.hub.evWatermark(), result, rerr)
+		}) {
+			c.reply(req.ID, c.srv.hub.evWatermark(), nil,
+				ctl.Errf(ctl.CodeUnavailable, "the session is shutting down"))
+		}
+		return
+	}
+	if c.refuseSeat(req, m.seat) {
+		return
+	}
+	result, rerr := m.handle(c, req.Params)
+	seq := c.srv.hub.evWatermark()
+	if sr, ok := result.(seqResult); ok {
+		result = sr.val
+		seq = sr.seq
+	}
+	c.reply(req.ID, seq, result, rerr)
+}

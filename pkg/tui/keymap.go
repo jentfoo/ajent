@@ -3,8 +3,9 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
+
+	"github.com/go-analyze/bulk"
 )
 
 // Keymap configures which physical keys submit the prompt and which insert a
@@ -76,7 +77,7 @@ func (k Keymap) resolve() (keymap, error) {
 	}
 	// an override stripping every submit binding leaves nothing to send a prompt
 	// with, so it falls back like any other invalid keymap
-	if !slices.Contains(slices.Collect(maps.Values(km)), roleSubmit) {
+	if !slices.Contains(bulk.MapValuesSlice(km), roleSubmit) {
 		return nil, errors.New("keymap leaves no submit key")
 	}
 	return km, nil

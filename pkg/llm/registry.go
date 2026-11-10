@@ -156,12 +156,9 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	defer r.mu.Unlock()
 	r.entries, r.flavors = entries, flavors
 	r.models = models
-	r.declaredCompact = make(map[string]struct{}) // only user-declared thresholds land here
-	for _, m := range models {
-		if m.CompactThreshold != 0 {
-			r.declaredCompact[m.Key()] = struct{}{}
-		}
-	}
+	// only user-declared thresholds land here
+	declared := bulk.SliceFilter(func(m Model) bool { return m.CompactThreshold != 0 }, models)
+	r.declaredCompact = bulk.SliceToSetBy(Model.Key, declared)
 	r.applyCompactDefault()
 	r.byKey = make(map[string]int, len(models))
 	r.byAlias = make(map[string]int, len(models))

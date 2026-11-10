@@ -49,6 +49,10 @@ func slotSizedPNG(t *testing.T, w, h int) []byte {
 }
 
 func TestImageSlots(t *testing.T) {
+	// these cases assume the default: images on, whatever earlier tests left behind
+	tools.SetImagesEnabled(true)
+	t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
 	t.Run("store and take round trip", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		token, rejected := s.store(slotPNG(t))
@@ -142,7 +146,6 @@ func TestImageSlots(t *testing.T) {
 	})
 }
 
-// Serial: swaps the package probe list and the no-backend cache.
 func TestCaptureClipboardImage(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("sh-based fakes are unix-only")
@@ -196,20 +199,18 @@ func TestImageToken(t *testing.T) {
 func TestRestoredLabel(t *testing.T) {
 	t.Run("plain label untouched", func(t *testing.T) {
 		it := steerItem{label: "plain text"}
-		assert.Equal(t, "plain text", restoredLabel(it))
+		assert.Equal(t, "plain text", refiledLabel(it.label, it.input.Blocks))
 	})
 
 	t.Run("blocks get a fresh token", func(t *testing.T) {
 		blocks := llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}}
 		it := steerItem{label: "what is this", input: agent.Input{Blocks: blocks}}
-		label := restoredLabel(it)
+		label := refiledLabel(it.label, it.input.Blocks)
 		assert.True(t, strings.HasPrefix(label, "[image #"))
 		assert.Contains(t, label, "what is this")
 	})
 }
 
-// Serial: flips the package-wide images gate. Resuming a transcript saved
-// with images.block true must re-apply it, not leave the config default live.
 func TestResumeAppliesImagesBlock(t *testing.T) {
 	tools.SetImagesEnabled(true)
 	t.Cleanup(func() { tools.SetImagesEnabled(true) })
@@ -256,7 +257,7 @@ func TestResumeAppliesImagesBlock(t *testing.T) {
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	toolsReg, err := tools.Builtins(tools.Options{SessionID: t.TempDir()})
 	require.NoError(t, err)
-	(&sessRec{w: w}).rebuild(set, ui, reg, st, toolsReg)
+	(&sessRec{w: w}).rebuild(set, wrapUI(t, ui), reg, st, toolsReg)
 
 	assert.False(t, tools.ImagesEnabled())
 }

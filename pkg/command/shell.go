@@ -104,8 +104,12 @@ func (s *Stager) Run(cmd string, excluded bool) {
 		s.sink.Notice("empty shell command", agent.LevelWarn)
 		return
 	}
-	tool, ok := s.reg.Lookup(tools.ToolBash)
-	if !ok {
+	var tool agent.Tool
+	if s.reg != nil {
+		// builtins failed to register, or bash is absent: nothing to run through
+		tool, _ = s.reg.Lookup(tools.ToolBash)
+	}
+	if tool == nil {
 		s.sink.Notice("shell mode needs the bash tool registered", agent.LevelWarn)
 		return
 	}

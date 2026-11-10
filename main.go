@@ -47,6 +47,7 @@ func main() {
 		os.Exit(app.RunDelete(os.Stdout, os.Stdin, app.DeleteOptions{
 			Target:  f.deleteTarget,
 			OldDays: f.deleteOldDays,
+			Force:   f.force,
 		}))
 	}
 
@@ -83,16 +84,20 @@ func main() {
 	defer stop()
 
 	code := app.Run(app.RunOptions{
-		Model:      f.model,
-		Render:     f.render,
-		System:     f.system,
-		Prompt:     f.prompt,
-		Output:     f.output,
-		Stats:      f.stats,
-		Scope:      f.scope(),
-		AllowTools: f.allowTools,
-		DenyTools:  f.denyTools,
-		Args:       f.args,
+		Model:       f.model,
+		Render:      f.render,
+		System:      f.system,
+		Prompt:      f.prompt,
+		Output:      f.output,
+		Stats:       f.stats,
+		Scope:       f.scope(),
+		AllowTools:  f.allowTools,
+		DenyTools:   f.denyTools,
+		Args:        f.args,
+		Serve:       f.serve,
+		Attach:      f.attach,
+		AttachGiven: f.attachGiven,
+		Force:       f.force,
 
 		SessMode:     sessMode,
 		SessTarget:   sessTarget,

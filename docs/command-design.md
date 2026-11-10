@@ -50,7 +50,9 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 - `ParseLine` routes shell lines to `Stager.Run` (non-blocking), while command and prompt
   lines go to the single pump goroutine that owns ordering. The switch lives on one
   `lineRouter`, so a submission source other than the editor takes the same routing
-  unchanged, with only recall history and clipboard image tokens gated to editor lines.
+  unchanged, with only clipboard image tokens gated to editor lines. Recall history
+  records every submitted line whichever surface typed it, so a remote surface's
+  prompts recall exactly like typed ones (`control-design.md`).
 - A prompt flushes staged shell results, expands `@` refs, then either queues
   onto the steer queue (rendering as a dimmed row with its echo deferred until it
   lands) or starts the drain directly and echoes immediately.
@@ -61,11 +63,15 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
   ordered against turn starts and each other without locking `State`.
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
-as newline-joined messages (one per provenance run, see below) at the agent's
+as blank-line-joined messages (one per provenance run, see below) at the agent's
 next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
-the next turn's prompt. Esc/Ctrl+C during a turn
-recovers every queued item back into the editor (collapsed with newlines)
-before interrupting. Alt+Up recalls the newest queued message. Staged shell
+the next turn's prompt. The join happens only at flush: queued rows stay
+distinct until then, and a merged run is one user message whose text joins its
+items with an empty line between them, the same shape recall offers, so
+delivery records it in editor history (single items were recorded already at
+submit). Esc/Ctrl+C during a turn recovers every queued item back into the
+editor (collapsed with newlines) before interrupting. Alt+Up recalls the newest
+queued message. Staged shell
 output is the stager's until a prompt delivers (see "Delivery timing"), so
 recall and abort never strand it. Image blocks ride along with whatever is
 queued. Their slots
@@ -98,7 +104,7 @@ settled.
 Joining a batch joins its resolvers too: `steerQueue.join` chains every queued
 item's `After` into one, run in submit order behind the joined message. The
 batch splits into **one input per contiguous provenance run**: items sharing an
-`Injected` value merge into a single newline-joined message, while a provenance
+`Injected` value merge into a single blank-line-joined message, while a provenance
 change starts a new input. A batch mixing user text with system-injected
 context therefore keeps per-item attribution on the transcript rows, so recall
 excludes exactly the injected messages and replay renders them as such, instead
@@ -161,14 +167,14 @@ so `/tools` selection opens free despite existing history.
 | Command | Behaviour |
 |---|---|
 | `/help` | markdown list of commands and keybindings through `Console.Print` |
-| `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown; sub-agent spend called out when nonzero) |
+| `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown, with sub-agent spend called out when nonzero) |
 | `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
-| `/model [name]` | resolve by name, or open the picker; `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it; a no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
+| `/model [name]` | resolve by name, or open the picker. `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it. A no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models. A model with fewer than two options reports its situation inline and never opens a picker |
 | `/tools` | multi-select, grouped by source. Free selection before this run's first prompt (a resumed session preselects its recorded set), widen-only after |
-| `/session [name]` | report the session's name, or set it; an invalid or conflicting name is a notice (see `session-design.md`) |
+| `/session [name]` | report the session's name, or set it. An invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer, each edited in place with save-to-layer (see `config-design.md`). Rows come in three kinds: enum from a fixed set, model picker, and integer with min/max validation for sub-agent settings. A currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden |
-| `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all; unknown verbs warn. Esc never cancels jobs; this is the only stop path |
+| `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all. Unknown verbs warn. Esc never cancels jobs, so this is the only stop path |
 | `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
 | `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
@@ -177,7 +183,7 @@ so `/tools` selection opens free despite existing history.
 | `/exit` | quit |
 
 `/help`, `/model`, `/reasoning`, `/usage`, `/copy`, `/compact`, `/tools`, `/session`,
-`/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins;
+`/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins.
 `/plan*` and `/init` are feature commands the driver adds on top.
 
 Registration goes through one helper in `pkg/app` that always calls
@@ -371,7 +377,7 @@ literal line beginning with `!` leads with whitespace (` !echo hi`), and a liter
 **Cancellation.** Each staged run owns a cancellable context, released the
 moment its result is captured: a finished run must not stay registered as a
 dead child of the app root, or every `!`/`!!` line leaks one until process
-exit. `Cancel` cancels every still-running run; cancellation is idempotent, so
+exit. `Cancel` cancels every still-running run. Cancellation is idempotent, so
 `Discard`/`Cancel` firing on an already-released run is a no-op. The `bash`
 tool kills the whole process group when its
 derived context ends. A cancelled command still stages (if included): its
@@ -609,7 +615,9 @@ as one unit) to the workspace store at submit time. The typed line is stored
 verbatim so recall round-trips its escape spaces. The pasted-secret exclusion
 reads the classified form that reaches the transcript, keeping an escaped
 secret from persisting under its raw spelling. It persists whether or not a
-transcript/recorder is active. Ctrl+R walks the workspace-wide recall store
+transcript/recorder is active, and whichever surface submitted the line: the
+editor, a controller on the control socket, a `-p` one-shot all record through
+the same append. Ctrl+R walks the workspace-wide recall store
 (`session.RecallIndex`). Plain ↑/↓ scope to the open session's own transcript
 (`session.TranscriptIndex`), falling back to the Ctrl+R scope until it has
 prompts. The storage format, secret-marker exclusion and compaction are

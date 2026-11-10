@@ -25,6 +25,7 @@ type Registry struct {
 	asker     Asker            // consulted on ActionAsk, installed with the guard chain
 	tracker   *Tracker         // the read tracker shared by read/write/edit, nil when none
 	sessionID string           // names the spill directory for the generic output bound
+	onChange  func()           // fired after any tool-set mutation, outside the lock
 }
 
 // SourceBuiltin is the source label for tools registered by the core. MCP
@@ -75,6 +76,26 @@ func boolState(b bool) State {
 // New returns an empty registry with no guards.
 func New() *Registry { return &Registry{} }
 
+// OnChanged installs the change observer fired after any tool-set mutation
+// (registration, toggles, read-only marks, unregister), outside the registry
+// lock so it may read the registry back. One observer: the session hub is the
+// intended listener. Install before any mutation goroutine starts.
+func (r *Registry) OnChanged(fn func()) {
+	r.mu.Lock()
+	r.onChange = fn
+	r.mu.Unlock()
+}
+
+// unlockAndNotify releases r.mu and fires the change observer: it may read the
+// registry back, so it never runs under the lock. End every mutation with this.
+func (r *Registry) unlockAndNotify() {
+	fn := r.onChange // captured under the caller's held lock
+	r.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // Register adds t to the registry under the builtin source, enabled when
 // defaultEnabled is true. Order of registration drives Names and Schemas.
 func (r *Registry) Register(t agent.Tool, defaultEnabled bool) {
@@ -93,8 +114,6 @@ func (r *Registry) RegisterFrom(source string, t agent.Tool, defaultEnabled bool
 // wrapped with the generic bound, so no registered tool can flood the context.
 func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if _, ok := t.(SelfBounding); !ok {
 		t = &boundTool{t: t, sessionID: r.sessionID}
 	}
@@ -107,6 +126,7 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 		r.byName[name] = len(r.tools) - 1
 	}
 	r.schema = nil // schema cache is stale until rebuilt
+	r.unlockAndNotify()
 }
 
 // RegisterGroup records g as one toggleable /tools row over its member tools.
@@ -114,26 +134,22 @@ func (r *Registry) RegisterState(source string, t agent.Tool, s State) {
 // never a registration of new tools. Duplicate names replace the earlier entry.
 func (r *Registry) RegisterGroup(g ToolGroup) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for i := range r.groups {
-		if r.groups[i].Name == g.Name {
-			r.groups[i] = g
-			return
-		}
+	if i := slices.IndexFunc(r.groups, func(t ToolGroup) bool { return t.Name == g.Name }); i >= 0 {
+		r.groups[i] = g
+	} else {
+		r.groups = append(r.groups, g)
 	}
-	r.groups = append(r.groups, g)
+	r.unlockAndNotify()
 }
 
 // Unregister drops every tool registered under source. Used on disconnect and
 // re-discovery so a dead server's tools stop being offered.
 func (r *Registry) Unregister(source string) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	r.tools = bulk.SliceFilterInPlace(func(rt registeredTool) bool { return rt.source != source }, r.tools)
 	r.rebuildIndexLocked()
 	r.schema = nil
+	r.unlockAndNotify()
 }
 
 // rebuildIndexLocked recomputes the name index. Callers must hold r.mu.
@@ -310,23 +326,11 @@ func (r *Registry) expandGroupNamesLocked(want map[string]struct{}) {
 	}
 }
 
-// SetEnabled replaces the enabled set with names. Unknown names are ignored,
-// and currently enabled tools not listed become disabled. Use Enable to widen the
-// set within a session instead.
+// SetEnabled replaces the enabled set with names: unknown names are ignored,
+// and currently enabled tools not listed become disabled. Use Enable to widen
+// the set within a session instead.
 func (r *Registry) SetEnabled(names []string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	want := bulk.SliceToSet(names)
-	r.expandGroupNamesLocked(want)
-	for i := range r.tools {
-		if _, ok := want[r.tools[i].tool.Name()]; ok {
-			r.tools[i].state = StateEnabled
-		} else if r.tools[i].state == StateEnabled {
-			r.tools[i].state = StateDisabled
-		}
-	}
-	r.schema = nil // the tool block in the prompt changed, so bust the cache
+	r.setEnabled(names, true)
 }
 
 // Enable additively enables the named tools from either state, leaving others
@@ -334,17 +338,24 @@ func (r *Registry) SetEnabled(names []string) {
 // session, so this is the /tools path after the first prompt. SetEnabled is the
 // free-selection path before it.
 func (r *Registry) Enable(names []string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.setEnabled(names, false)
+}
 
+// setEnabled applies names over the registry: replace demotes every enabled
+// tool not listed, otherwise the set only widens.
+func (r *Registry) setEnabled(names []string, replace bool) {
+	r.mu.Lock()
 	want := bulk.SliceToSet(names)
 	r.expandGroupNamesLocked(want)
 	for i := range r.tools {
 		if _, ok := want[r.tools[i].tool.Name()]; ok {
 			r.tools[i].state = StateEnabled
+		} else if replace && r.tools[i].state == StateEnabled {
+			r.tools[i].state = StateDisabled
 		}
 	}
-	r.schema = nil
+	r.schema = nil // the tool block in the prompt changed, so bust the cache
+	r.unlockAndNotify()
 }
 
 // IsEnabled reports whether name is registered and enabled.
@@ -356,8 +367,8 @@ func (r *Registry) IsEnabled(name string) bool {
 	return ok && rt.state == StateEnabled
 }
 
-// Get returns a guard-wrapped callable tool by name. Only enabled tools answer,
-// while disabled ones do not. Use Lookup when a caller needs the tool regardless of state.
+// Get returns a guard-wrapped callable tool by name. Only enabled tools answer.
+// Use Lookup when a caller needs the tool regardless of state.
 func (r *Registry) Get(name string) (agent.Tool, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -450,7 +461,7 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 		case covered[g]: // already emitted as one row, skip its remaining members
 		default:
 			members := g.Tools
-			if allPresent(members, present) {
+			if AllPresent(members, present) {
 				rows = append(rows, Row{Name: g.Name, Source: g.Source, Names: slices.Clone(members)})
 				covered[g] = true
 				for _, m := range members {
@@ -465,8 +476,8 @@ func (r *Registry) Units(offered []agent.Tool) []Row {
 	return rows
 }
 
-// allPresent reports whether every member appears in present.
-func allPresent(members []string, present map[string]struct{}) bool {
+// AllPresent reports whether every member appears in present.
+func AllPresent(members []string, present map[string]struct{}) bool {
 	return !slices.ContainsFunc(members, func(m string) bool { _, ok := present[m]; return !ok })
 }
 
@@ -528,7 +539,7 @@ func (r *Registry) MarkReadOnly(names []string) {
 			r.tools[i].readOnly = true
 		}
 	}
-	r.mu.Unlock()
+	r.unlockAndNotify()
 }
 
 // ReadOnly reports whether name is marked safe to publish read-only.
@@ -625,7 +636,7 @@ func (g *guardedTool) Execute(ctx context.Context, c agent.ToolCall, out agent.O
 		if d.Action != ActionAsk {
 			return denied(d.Reason)
 		}
-		resolved := asker(ctx, c, d)
+		resolved := asker(ctx, c)
 		if resolved.Action != ActionAllow {
 			reason := resolved.Reason
 			if reason == "" { // ask treated as a denial carries the original reason

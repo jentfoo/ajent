@@ -100,3 +100,52 @@ func (f *fakeToolAdapter) Close()                      {}
 func (f *fakeToolAdapter) Execute(context.Context, agent.ToolCall, agent.Output) (agent.ToolResult, error) {
 	return agent.ToolResult{}, nil
 }
+
+func TestApplyToolSet(t *testing.T) {
+	t.Parallel()
+
+	t.Run("replaces_before_dispatched", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+
+		ApplyToolSet(c, []string{"ls"})
+		assert.Equal(t, []string{"ls"}, c.tools.Names())
+		assert.Equal(t, 1, c.toolsChanged)
+		assert.True(t, c.noticeContains("prompt cache will miss"))
+	})
+
+	t.Run("widen_only_after_dispatched", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+		c.tools.Register(&fakeToolAdapter{name: "ls"}, false)
+		c.dispatched = true
+
+		// the listed tool enables, and leaving read out disables nothing
+		ApplyToolSet(c, []string{"ls"})
+		assert.Equal(t, []string{"read", "ls"}, c.tools.Names())
+		assert.Equal(t, 1, c.toolsChanged)
+
+		// a set naming only a subset records nothing the second time: nothing moved
+		seen := len(c.noticesSeen())
+		ApplyToolSet(c, []string{"ls"})
+		assert.Equal(t, 1, c.toolsChanged)
+		assert.Len(t, c.noticesSeen(), seen)
+	})
+
+	t.Run("unchanged_set_records_nothing", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools.Register(&fakeToolAdapter{name: "read"}, true)
+
+		ApplyToolSet(c, []string{"read"})
+		assert.Equal(t, 0, c.toolsChanged)
+		assert.False(t, c.noticeContains("cache"))
+	})
+
+	t.Run("no_registry_is_noop", func(t *testing.T) {
+		c := newFakeConsole(t)
+		c.tools = nil
+		ApplyToolSet(c, []string{"read"})
+		assert.Equal(t, 0, c.toolsChanged)
+	})
+}

@@ -47,7 +47,7 @@ func (g *typingGate) edit(text string) {
 	g.at = time.Now()
 }
 
-// submitted arms the handoff grace for a line that left the editor but has not reached the queue yet.
+// submitted arms the handoff grace for a line past the editor, not yet queued.
 func (g *typingGate) submitted() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -103,11 +103,7 @@ func (g *typingGate) holdWhile(ctx context.Context, label string) {
 		session := g.session
 		g.mu.Unlock()
 
-		var searchOpen bool
-		var searchAt time.Time
-		if g.searching != nil {
-			searchOpen, searchAt = g.searching()
-		}
+		searchOpen, searchAt := g.searching()
 
 		var deadline time.Time
 		var countdown bool

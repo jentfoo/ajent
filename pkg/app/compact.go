@@ -31,8 +31,8 @@ type compactor struct {
 	// focus supplies a caller's summariser instructions for automatic runs, but an
 	// explicit /compact <instructions> still wins. nil leaves runs unguided.
 	focus func() string
-	// cfg supplies live compaction settings so a /settings edit takes effect on the
-	// next run, and nil means the built-in defaults with automatic reduction on.
+	// cfg supplies live compaction settings so a /settings edit takes effect on
+	// the next run; both front ends wire it to their config set
 	cfg func() config.Compaction
 	// autoDisabled latches the automatic triggers off once a real fold attempt could
 	// not reduce. Only a summariser call or a hard failure sets it, never "nothing
@@ -93,12 +93,12 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		return false, nil
 	}
 	defer c.inFlight.Store(false)
-	if !reason.MidTurn() && c.ag != nil && c.ag.Running() {
+	if !reason.MidTurn() && c.ag.Running() {
 		c.notify("compaction refused: press Esc to stop the turn first", agent.LevelWarn)
 		return false, nil
 	}
 	// an in-flight turn already has the working glyph lit
-	if c.busy != nil && (c.ag == nil || !c.ag.Running()) {
+	if c.busy != nil && !c.ag.Running() {
 		done := c.busy()
 		defer done()
 	}
@@ -142,7 +142,8 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		return false, nil
 	}
 	// plan against the live head, not the file tail (they differ after a rewind)
-	branch := session.Branch(entries, c.rec.w.Head())
+	head := c.rec.w.Head()
+	branch := session.Branch(entries, head)
 
 	provider, perr := c.providerFor(model)
 	if perr != nil {
@@ -166,10 +167,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 
 	// measure full usage (system + AGENTS.md + tool schemas), not just messages
-	var base int
-	if c.ag != nil {
-		base = c.ag.BaseEstimate(true)
-	}
+	base := c.ag.BaseEstimate(true)
 	if base == 0 {
 		base = c.st.Tokens.Base() // mid-turn BaseEstimate reports 0, the ledger holds the real value
 	}
@@ -218,6 +216,21 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 		After:            res.After,
 		Reduce:           &res.Reduce,
 	}
+	// the append and the swap share the state lane: a rewind or fork can
+	// neither interleave its own swap between them nor move the head under
+	// the rebuild. Everything above (the summariser call included) stays off
+	// the lane, so a slow summary never blocks a rewind.
+	c.rec.lane.lock()
+	defer c.rec.lane.unlock()
+
+	if c.rec.w.Head() != head {
+		// the summary folded a branch a rewind has since left: appending would
+		// chain a checkpoint for abandoned history onto the new head. The next
+		// boundary or manual run re-folds the branch that is live now
+		c.notify("compaction skipped: the session rewound while it ran", agent.LevelWarn)
+		return false, nil
+	}
+
 	if _, aerr := c.rec.w.Append(session.TypeCompaction, cd); aerr != nil {
 		c.notify("compaction failed: recording the checkpoint: "+aerr.Error(), agent.LevelWarn)
 		return false, aerr
@@ -235,7 +248,7 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	for _, wmsg := range warns {
 		c.notify("compact: "+wmsg, agent.LevelWarn)
 	}
-	if c.ag != nil && !reason.MidTurn() {
+	if !reason.MidTurn() {
 		if !c.ag.WithState(func(s *agent.State) { s.Messages = rebuilt.Messages }) {
 			// a turn claimed the loop since the guard: the entry still applies on the
 			// next rebuild, but the reduced list never landed, so no reseed or report
@@ -248,8 +261,8 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	}
 	// a cut or an elided result takes file content out of context that read
 	// tracking still vouches for, so this rebuild reports like any other
-	if c.rec != nil && c.rec.onSwitch != nil {
-		c.rec.onSwitch(rebuilt.Messages)
+	if c.rec.onSwitch != nil {
+		c.rec.onSwitch(rebuilt.Messages, rewindCauseCompact)
 	}
 
 	t := c.st.Tokens

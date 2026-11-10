@@ -39,7 +39,7 @@ last in the filter so no configuration can reach past it.
 
 ## The package
 
-### `manager.go` — lifecycle
+### Manager lifecycle (`manager.go`)
 
 The manager is configured by func fields supplied by `pkg/app`, mirroring
 `permit.Barrier`: how to build a provider and resolve the child model/reasoning,
@@ -60,9 +60,15 @@ Concurrency model:
   directly), and an ordered dispatcher over a slot count capped to
   `MaxConcurrent`. Jobs register as queued at `start` under the registry lock,
   and slots are granted to waiters in job-number order, so a fan-out activates
-  sub-1, sub-2, ... however the parallel start goroutines raced. A job's cancel
-  always fires when it reaches a terminal state, so the root holds no
-  finished-job registrations.
+  sub-1, sub-2, ... however the parallel start goroutines raced. Granting holds
+  back behind any **unclaimed reservation of the current batch** with a lower
+  number: claiming races registration (sub-2's start can land after sub-3's),
+  so without this sub-1 and sub-3 could start while sub-2 stayed queued. Jobs
+  registered before the batch are never held, since no future claim can precede
+  their number, and a short expiry window lapses the hold when a claim never
+  lands (an interrupted turn or refused args), so a dead reservation cannot
+  stall activation. A job's cancel always fires when it reaches a terminal
+  state, so the root holds no finished-job registrations.
 - The waitgroup add happens **under the registry lock before** the spawn
   goroutine launches, so shutdown's wait never races a pending add. Each
   goroutine finishes with its done signal and cleanup in one place.
@@ -86,7 +92,7 @@ final word on the UI. An interrupted turn is cheaper:
 so cancelling the tool call releases the poll immediately while the job itself
 keeps running.
 
-### `job.go` — one investigation
+### One job (`job.go`)
 
 A job carries a status from a small enum: queued, running, done, error, aborted.
 The public snapshot callers read pairs that with an id (`sub-N`), a shortened
@@ -115,11 +121,11 @@ payloads), and a poller count. A finished job's snapshot keeps its terminal
 state, and jobs are never deleted from the map within a session (they show up in
 `/agents` until shutdown).
 
-### `run.go` — child construction and the summary contract
+### Child construction and the summary contract (`run.go`)
 
 Each job builds a fresh agent:
 
-- **State** — `agent.State{Model, Reasoning, Tokens}`. Model is `subagent.model`
+- **State:** `agent.State{Model, Reasoning, Tokens}`. Model is `subagent.model`
   resolved through the registry when set (at spawn, so `/settings` applies to the
   next job), else inherited from the session, and reasoning is likewise inherited
   verbatim, because a user who dialled it down meant it. Tokens is a fresh child
@@ -155,7 +161,7 @@ summarise.
 mistaken for a completed investigation, and never a completion notification. A
 job the user stopped is not reported as done.
 
-### `toolset.go` — the structural filter
+### The structural filter (`toolset.go`)
 
 The parent tool registry arrives as a narrow source with two operations: return
 every declared tool **unwrapped** (a child runs no parent guards or dialogs),
@@ -177,7 +183,7 @@ A child's tool set is a fixed, structural subset of `Registry.All()`:
 This filter, not the permission barrier or a prompt instruction, is what makes a
 child read-only: there is no user at its end to approve anything else.
 
-### `sink.go` — one activity row per job
+### One activity row per job (`sink.go`)
 
 `childSink` embeds `agent.NopSink` and overrides only the events that feed a
 row, publishing through `Options.Activity(key, text)`. Nothing it emits reaches
@@ -190,8 +196,8 @@ committed history:
   thinking/idle row) once the last in-flight call ends.
 - `Thinking(delta)` and `Text(delta)` both accumulate streaming per-token deltas
   into the current in-progress line, publishing only its head. Most sub-agent
-  activity is reasoning, so chain-of-thought is surfaced rather than collapsed;
-  the row scrolls past completed lines per newline instead of appending prose onto
+  activity is reasoning, so chain-of-thought is surfaced rather than collapsed.
+  The row scrolls past completed lines per newline instead of appending prose onto
   leftover text, and switching streams (thinking → text) starts fresh on the new
   content so empty streaming never flashes. Deltas coalesce to a bounded rate so
   a response does not repaint per token.
@@ -212,7 +218,7 @@ surfaces live where it lands and is replay-marked for resume and rewind, but
 never becomes recallable prompt history. Only messages the user actually typed
 do. See `agent-loop-design.md` for both flags.
 
-### `tools.go` — the three tools
+### The three tools (`tools.go`)
 
 All three are `agent.ModeParallel`. Their `Label(call)` methods read the call's
 arguments so the committed tool header names the target. `agent_start` shows its
@@ -294,12 +300,12 @@ is wasted. Delivery is **batched and decided late**. Completions only
 accumulate, and the message naming them is built at the moment it lands, never
 before. Three pieces:
 
-- **UI notice** — fired at completion (`Options.Notice`), keyed by the front end
+- **UI notice.** Fired at completion (`Options.Notice`), keyed by the front end
   (`NotifyKeyed`) so consecutive notices collapse in place rather than stack into
   one row per job, and each renders as one updating line, not a new committed row.
   Its publish is serialized with the status segment, so two near-simultaneous
   completions cannot land an older, smaller batch after the full one.
-- **Context steer at a step boundary** — completed ids accumulate, and the
+- **Context steer at a step boundary.** Completed ids accumulate, and the
   host chains `Manager.Boundary()` into `agent.Options.OnBoundary`, so at the
   boundary the manager filters them down to ids with no poller and no prior
   consumption, dropping duplicates: a batch that accumulated while the model streamed
@@ -337,6 +343,11 @@ a newer one. A full form names the running count (with the oldest live job's
 age) and the done count, a short form for narrow rows, cleared when no jobs
 exist. The front end renders it as a keyed status segment.
 
+A structured `Tally` (running, queued, done) publishes immediately before each
+callback through the same serialization, an order the host relies on when it
+attaches counts to the segment. Controllers read those counts from the control
+socket's status segments instead of parsing prose.
+
 ## Accounting and configuration seams
 
 ### Child spend (`pkg/tokens`)
@@ -344,8 +355,8 @@ exist. The front end renders it as a keyed status segment.
 A child's ledger is created via the parent's `Accounting.Child()`, and every job
 rolls its usage into the parent's own totals. Two invariants:
 
-- **`Total()` stays inclusive** — session spend counts children too.
-- **`Context()` never moves for a child** — the rollup touches only totals, never
+- **`Total()` stays inclusive:** session spend counts children too.
+- **`Context()` never moves for a child:** the rollup touches only totals, never
   context terms, so a fan-out of investigations does not corrupt the main
   context bar.
 The delegated subset is exposed as `Accounting.ChildTotal()`, which `/usage`
@@ -357,7 +368,7 @@ The `subagent` block lives in `config-design.md`: `model` (empty inherits the
 session model), `maxConcurrent` and `maxPollWait` (compiled-in defaults from
 `pkg/config`, the latter a Go duration string sizing how long one `agent_poll`
 blocks before reporting still-running), all bound for free through env
-reflection. Here the first two size the manager's semaphore and poll timeout;
+reflection. Here the first two size the manager's semaphore and poll timeout.
 `/settings` edits `model` and `maxConcurrent`, while `maxPollWait` is
 startup-time like `agent.maxSteps` because the manager is built once.
 
@@ -369,6 +380,8 @@ and barrier exist, with adapters:
 - `Activity` → the UI activity row
 - `Notice` → a keyed UI notice (so consecutive notices collapse in place)
 - `Status` → the UI status segment
+- `Tally` → structured job counts captured beside each Status publish and carried
+  on the segment for control surfaces
 - `Deliver` → the `Running()`-guarded `ag.Steer`, per above
 - `Boundary` → chained ahead of the steer queue's `q.pull` in
   `Options.OnBoundary`, so completion steers and queued user prompts land at the
@@ -418,10 +431,10 @@ structural tool filter (a child resolves no `bash`/`write`/`edit`, still gets
 disabled-in-parent `find`/`grep`/`ls`, and never sees `agent_start` even when
 reported read-only), the poll timeout payload, delivery confirmation with
 re-offer on interrupt, and child spend (visible in totals, never moving the
-parent's context bar). The empty-summary recovery is pinned: nudge -> summary;
-an empty nudge falls back to sizable thinking as the summary, else `StatusError`
-(`errNoSummary`). Mid-investigation tool-turn reasoning is excluded by the
-tool-call boundary. Truncation is pinned too: a partial text with
+parent's context bar). The empty-summary recovery is pinned: nudge -> summary,
+with an empty nudge falling back to sizable thinking as the summary, else
+`StatusError` (`errNoSummary`). Mid-investigation tool-turn reasoning is excluded
+by the tool-call boundary. Truncation is pinned too: a partial text with
 `StopMaxTokens` is nudged (not reported done), and a retry that hits the cap
 again fails with `errTruncated`.
 

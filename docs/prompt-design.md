@@ -73,7 +73,8 @@ governs its assembly and use.
 | Sub-agent prompt | the child contract appended as a system snippet to every investigation, plus the empty-summary nudge |
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
-| Staged shell results | the `!` user message: `User Ran:` / `Output:` ahead of your next prompt; `!!` sends nothing |
+| Staged shell results | the `!` user message: `User Ran:` / `Output:` ahead of your next prompt, while `!!` sends nothing |
+| Controller-submitted prompts | no in-context marker, only the transcript's origin annotation |
 
 ## Staged shell results
 
@@ -102,6 +103,23 @@ renders it lives in `tui-design.md`.
 
 ---
 
+## Controller-submitted prompts
+
+A prompt arriving over the control socket is an authorized human proxy, so it reaches
+the model as an ordinary user message: byte-identical to the line submitted, with no
+wrapper and no in-context marker. Its provenance lives in the transcript instead, as
+its own annotation beside the existing message-level marks, empty for typed lines.
+
+The annotation is deliberately **not** the injected flag, because steering groups runs
+by that flag and replay derives echo and scrollback from it. A controller prompt has to
+group, echo and recall like the user line it emulates. So the text stays verbatim,
+cache-stable like any other user turn, while the annotation rides along untouched
+through the queue join, the transcript write and resume. Any future source of injected
+prompts (an extension, a hook) follows the same rule: annotate rather than wrap, unless
+the model must tell the text apart from a user's own words.
+
+---
+
 ## System prompt composition
 
 Assembled by `buildSystem` into a single cache-stable text block. Project
@@ -116,7 +134,7 @@ not this block.
 2. Guidelines               — two static bullets, no tool-derived content.
 3. Environment facts        — working directory, platform and day-granular date.
 4. Project instructions     — `~/.ajent/AGENTS.md`, then `<cwd>/AGENTS.md`, when each exists.
-5. Extension snippets       — caller-supplied, blank-line separated; sub-agents inject their contract here.
+5. Extension snippets       — caller-supplied, blank-line separated, and sub-agents inject their contract here.
 ```
 
 Parts 1 and 2 together are ajent's default prose guidance. An operator can

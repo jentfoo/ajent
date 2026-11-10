@@ -9,4 +9,4 @@ import (
 // Asker resolves a guard's ActionAsk into a final allow or deny. InstallGate
 // installs it together with the guard chain, so an ask always has somewhere to
 // go.
-type Asker func(ctx context.Context, call agent.ToolCall, d Decision) Decision
+type Asker func(ctx context.Context, call agent.ToolCall) Decision

@@ -27,6 +27,7 @@ func TestEnvLayerBindsScalarKinds(t *testing.T) {
 		{"verbatim_fraction", "AJENT_COMPACTION_VERBATIMFRACTION", "0.2", float64(0.2), func(s Settings) any { return s.Compaction.VerbatimFraction }},
 		{"disable_update_check", "AJENT_DISABLEUPDATECHECK", "true", true, func(s Settings) any { return s.DisableUpdateCheck }},
 		{"images_block", "AJENT_IMAGES_BLOCK", "true", true, func(s Settings) any { return s.Images.Block }},
+		{"control_enabled", "AJENT_CONTROL_ENABLED", "true", true, func(s Settings) any { return s.Control.Enabled }},
 		{"ui_images", "AJENT_UI_IMAGES", "kitty", "kitty", func(s Settings) any { return s.UI.Images }},
 	}
 	for _, tc := range cases {

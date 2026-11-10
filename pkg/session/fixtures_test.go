@@ -31,8 +31,8 @@ func tipIDs(entries []Entry) []string {
 	}
 	var out []string
 	for _, e := range entries {
-		if e.ID == "" || parented[e.ID] {
-			continue
+		if e.ID == "" || parented[e.ID] || e.Type == TypeHead {
+			continue // a cursor is a chain marker, not a fork tip
 		}
 		out = append(out, e.ID)
 	}

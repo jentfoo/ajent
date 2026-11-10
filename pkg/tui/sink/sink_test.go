@@ -64,8 +64,6 @@ func (h *headlessUI) rendered() string {
 	return strings.Clone(h.out.String())
 }
 
-// TestContextInfo pins ContextInfo's field list against tokens.ContextState, so
-// a new ledger term fails here until the conversion propagates it.
 func TestContextInfo(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +144,39 @@ func TestToolStartDisplay(t *testing.T) {
 		require.Eventually(t, func() bool { return strings.Contains(h.rendered(), "read") },
 			2*time.Second, time.Millisecond)
 		assert.NotContains(t, h.rendered(), "\n  data\n")
+	})
+}
+
+func TestInjectContextBlockShape(t *testing.T) {
+	t.Parallel()
+
+	t.Run("label_header_body_collapsed", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("Denied with note: test\n\nsome longer body")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "Denied with note: test")
+		}, 2*time.Second, time.Millisecond)
+		assert.Contains(t, h.rendered(), "some longer body")
+	})
+
+	t.Run("single_line_note", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("Allowed with note: keep going")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "Allowed with note: keep going")
+		}, 2*time.Second, time.Millisecond)
+	})
+
+	t.Run("blank_label_paints_nothing", func(t *testing.T) {
+		h := newHeadless(t)
+		h.s.InjectContext("\nbody only")
+		// the UI serializes calls, so a paint that arrives after this sentinel
+		// would have carried any wrongly-emitted block ahead of it
+		h.s.UserPrompt("sentinel")
+		require.Eventually(t, func() bool {
+			return strings.Contains(h.rendered(), "sentinel")
+		}, 2*time.Second, time.Millisecond)
+		assert.NotContains(t, h.rendered(), "body only")
 	})
 }
 

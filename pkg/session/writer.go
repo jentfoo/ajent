@@ -5,19 +5,28 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"sync"
 
 	"github.com/jentfoo/ajent/pkg/config"
 )
 
+// ErrTranscriptGone reports appends against a transcript another process
+// deleted: the writer's fd still names the unlinked inode, so without this
+// check appends would succeed into a file nothing can read again.
+var ErrTranscriptGone = errors.New("transcript deleted by another instance; recording disabled")
+
 // Writer appends entries to one JSONL file with line-atomic writes, fsyncing at turn boundaries.
 type Writer struct {
 	f      *os.File
-	path   string // transcript file, drives HEAD persistence
-	head   string // last appended entry id (or the rewind target after SetHead)
-	n      int    // entry count, persisted with the cursor to spot unsynced appends
-	closed bool   // further appends error after Close
+	rf     *os.File    // read handle for tail checks, nil when unavailable
+	path   string      // transcript file; every writer owns one, never empty
+	head   string      // last appended entry id, or the rewind target after SetHead
+	closed bool        // further appends error after Close
+	gone   bool        // transcript deleted under this writer, seen at a path check
+	watch  func(Entry) // optional observer of successful appends, app supplied
+	token  string      // per-open identity the control socket names itself by
 
 	mu sync.Mutex
 }
@@ -28,19 +37,18 @@ func Create(path string, d SessionData) (*Writer, error) {
 	if err != nil {
 		return nil, err
 	}
-	w := &Writer{f: f, path: path}
-	e, err := w.Append(TypeSession, d)
-	if err != nil {
-		_ = f.Close()
+	w := newWriter(f, path, "")
+	if _, err := w.Append(TypeSession, d); err != nil {
+		_ = w.Close()
 		return nil, err
 	}
-	w.head = e.ID
 	return w, nil
 }
 
-// Open reopens an existing file for append and recovers the head from its
-// persisted cursor or the tail. A torn tail from a crashed partial write is
-// quarantined to <path>.torn and truncated before the first append.
+// Open reopens an existing file for append and recovers the head from the
+// file (see resolveHead). A torn tail from a crashed partial write is
+// quarantined to <path>.torn and truncated before the first append, under the
+// cross-writer flock.
 func Open(path string) (*Writer, error) {
 	w, _, _, err := OpenEntries(path)
 	return w, err
@@ -63,7 +71,16 @@ func OpenEntries(path string) (*Writer, []Entry, []string, error) {
 		_ = f.Close()
 		return nil, nil, nil, rerr
 	}
-	return &Writer{f: f, path: path, head: headFor(path, e), n: len(e)}, e, warns, nil
+	return newWriter(f, path, resolveHead(e)), e, warns, nil
+}
+
+// newWriter wraps one opened transcript for append.
+func newWriter(f *os.File, path, head string) *Writer {
+	w := &Writer{f: f, path: path, head: head, token: NewID()}
+	if rf, rerr := os.Open(path); rerr == nil {
+		w.rf = rf // best effort: tail checks degrade to append-only without it
+	}
+	return w
 }
 
 // tornScanWindow is the tail slice read to gate and locate a torn line.
@@ -72,14 +89,29 @@ const tornScanWindow = 64 << 10
 // tornSuffix names the sidecar quarantining a partial write's bytes.
 const tornSuffix = ".torn"
 
+// legacyHeadSuffix names the pre-cursor head sidecar an older build wrote.
+const legacyHeadSuffix = ".head"
+
 // tornPath returns the quarantine sidecar beside the transcript at sessionPath.
 func tornPath(sessionPath string) string { return sessionPath + tornSuffix }
 
 // repairTornTail fences a partial trailing write: the unterminated bytes are
 // copied to a <path>.torn sidecar and the transcript is truncated back to its
 // last complete line, so the next append cannot glue onto them. Healthy files
-// are left byte-identical; the scan touches only the tail.
+// are left byte-identical; the scan touches only the tail. The exclusive flock
+// spans stat, read, quarantine and truncate, so a concurrent appender's line
+// can never land inside the window being cut.
 func repairTornTail(path string, f *os.File) error {
+	if err := lockWriter(f); err != nil {
+		return err
+	}
+	defer unlockWriter(f)
+	return repairTornTailLocked(path, f)
+}
+
+// repairTornTailLocked is repairTornTail for a caller already holding the
+// cross-writer flock. Caller holds the flock.
+func repairTornTailLocked(path string, f *os.File) error {
 	rf, err := os.Open(path)
 	if err != nil {
 		return err
@@ -144,20 +176,61 @@ func lastNewline(rf *os.File, size int64) (int64, error) {
 	return 0, nil
 }
 
-// Append stamps ParentID from the current head and writes one line. The new id
-// becomes the head only after a successful write.
+// WatchAppend installs fn to observe each entry this writer successfully
+// appends; nil clears it. The observer fires on the appending goroutine after
+// the write completes and must not block or call back into the writer.
+func (w *Writer) WatchAppend(fn func(Entry)) {
+	w.mu.Lock()
+	w.watch = fn
+	w.mu.Unlock()
+}
+
+// Append stamps ParentID from the current head and writes one line, then
+// announces it to any observer. The new id becomes the head only after a
+// successful write. The write takes the cross-writer flock, so concurrent
+// processes land interleaved whole lines, and re-fences the tail inside the
+// same lock: a peer's torn write landing after this writer's open repair is
+// quarantined rather than glued onto. A transcript deleted by a --delete under
+// this writer fails with ErrTranscriptGone instead of appending into the
+// unlinked inode, so the loss surfaces as a persistence notice rather than
+// silent success.
 func (w *Writer) Append(typ Type, data any) (Entry, error) {
-	payload, err := json.Marshal(data)
+	e, err := w.append(typ, data)
 	if err != nil {
-		return Entry{}, err
+		return e, err
+	}
+	w.mu.Lock()
+	fn := w.watch
+	w.mu.Unlock()
+	if fn != nil {
+		fn(e)
+	}
+	return e, nil
+}
+
+// append performs the write itself, all of it under w.mu.
+func (w *Writer) append(typ Type, data any) (Entry, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.appendLocked(typ, data)
+}
+
+// appendLocked writes one entry. Caller holds w.mu.
+func (w *Writer) appendLocked(typ Type, data any) (Entry, error) {
+	var payload []byte
+	if data != nil {
+		var err error
+		if payload, err = json.Marshal(data); err != nil {
+			return Entry{}, err
+		}
 	}
 
 	// build and write under the lock so concurrent appends form one linear chain
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.closed {
 		return Entry{}, errors.New("session writer is closed")
+	}
+	if w.checkGoneLocked() {
+		return Entry{}, ErrTranscriptGone
 	}
 	// TS shares the id's monotonic millisecond so ordering metadata matches append order
 	id, ts := newULID()
@@ -173,12 +246,38 @@ func (w *Writer) Append(typ Type, data any) (Entry, error) {
 		return Entry{}, err
 	}
 	line = append(line, '\n')
+	if lerr := lockWriter(w.f); lerr != nil {
+		return Entry{}, lerr
+	}
+	if !w.tailTerminated() {
+		if rerr := repairTornTailLocked(w.path, w.f); rerr != nil {
+			unlockWriter(w.f)
+			return Entry{}, rerr
+		}
+	}
 	if _, werr := w.f.Write(line); werr != nil {
+		unlockWriter(w.f)
 		return Entry{}, werr
 	}
-	w.head = e.ID
-	w.n++
+	unlockWriter(w.f)
+	if typ != TypeHead { // a cursor is a chain marker, never the live head
+		w.head = e.ID
+	}
 	return e, nil
+}
+
+// checkGoneLocked notices a transcript deleted under this writer and latches
+// it: once gone, appends fail, so nothing writes beside a missing file. Only a
+// missing path counts, matching Remove; other stat errors read as transient.
+// Caller holds the lock.
+func (w *Writer) checkGoneLocked() bool {
+	if w.gone {
+		return true
+	}
+	if _, err := os.Stat(w.path); errors.Is(err, fs.ErrNotExist) {
+		w.gone = true
+	}
+	return w.gone
 }
 
 // Path returns the transcript file path.
@@ -197,49 +296,64 @@ func (w *Writer) Head() string {
 	return w.head
 }
 
-// SetHead rewinds to id so later appends branch from it. The transcript keeps
-// both histories and nothing is deleted, while the new tip becomes the persisted
-// cursor. An empty id starts a new root and drops the cursor instead.
+// Token returns this writer's per-open token, the identity the control
+// socket and registry derive their names from.
+func (w *Writer) Token() string {
+	return w.token
+}
+
+// tailTerminated reports whether the file's last byte ends a line. Best
+// effort: an unreadable or empty tail reads as terminated so appends never
+// fail on the check itself. Caller holds the flock.
+func (w *Writer) tailTerminated() bool {
+	if w.rf == nil {
+		return true
+	}
+	fi, err := w.rf.Stat()
+	if err != nil || fi.Size() == 0 {
+		return true
+	}
+	var one [1]byte
+	if _, err := w.rf.ReadAt(one[:], fi.Size()-1); err != nil {
+		return true
+	}
+	return one[0] == '\n'
+}
+
+// SetHead rewinds to id so later appends fork from it, recording one cursor
+// entry (see TypeHead). An empty id starts a new root. The transcript keeps
+// both histories and nothing is deleted. A cursor write that fails degrades to
+// losing the move across a restart, never the live branch.
 func (w *Writer) SetHead(id string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
 	w.head = id
-	// a failure here resurfaces from the next Sync, which rewrites the same cursor
-	_ = w.persistHeadLocked()
+	_, _ = w.appendLocked(TypeHead, nil) // not Append: a cursor is bookkeeping, never announced
 }
 
-// persistHeadLocked records the branch cursor so resume continues from here.
-// Caller holds the lock.
-func (w *Writer) persistHeadLocked() error {
-	if w.path == "" {
-		return nil
-	} else if w.head == "" {
-		return removeHead(w.path) // a new root has no branch to point at
-	}
-	return writeHead(w.path, w.head, w.n)
-}
-
-// Sync fsyncs the file at a turn boundary, then records the current head.
-// Data flushes first so the cursor never names an entry that is not durable.
+// Sync fsyncs the file at a turn boundary.
 func (w *Writer) Sync() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
-	if w.closed {
+	if w.closed || w.checkGoneLocked() {
 		return nil
 	}
-	return errors.Join(w.f.Sync(), w.persistHeadLocked())
+	return w.f.Sync()
 }
 
 // Close releases the underlying file. Idempotent.
 func (w *Writer) Close() error {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-
 	if w.closed {
+		w.mu.Unlock()
 		return nil
 	}
 	w.closed = true
-	return w.f.Close()
+	err := w.f.Close()
+	if w.rf != nil {
+		_ = w.rf.Close()
+		w.rf = nil
+	}
+	w.mu.Unlock()
+	return err
 }

@@ -322,7 +322,7 @@ func holdForDialog(ctx context.Context, p Prompter, verdict <-chan Class) (<-cha
 // holds the prompter while the user types, then opens an approval dialog. In the
 // auto modes a concurrent classification can approve the call without a dialog.
 func (b *Barrier) Asker() tools.Asker {
-	return func(ctx context.Context, call agent.ToolCall, _ tools.Decision) tools.Decision {
+	return func(ctx context.Context, call agent.ToolCall) tools.Decision {
 		g := b.gateNow()
 		m := g.mode
 
@@ -462,10 +462,8 @@ func (b *Barrier) unattendedAsk(ctx context.Context, call agent.ToolCall) tools.
 	}
 	m := g.mode
 	// a core writer never classifies, so an offered one outside auto+write's scope
-	// is withheld by the gate itself rather than left to a missing UI
-	if _, isWrite := coreWriteTools[call.Name]; isWrite && (m == ModeAuto || m == ModeAutoWrite) {
-		return tools.Deny(unattendedDenyReason)
-	}
+	// is withheld by the gate itself rather than left to a missing UI. classifyCall
+	// denying it lands on the same refusal below
 	if !b.classifyCall(m, call.Name) {
 		return tools.Deny(unattendedDenyReason)
 	}
@@ -692,7 +690,9 @@ func argsDigest(s string) string {
 // resolveNotice reports how an approved call was granted, replacing the dialog's
 // generic prompt echo with a descriptive outcome line.
 func (b *Barrier) resolveNotice(scope string, auto bool) {
-	n := b.noticeSnapshot()
+	b.mu.Lock()
+	n := b.notice
+	b.mu.Unlock()
 	switch {
 	case auto:
 		n("Tool auto allowed")
@@ -701,14 +701,6 @@ func (b *Barrier) resolveNotice(scope string, auto bool) {
 	default:
 		n("Tool call allowed this time")
 	}
-}
-
-// noticeSnapshot returns the installed notice callback under read lock.
-func (b *Barrier) noticeSnapshot() func(string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.notice
 }
 
 // gate is the barrier's decision state, snapshotted under the lock so a verdict
@@ -918,13 +910,9 @@ func entriesCoverArgv(toks []string, cmds []string, fold func(string) string) bo
 
 // entryCovered reports whether line starts with a configured command at a token boundary.
 func entryCovered(line string, cmds []string) bool {
-	for _, e := range cmds {
-		e = strings.TrimSpace(e)
-		if commandHasPrefix(line, e) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(cmds, func(e string) bool {
+		return commandHasPrefix(line, strings.TrimSpace(e))
+	})
 }
 
 // toolNameCovered reports whether a non-bash tool name is covered by a configured

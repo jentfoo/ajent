@@ -91,13 +91,10 @@ func (s *Store) Prompts(workspace string) ([]Prompt, error) {
 	return out, nil
 }
 
-// filePrompts returns one transcript's recorded user prompts, newest first.
-func filePrompts(path string) []Prompt {
-	entries, _, err := Read(path)
-	if err != nil {
-		return nil
-	}
-	var prompts []Prompt
+// PromptsOf returns one entry branch's recorded user prompts, newest first.
+// Secret-prefixed lines stay included; callers filter them at read time.
+func PromptsOf(entries []Entry) []Prompt {
+	out := make([]Prompt, 0, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- { // append-only, reverse is newest first
 		e := entries[i]
 		if e.Type != TypeMessage {
@@ -114,9 +111,18 @@ func filePrompts(path string) []Prompt {
 		if txt == "" {
 			continue
 		}
-		prompts = append(prompts, Prompt{Text: txt, At: time.UnixMilli(e.TS).UTC()})
+		out = append(out, Prompt{Text: txt, At: time.UnixMilli(e.TS).UTC()})
 	}
-	return prompts
+	return out
+}
+
+// filePrompts returns one transcript's recorded user prompts, newest first.
+func filePrompts(path string) []Prompt {
+	entries, _, err := Read(path)
+	if err != nil {
+		return nil
+	}
+	return PromptsOf(entries)
 }
 
 // dropSecretPrompts removes prompts carrying the pasted-secret prefix, so a

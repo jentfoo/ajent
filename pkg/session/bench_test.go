@@ -122,7 +122,7 @@ func benchBranch(b *testing.B, path string) ([]Entry, CompactionData) {
 	entries, warns, err := Read(path)
 	require.NoError(b, err)
 	require.Empty(b, warns)
-	branch := Branch(entries, headFor(path, entries))
+	branch := Branch(entries, resolveHead(entries))
 	require.NotEmpty(b, branch)
 
 	var cd CompactionData
@@ -161,7 +161,7 @@ func BenchmarkResumeReplay(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			if branch := Branch(entries, headFor(path, entries)); len(branch) == 0 {
+			if branch := Branch(entries, resolveHead(entries)); len(branch) == 0 {
 				b.Fatal("empty branch")
 			}
 		}
@@ -172,7 +172,7 @@ func BenchmarkResumeReplay(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
-			branch := Branch(entries, headFor(path, entries))
+			branch := Branch(entries, resolveHead(entries))
 			msgs, warns := ContextMessages(branch, cd, resolve)
 			if len(warns) > 0 {
 				b.Fatalf("rebuild warnings: %v", warns)
@@ -306,7 +306,7 @@ func BenchmarkResumeOpen(b *testing.B) {
 
 // BenchmarkRecordTurn measures the write side every turn pays for: one prompt,
 // an assistant call and its tool result appended as the loop produces them, then
-// the fsync plus head-cursor rewrite at the turn boundary.
+// the fsync at the turn boundary.
 func BenchmarkRecordTurn(b *testing.B) {
 	root := b.TempDir()
 	w, err := Create(filepath.Join(root, "bench.jsonl"), SessionData{Version: Version(), Workspace: root})

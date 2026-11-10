@@ -43,11 +43,7 @@ func (c *Controller) toolsFor(p Phase) []string {
 
 	out := slices.Clone(readOnlyBase)
 	if c.h.PlannerTools != nil {
-		for _, n := range c.h.PlannerTools() {
-			if !slices.Contains(out, n) {
-				out = append(out, n)
-			}
-		}
+		out = append(out, bulk.SliceDifference(c.h.PlannerTools(), out)...)
 	}
 	out = append(out, AskUserTool)
 	if p == PhaseReviewing {

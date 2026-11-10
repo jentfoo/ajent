@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"strings"
+
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/jentfoo/ajent/pkg/tokens"
 )
@@ -21,6 +23,11 @@ type Sink interface {
 	// UserPrompt echoes a prompt's words. Live sessions echo at submission time,
 	// replay calls this so restored context shows each user message above its reply.
 	UserPrompt(text string)
+	// InjectContext paints committed injected context where it lands, in the
+	// block shape InjectBlock defines. Steering notes and sub-agent notices
+	// echo through it, so their live rendering matches what replay draws for
+	// the same entry on every surface.
+	InjectContext(text string)
 	Thinking(delta string)
 	EndThinking()
 	Text(delta string)
@@ -43,47 +50,73 @@ type Sink interface {
 	TurnEnd(TurnResult)
 }
 
-// fanoutSink forwards every event to each member in registration order, so more
-// than one consumer can watch turns without displacing the recorder.
+// Fanout forwards every event to the sinks provide returns, in registration
+// order, so more than one consumer can watch turns without displacing another.
+// provide runs once per event, so membership changes between events apply;
+// dispatch never runs under a lock an observer could re-enter.
+func Fanout(provide func() []Sink) Sink {
+	return &fanoutSink{provide: provide}
+}
+
 type fanoutSink struct {
-	sinks []Sink
+	provide func() []Sink
 }
 
 func (f *fanoutSink) TurnStart(i TurnInfo) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.TurnStart(i)
 	}
 }
+
+// InjectBlock paints one committed injected context block: first line as its
+// header label, remainder collapsed beneath it. The single shape for
+// replay-marked injected content, shared by the live steering echo and session
+// replay, so a note renders identically on every surface.
+func InjectBlock(id string, text string, sink Sink) {
+	label, body, _ := strings.Cut(text, "\n")
+	if strings.TrimSpace(label) == "" {
+		return
+	}
+	body = strings.TrimLeft(body, "\n") // the blank line separating label from body
+	sink.ToolStart(ToolCall{ID: id}, label, false)(ToolResult{Display: body})
+}
 func (f *fanoutSink) UserPrompt(text string) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.UserPrompt(text)
 	}
 }
+
+func (f *fanoutSink) InjectContext(text string) {
+	for _, s := range f.provide() {
+		s.InjectContext(text)
+	}
+}
 func (f *fanoutSink) Thinking(d string) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Thinking(d)
 	}
 }
 func (f *fanoutSink) EndThinking() {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.EndThinking()
 	}
 }
 func (f *fanoutSink) Text(d string) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Text(d)
 	}
 }
 func (f *fanoutSink) EndText() {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.EndText()
 	}
 }
 
 // ToolStart returns a closure that calls every member's done in order.
 func (f *fanoutSink) ToolStart(call ToolCall, label string, full bool) func(ToolResult) {
-	done := make([]func(ToolResult), 0, len(f.sinks))
-	for _, s := range f.sinks {
+	sinks := f.provide()
+	done := make([]func(ToolResult), 0, len(sinks))
+	for _, s := range sinks {
 		if d := s.ToolStart(call, label, full); d != nil {
 			done = append(done, d)
 		}
@@ -96,37 +129,37 @@ func (f *fanoutSink) ToolStart(call ToolCall, label string, full bool) func(Tool
 }
 
 func (f *fanoutSink) ToolOutput(id, d string) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.ToolOutput(id, d)
 	}
 }
 func (f *fanoutSink) ToolProgress(p ToolProgress) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.ToolProgress(p)
 	}
 }
 func (f *fanoutSink) Diff(p, b, a string) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Diff(p, b, a)
 	}
 }
 func (f *fanoutSink) Usage(u llm.Usage) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Usage(u)
 	}
 }
 func (f *fanoutSink) Context(c tokens.ContextState) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Context(c)
 	}
 }
 func (f *fanoutSink) Notice(msg string, level Level) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.Notice(msg, level)
 	}
 }
 func (f *fanoutSink) TurnEnd(r TurnResult) {
-	for _, s := range f.sinks {
+	for _, s := range f.provide() {
 		s.TurnEnd(r)
 	}
 }
@@ -134,12 +167,13 @@ func (f *fanoutSink) TurnEnd(r TurnResult) {
 // NopSink discards every event, for a sub-agent with no UI.
 type NopSink struct{}
 
-func (NopSink) TurnStart(TurnInfo) {}
-func (NopSink) UserPrompt(string)  {}
-func (NopSink) Thinking(string)    {}
-func (NopSink) EndThinking()       {}
-func (NopSink) Text(string)        {}
-func (NopSink) EndText()           {}
+func (NopSink) TurnStart(TurnInfo)   {}
+func (NopSink) UserPrompt(string)    {}
+func (NopSink) InjectContext(string) {}
+func (NopSink) Thinking(string)      {}
+func (NopSink) EndThinking()         {}
+func (NopSink) Text(string)          {}
+func (NopSink) EndText()             {}
 func (NopSink) ToolStart(call ToolCall, label string, full bool) func(ToolResult) {
 	return func(ToolResult) {}
 }

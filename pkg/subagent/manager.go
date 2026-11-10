@@ -3,6 +3,7 @@ package subagent
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -21,14 +22,15 @@ import (
 const (
 	defaultMaxConcurrent = 8
 	defaultPollTimeout   = 10 * time.Minute
-	defaultCloseWait     = 2 * time.Second // bound on Close waiting for jobs to stop
-	maxLabelLen          = 72              // single-line label truncation, in runes
+	defaultCloseWait     = 2 * time.Second        // bound on Close waiting for jobs to stop
+	maxLabelLen          = 72                     // single-line label truncation, in runes
+	defaultClaimHold     = 250 * time.Millisecond // max wait for a reserved sibling to claim its number
 )
 
 // Options configures a sub-agent Manager. The func-typed fields are supplied
-// at wiring time, so this package never imports pkg/tui or pkg/tools. Model,
-// Reasoning, Parent, Notice, Deliver and Tools are required. Activity and
-// Status are optional.
+// at wiring time, so this package never imports pkg/tui or pkg/tools. Root,
+// Model, Reasoning, Parent, Notice, Deliver and Tools are required (a nil Root
+// panics). Activity, Status and Tally are optional.
 type Options struct {
 	Provider            func(llm.Model) (llm.Provider, error)
 	Model               func() llm.Model           // configured child model, else the session's
@@ -47,6 +49,7 @@ type Options struct {
 	Activity func(key, text string, rank int) // nil disables activity rows
 	Notice   func(msg string)                 // keyed UI notice for completions
 	Status   func(text, short string)
+	Tally    func(Tally)            // structured job counts beside every Status publish; nil skips it
 	Deliver  func(agent.Input) bool // steers into a running parent turn, false when idle
 
 	MaxConcurrent int           // 0 -> defaultMaxConcurrent
@@ -73,6 +76,8 @@ type Manager struct {
 	jobs        map[string]*job
 	waiters     []*job         // registered but ungranted jobs, dispatched in job-number order
 	running     int            // concurrency slots currently held
+	claimHold   time.Duration  // how long an unclaimed reservation may hold back higher numbers
+	batchUntil  time.Time      // when the current batch's hold lapses (set by Reserve)
 	pending     []string       // completed ids not yet delivered into the parent context
 	inFlight    []string       // ids a queued steer names, cleared when it lands or drops
 	noticeBatch []string       // completions since the last delivered steer, for the keyed notice
@@ -92,6 +97,7 @@ func New(opts Options) *Manager {
 		jobs:      map[string]*job{},
 		reserved:  map[string]int{},
 		closeWait: defaultCloseWait,
+		claimHold: defaultClaimHold,
 	}
 	m.ctx, m.cancel = context.WithCancel(opts.Root)
 	return m
@@ -112,6 +118,14 @@ func (m *Manager) Reserve(calls []agent.ToolCall) {
 		}
 		m.count++
 		m.reserved[c.ID] = m.count
+	}
+	if len(m.reserved) > 0 { // this batch claimed: arm the expiry net once
+		m.batchUntil = time.Now().Add(m.claimHold)
+		time.AfterFunc(m.claimHold, func() {
+			m.mu.Lock()
+			m.dispatchLocked()
+			m.mu.Unlock()
+		})
 	}
 }
 
@@ -225,17 +239,40 @@ func (m *Manager) acquireSlot(j *job) bool {
 }
 
 // dispatchLocked hands free slots to waiters in job-number order, so a fan-out
-// activates as sub-1, sub-2, ... however the start goroutines raced. Caller holds mu.
+// activates as sub-1, sub-2, ... however the start goroutines raced. A waiter is
+// held while a lower-numbered reservation of its batch has not claimed yet.
+// Claiming races registration, so without this the task submitted last could
+// take a slot ahead of the one before it. Jobs registered before the batch (or
+// past its hold) are never held: no future claim can precede their number.
+// Caller holds mu.
 func (m *Manager) dispatchLocked() {
 	m.waiters = bulk.SliceFilterInPlace(func(j *job) bool { return j.ctx.Err() == nil }, m.waiters)
 	slices.SortFunc(m.waiters, func(a, b *job) int { return cmp.Compare(a.num, b.num) })
 	for len(m.waiters) > 0 && m.running < m.opts.MaxConcurrent {
 		j := m.waiters[0]
+		if m.holdsBack(j) {
+			break // a lower number may still claim its slot ahead of this one
+		}
 		m.waiters = slices.Delete(m.waiters, 0, 1)
 		m.running++
 		j.granted = true
 		close(j.grant)
 	}
+}
+
+// holdsBack reports whether granting j now could be jumped by a reservation of
+// the current batch: an unclaimed number lower than j's within the hold window.
+// The expiry net (armed by Reserve) releases the hold when a claim never lands.
+func (m *Manager) holdsBack(j *job) bool {
+	if len(m.reserved) == 0 || time.Now().After(m.batchUntil) {
+		return false
+	}
+	for _, num := range m.reserved { // small: one entry per agent_start in the batch
+		if num < j.num {
+			return true
+		}
+	}
+	return false
 }
 
 // releaseSlot returns one concurrency slot and wakes the next waiter.
@@ -338,8 +375,7 @@ func (m *Manager) claimResult(j *job) Job {
 	j.mu.Lock()
 	j.consumed = true
 	j.mu.Unlock()
-	// mark delivered by this poll and drop the id from every delivery list, so no
-	// later steer repeats it and no later notice re-names it
+	// drop from every delivery list, so no later steer repeats it and no later notice re-names it
 	one := []string{j.id}
 	m.mu.Lock()
 	m.pending = dropIDs(m.pending, one)
@@ -356,24 +392,41 @@ func (m *Manager) List() []Job {
 	slices.SortFunc(ids, byJobNumber)
 	out := make([]Job, 0, len(ids))
 	for _, id := range ids {
-		if j, ok := m.jobs[id]; ok {
-			out = append(out, j.snapshot())
-		}
+		out = append(out, m.jobs[id].snapshot())
 	}
 	m.mu.Unlock()
 	return out
 }
+
+// Tally is one publish of job counts, riding beside the prose status segment.
+type Tally struct {
+	Running int
+	Queued  int
+	Done    int
+}
+
+// Counts renders the tally in the status-segment vocabulary: running, queued
+// and done.
+func (t Tally) Counts() map[string]int {
+	return map[string]int{"running": t.Running, "queued": t.Queued, "done": t.Done}
+}
+
+// Stop refusal causes, so callers distinguish them without parsing prose.
+var (
+	ErrNoSuchAgent   = errors.New("no such sub-agent")
+	ErrAgentFinished = errors.New("already finished")
+)
 
 // Stop cancels one job by id (accepts sub-2 or bare 2). A queued or running job is
 // aborted, and a finished one returns an error.
 func (m *Manager) Stop(id string) error {
 	j, ok := m.lookup(id)
 	if !ok {
-		return fmt.Errorf("no such sub-agent %q", id)
+		return fmt.Errorf("%w %q", ErrNoSuchAgent, id)
 	}
 	s := j.statusOf()
 	if s == StatusDone || s == StatusError {
-		return fmt.Errorf("sub-agent %s already finished (%s)", j.id, s)
+		return fmt.Errorf("sub-agent %s %w (%s)", j.id, ErrAgentFinished, s)
 	}
 	j.cancel()
 	return nil
@@ -488,10 +541,12 @@ func (m *Manager) enqueue(id string) {
 	if !slices.Contains(m.pending, id) {
 		m.pending = append(m.pending, id)
 	}
-	if !slices.Contains(m.noticeBatch, id) { // a re-armed delivery must not double-name it
-		m.noticeBatch = append(m.noticeBatch, id)
-		slices.SortFunc(m.noticeBatch, byJobNumber)
+	if slices.Contains(m.noticeBatch, id) { // a re-arm racing its own completion already named it
+		m.mu.Unlock()
+		return
 	}
+	m.noticeBatch = append(m.noticeBatch, id)
+	slices.SortFunc(m.noticeBatch, byJobNumber)
 	batch := slices.Clone(m.noticeBatch)
 	m.mu.Unlock()
 	text := "Sub-agents " + strings.Join(batch, ", ") + " completed" // names the batch for the keyed UI notice
@@ -642,10 +697,12 @@ func (m *Manager) publishActivity(key, text string, rank int) {
 	fn(key, text, rank)
 }
 
-// publishStatus recomputes and pushes the status segment, empty clears it.
+// publishStatus recomputes and pushes the status segment with its structured
+// tally beside it; empty text clears both.
 func (m *Manager) publishStatus() {
 	fn := m.opts.Status
-	if fn == nil {
+	tallyFn := m.opts.Tally
+	if fn == nil && tallyFn == nil {
 		return
 	}
 	m.pubMu.Lock()
@@ -675,6 +732,12 @@ func (m *Manager) publishStatus() {
 	}
 	m.mu.Unlock()
 
+	if tallyFn != nil {
+		tallyFn(Tally{Running: running, Queued: queued, Done: done})
+	}
+	if fn == nil {
+		return
+	}
 	if running == 0 && queued == 0 && done == 0 {
 		fn("", "")
 		return

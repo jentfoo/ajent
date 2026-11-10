@@ -60,9 +60,12 @@ func TestWriteScopeContains(t *testing.T) {
 }
 
 func TestWriteScopeAllows(t *testing.T) {
-	t.Parallel()
+	// not parallel: the tilde cases resolve through the process HOME
+	home := t.TempDir()
+	t.Setenv("HOME", home)
 
-	cwd := t.TempDir()
+	cwd := filepath.Join(home, "workspace") // under home, so ~/workspace/... lands in scope
+	require.NoError(t, os.Mkdir(cwd, 0o755))
 	tmp := t.TempDir()
 	outside := t.TempDir()
 	s := newWriteScope(cwd, tmp)
@@ -80,8 +83,16 @@ func TestWriteScopeAllows(t *testing.T) {
 		{"absolute_in_cwd", call("write", `{"path":"`+cwd+`/a.go"}`), true},
 		{"edit_in_tmp", call("edit", `{"path":"`+tmp+`/x"}`), true},
 		{"cwd_itself", call("write", `{"path":"."}`), true},
+		// ~ expands through PathPolicy, so in-scope tilde paths run free
+		{"tilde_in_cwd", call("write", `{"path":"~/workspace/a.go"}`), true},
+		{"edit_tilde_in_cwd", call("edit", `{"path":"~/workspace/x"}`), true},
+		// expansion fires for ~/ only, so ~root stays literal where the tool writes it
+		{"tilde_user_literal", call("write", `{"path":"~root/x"}`), true},
 		{"outside_absolute", call("write", `{"path":"`+outside+`/a.go"}`), false},
+		// home sits outside every root, so tilde paths there refuse by containment
 		{"home_path", call("write", `{"path":"~/.ssh/config"}`), false},
+		{"bare_tilde", call("write", `{"path":"~"}`), false},
+		{"tilde_parent_escape", call("write", `{"path":"~/../a.go"}`), false},
 		{"parent_escape", call("write", `{"path":"../a.go"}`), false},
 		{"symlink_escape", call("write", `{"path":"escape/a.go"}`), false},
 		{"missing_path", call("write", `{}`), false},
