@@ -73,8 +73,12 @@ func TestDenyMatches(t *testing.T) {
 		{"sudo_launcher", []string{"rm"}, "sudo rm -rf x"},
 		{"sudo_opt_launcher", []string{"rm"}, "sudo -u root rm -rf x"},
 		{"nice_launcher", []string{"make"}, "nice -n 5 make install"},
+		{"nice_negative_launcher", []string{"rm"}, "nice -n -15 rm x"},
+		{"time_posix_flag_launcher", []string{"rm"}, "time -p rm -rf x"},
 		{"xargs_launcher", []string{"rm"}, "find . | xargs rm"},
 		{"time_launcher", []string{"rm"}, "time rm -rf x"},
+		// an entry naming the wrapper itself still matches the verbatim argv
+		{"wrapper_named_entry", []string{"timeout"}, "timeout 10 ls"},
 		{"launcher_named_entry", []string{"env"}, "env FOO=1 git push"},
 		// a heredoc body is scanned when an interpreter reads it, quoted
 		// delimiters protecting nothing
@@ -246,6 +250,8 @@ func TestResolveDenyArgv(t *testing.T) {
 		{"keyword_then_env", "do FOO=1 rm x", []string{"rm", "x"}},
 		{"nohup_unwrapped", "nohup git push", []string{"git", "push"}},
 		{"timeout_unwrapped", "timeout 10 rm x", []string{"rm", "x"}},
+		{"time_unwrapped", "time -p git status", []string{"git", "status"}},
+		{"nice_unwrapped", "nice -n 5 make install", []string{"make", "install"}},
 		{"env_launcher_stays", "env git push", []string{"env", "git", "push"}},
 	}
 	for _, c := range cases {

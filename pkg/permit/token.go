@@ -111,43 +111,74 @@ var (
 	timeoutDurationRe  = regexp.MustCompile(`^\d+(\.\d+)?[smhd]?$`)
 	timeoutAttachedVal = regexp.MustCompile(`^--(kill-after|signal)=`)
 	timeoutShortAttach = regexp.MustCompile(`^-[ks].+`)
+
+	niceAttachedAdjust = regexp.MustCompile(`^-\d+$`)     // one token carrying the value: -12
+	niceAdjustmentVal  = regexp.MustCompile(`^[+-]?\d+$`) // every adjustment nice accepts: 5, +5, -15
 )
 
-// unwrapLaunchers strips side-effect-free launcher prefixes (nohup, timeout) so
-// classification sees the wrapped command. Only a bare launcher name unwraps: a
-// path-qualified one could be any binary, and headOf refuses such heads anyway,
-// so leaving it in place fails safe toward prompting. sudo/env/xargs/nice/stdbuf
-// change privilege or environment and are never unwrapped, a confused parse
-// returning the original tokens to fail safe likewise.
+// unwrapLaunchers strips side-effect-free launcher prefixes (nohup, timeout,
+// time, nice) so classification sees the wrapped command. Only a bare launcher
+// name unwraps: a path-qualified one could be any binary, and headOf refuses
+// such heads anyway, so leaving it in place fails safe toward prompting. Each
+// grammar matches its binary's options exactly, an unknown flag or a missing
+// command returning the original tokens to fail safe. sudo/env/xargs/stdbuf
+// change privilege or environment and are never unwrapped.
 func unwrapLaunchers(tokens []string) []string {
 	cmd := firstToken(tokens)
-	if cmd == "nohup" {
+	switch cmd {
+	case "nohup":
 		return unwrapLaunchers(tokens[1:])
-	}
-	if cmd != "timeout" {
-		return tokens
-	}
-	j := 1
-	for j < len(tokens) && strings.HasPrefix(tokens[j], "-") {
-		tok := tokens[j]
+	case "timeout":
+		j := 1
+		for j < len(tokens) && strings.HasPrefix(tokens[j], "-") {
+			tok := tokens[j]
+			switch {
+			case slices.Contains(timeoutBoolOpts, tok):
+				j++
+			case slices.Contains(timeoutValueOpts, tok):
+				j += 2 // separate value form: -k 5, --signal TERM
+			case timeoutAttachedVal.MatchString(tok) || timeoutShortAttach.MatchString(tok):
+				j++ // attached value form: --signal=TERM, -sTERM, -k5
+			default:
+				return tokens
+			}
+		}
+		if j+1 < len(tokens) && timeoutDurationRe.MatchString(tokens[j]) {
+			return unwrapLaunchers(tokens[j+1:]) // a duration and the command it bounds
+		}
+	case "time": // bash's keyword or GNU's binary; only bare and -p are unambiguous
 		switch {
-		case slices.Contains(timeoutBoolOpts, tok):
-			j++
-		case slices.Contains(timeoutValueOpts, tok):
-			j += 2 // separate value form: -k 5, --signal TERM
-		case timeoutAttachedVal.MatchString(tok) || timeoutShortAttach.MatchString(tok):
-			j++ // attached value form: --signal=TERM, -sTERM, -k5
-		default:
-			return tokens
+		case len(tokens) > 2 && tokens[1] == "-p":
+			return unwrapLaunchers(tokens[2:])
+		case len(tokens) > 1 && !strings.HasPrefix(tokens[1], "-"):
+			return unwrapLaunchers(tokens[1:])
+		}
+	case "nice":
+		j := 1
+		for j < len(tokens) && strings.HasPrefix(tokens[j], "-") {
+			tok := tokens[j]
+			switch {
+			case tok == "-n" || tok == "--adjustment": // separate value: -n 5, --adjustment -15
+				if !niceAdjustmentVal.MatchString(firstToken(tokens[j+1:])) {
+					return tokens // an adjustment the binary would reject runs nothing
+				}
+				j += 2
+			case strings.HasPrefix(tok, "--adjustment="): // attached long form: --adjustment=-10
+				if !niceAdjustmentVal.MatchString(tok[len("--adjustment="):]) {
+					return tokens
+				}
+				j++
+			case niceAttachedAdjust.MatchString(tok):
+				j++ // attached digit form: -12
+			default:
+				return tokens // an unknown dashed token fails safe to the prompt path
+			}
+		}
+		if j < len(tokens) {
+			return unwrapLaunchers(tokens[j:])
 		}
 	}
-	if j >= len(tokens) || !timeoutDurationRe.MatchString(firstToken(tokens[j:])) {
-		return tokens
-	}
-	if j+1 >= len(tokens) {
-		return tokens
-	}
-	return unwrapLaunchers(tokens[j+1:])
+	return tokens
 }
 
 // firstToken returns the empty string when tokens is nil or empty.
@@ -202,8 +233,8 @@ func skipQuoted(s string, i int) int {
 
 // shellKeywords are control-flow words, never command names: a segment headed by
 // one is shell syntax whose inner commands vary, so it has no nameable head.
-// `time` stays nameable: it heads a plain command (its own binary) and timeout's
-// unwrap can expose one, while its keyword form only matters before a pipeline,
+// `time` is absent deliberately: its launcher form unwraps away before any
+// keyword check, and its reserved-word form only matters before a pipeline,
 // which a segment never holds.
 var shellKeywords = bulk.SliceToSet([]string{
 	"if", "then", "elif", "else", "fi", "do", "done", "while", "until",

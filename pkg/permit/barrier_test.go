@@ -451,6 +451,50 @@ func TestGuardSafeMatchesBashCommandComponents(t *testing.T) {
 	assert.Equal(t, tools.ActionAsk, d.Action)
 }
 
+func TestGuardSafeCommandsCoverLauncherPrefixes(t *testing.T) {
+	t.Parallel()
+
+	// the reported shape: a listed command hides behind timeout in a compound, so
+	// the safe list resolves past launchers exactly where the dialog's naming does
+	b := newTestBarrierOpts(newFakePrompter(),
+		withMode(Options{SafeCommands: []string{"make", "make test"}}, ModeAllowRead))
+	d := b.Guard()(t.Context(), bashCall("cd repo && timeout 300 make test 2>&1 | tail -8"))
+	assert.Equal(t, tools.ActionAllow, d.Action)
+
+	// prefixed simple lines are covered too, through every launcher grammar
+	for _, cmd := range []string{"timeout 300 make test", "time make test", "nice -n 5 make test"} {
+		d = b.Guard()(t.Context(), bashCall(cmd))
+		assert.Equal(t, tools.ActionAllow, d.Action, cmd)
+	}
+
+	// an unknown launcher flag fails safe: the grammar refuses, no entry names the
+	// wrapper itself, so the line prompts rather than inheriting the wrapped listing
+	b2 := newTestBarrierOpts(newFakePrompter(),
+		withMode(Options{SafeCommands: []string{"make"}}, ModeAllowRead))
+	for _, cmd := range []string{
+		"timeout --unknown-flag 5 make test",
+		"nice --unknown make test",
+	} {
+		assert.Equal(t, tools.ActionAsk, b2.Guard()(t.Context(), bashCall(cmd)).Action, cmd)
+	}
+
+	// a compound whose prefixed segment names an unlisted write still prompts:
+	// the all-or-nothing gate holds through unwrapping
+	d = b.Guard()(t.Context(), bashCall("timeout 300 make test && rm x"))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+
+	// redirects still require in-scope resolution before any entry blesses the line
+	cwd := t.TempDir()
+	tmp := t.TempDir()
+	outside := t.TempDir()
+	o := withMode(Options{SafeCommands: []string{"make"}, WriteRoots: []string{cwd, tmp}}, ModeAutoWrite)
+	b3 := newTestBarrierOpts(newFakePrompter(), o)
+	d = b3.Guard()(t.Context(), bashCall("timeout 300 make test > "+tmp+"/t.log"))
+	assert.Equal(t, tools.ActionAllow, d.Action)
+	d = b3.Guard()(t.Context(), bashCall("timeout 300 make test > "+outside+"/t.log"))
+	assert.Equal(t, tools.ActionAsk, d.Action)
+}
+
 func TestGuardDenyMatches(t *testing.T) {
 	t.Parallel()
 
@@ -1128,6 +1172,30 @@ func TestAskerSessionGrants(t *testing.T) {
 
 		// an unrelated write command is not covered by the named grant
 		_, ok := b.sessionAllowed(bashCall("rm build"))
+		assert.False(t, ok)
+	})
+
+	// a grant stored under the wrapped name covers prefixed repeats of the command
+	t.Run("session_grant_covers_launcher_prefixes", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrier(p)
+
+		// the dialog names go test, not time: the key is what executes
+		displayIdx := slices.Index(optionActions(tools.ToolBash, "time go test ./..."), int(optAllowSession))
+		require.NotEqual(t, -1, displayIdx)
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"time go test ./..."}`), displayIdx)
+		assert.Equal(t, tools.ActionAllow, got.Action)
+
+		// later plain and prefixed runs match the grant without a dialog
+		n := p.count()
+		for _, cmd := range []string{"go test ./...", "nice -n 5 go test", "timeout 300 go test"} {
+			d := runAsk(b, t.Context(), "bash", []byte(`{"command":"`+cmd+`"}`))
+			assert.Equal(t, tools.ActionAllow, d.Action, cmd)
+		}
+		assert.Equal(t, n, p.count())
+
+		// an ungranted head behind a launcher still re-prompts
+		_, ok := b.sessionAllowed(bashCall("time go run ./cmd/x"))
 		assert.False(t, ok)
 	})
 

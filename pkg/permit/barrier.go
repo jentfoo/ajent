@@ -869,14 +869,24 @@ func safeBashLine(cmd string, cmds []string, scope writeScope, input json.RawMes
 // bareEntryCoversArgv reports whether raw starts with a configured entry at a
 // token boundary under a slash-free head: the file behind a path-qualified one
 // need not be what its basename suggests, so a safe command never blesses a
-// binary planted under an allowlisted name. Deny entries keep folding basenames
-// (argvCovers), a refusal over-matching on purpose.
+// binary planted under an allowlisted name. A launcher prefix is resolved past
+// where the grammar allows, an unknown flag leaving the launcher heading tokens
+// no entry names. Deny entries keep folding basenames (argvCovers), a refusal
+// over-matching on purpose.
 func bareEntryCoversArgv(raw string, cmds []string) bool {
 	toks := tokenizeRaw(raw)
 	if len(toks) == 0 || strings.Contains(toks[0], "/") {
 		return false
 	}
-	return safeArgvCovers(toks, cmds)
+	if safeArgvCovers(toks, cmds) {
+		return true
+	}
+	unwrapped := unwrapLaunchers(toks)
+	h := firstToken(unwrapped)
+	if len(unwrapped) == len(toks) || h == "" || strings.Contains(h, "/") {
+		return false // grammar refused or the wrapped head is path-qualified
+	}
+	return safeArgvCovers(unwrapped, cmds)
 }
 
 // safeArgvCovers is the allow-side twin of argvCovers: heads compare exactly,

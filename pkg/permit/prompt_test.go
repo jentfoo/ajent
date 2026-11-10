@@ -28,6 +28,11 @@ func TestBuildOptions(t *testing.T) {
 		{"echo hi && './cat' x", 3, ""},
 		// subcommand heads narrow the grant: git status never covers git push
 		{"git status", 4, "Allow `git status` for session"},
+		// a launcher prefix names what executes, not the wrapper
+		{"time go test ./...", 4, "Allow `go test` for session"},
+		{"nice -n 5 ifconfig eth0", 4, "Allow `ifconfig` for session"},
+		// a prefixed write still names the writer itself
+		{"time rm x", 4, "Allow `rm` for session"},
 		// a compound with one non-readonly head names it, read-only segments not counting
 		{"ifconfig | head -n 10", 4, "Allow `ifconfig` for session"},
 		{"rm build && ls", 4, "Allow `rm` for session"}, // ls is read-only, so only rm governs
@@ -97,6 +102,9 @@ func TestAllowSessionKey(t *testing.T) {
 		// a path-qualified head names no command, so it can never match a grant
 		{"bash", `/usr/bin/git status`, "bash:"},
 		{"bash", `go test ./...`, "bash:go test"},
+		// a prefixed line keys under what actually runs, matching the dialog's label
+		{"bash", `time go test ./...`, "bash:go test"},
+		{"bash", `timeout 300 make test`, "bash:make test"},
 		// operand commands stay head-granular: their second word names a file
 		{"bash", `rm -rf build`, "bash:rm"},
 		{"bash", `ifconfig eth0`, "bash:ifconfig"},

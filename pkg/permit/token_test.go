@@ -132,12 +132,38 @@ func TestUnwrapLaunchers(t *testing.T) {
 		// sudo must not unwrap, it changing privilege
 		{"sudo stays", []string{"sudo", "ls"}, []string{"sudo", "ls"}},
 		{"env stays", []string{"env", "FOO=1", "cmd"}, []string{"env", "FOO=1", "cmd"}},
-		// xargs/nice/stdbuf are not launchers and must never unwrap
+		// xargs/stdbuf are not launchers and must never unwrap
 		{"xargs preserved", []string{"find", ".", "-print0", "|", "xargs", "rm"},
 			[]string{"find", ".", "-print0", "|", "xargs", "rm"}},
 		// confused timeout parse returns original tokens
 		{"timeout no duration", []string{"timeout", "-k", "5", "ls"},
 			[]string{"timeout", "-k", "5", "ls"}},
+		// only bare time and -p unwrap, GNU's own flags failing safe to the head
+		{"time basic", []string{"time", "go", "test", "./..."}, []string{"go", "test", "./..."}},
+		{"time posix flag", []string{"time", "-p", "ls"}, []string{"ls"}},
+		{"time gnu flag stays", []string{"time", "-f", "%e", "ls"},
+			[]string{"time", "-f", "%e", "ls"}},
+		{"time output opt stays", []string{"time", "-o", "log", "ls"},
+			[]string{"time", "-o", "log", "ls"}},
+		{"time alone stays", []string{"time"}, []string{"time"}},
+		// nice unwraps through its adjustment grammar, negatives consuming their value
+		{"nice bare", []string{"nice", "make", "test"}, []string{"make", "test"}},
+		{"nice separate n", []string{"nice", "-n", "5", "go", "test"}, []string{"go", "test"}},
+		{"nice negative n", []string{"nice", "-n", "-15", "ls"}, []string{"ls"}},
+		{"nice signed long separate", []string{"nice", "--adjustment", "+5", "ls"}, []string{"ls"}},
+		{"nice long attached", []string{"nice", "--adjustment=10", "rm", "x"}, []string{"rm", "x"}},
+		{"nice long negative", []string{"nice", "--adjustment=-10", "rm", "x"}, []string{"rm", "x"}},
+		// a lone dashed token that is no adjustment fails safe to the prompt path
+		{"nice unknown flag stays", []string{"nice", "-p", "ls"}, []string{"nice", "-p", "ls"}},
+		{"nice invalid value stays", []string{"nice", "-n", "abc", "ls"},
+			[]string{"nice", "-n", "abc", "ls"}},
+		// a missing command leaves the launcher heading
+		{"nice alone stays", []string{"nice"}, []string{"nice"}},
+		{"nice value only stays", []string{"nice", "-n", "5"}, []string{"nice", "-n", "5"}},
+		// launchers chain, the innermost command surviving
+		{"chained launchers", []string{"nohup", "timeout", "30", "time", "git", "status"},
+			[]string{"git", "status"}},
+		{"nice wraps timeout", []string{"nice", "-n", "5", "timeout", "10", "ls"}, []string{"ls"}},
 		// a path-qualified launcher could be any binary, so it never unwraps
 		{"absolute launcher stays", []string{"/usr/bin/nohup", "git", "status"},
 			[]string{"/usr/bin/nohup", "git", "status"}},
@@ -157,6 +183,9 @@ func TestSegmentTokens(t *testing.T) {
 	assert.Equal(t, []string{"git", "status"}, segmentTokens("timeout 30 git status"))
 	// nohup is a launcher and unwraps away entirely
 	assert.Equal(t, []string{"ls"}, segmentTokens("nohup ls"))
+	// time and nice join the launchers, the wrapped command surviving
+	assert.Equal(t, []string{"go", "test", "./..."}, segmentTokens("time go test ./..."))
+	assert.Equal(t, []string{"git", "status"}, segmentTokens("nice -n 5 git status"))
 	// a path-qualified launcher stays, headOf refusing the head outright
 	assert.Equal(t, []string{"/usr/bin/nohup", "ls"}, segmentTokens("/usr/bin/nohup ls"))
 }
@@ -205,6 +234,7 @@ func TestHeadOfPathQualified(t *testing.T) {
 		`'./cat' x`,              // a quoted spelling keeps the path in the token
 		`"git" log`,              // a double quote overlaps a quoted region: no faithful word
 		"/usr/bin/nohup git log", // launcher not unwrapped, head refused outright
+		"./time ls",              // a path-qualified time could be any binary
 	} {
 		h, ok := headOf(seg)
 		assert.False(t, ok, seg)
@@ -227,8 +257,8 @@ func TestHeadOfKeywords(t *testing.T) {
 		assert.Empty(t, h)
 	}
 
-	// time is a real command a launcher unwrap can expose, staying nameable
+	// a launcher chain unwraps to what actually runs, so a timed write names rm
 	h, ok := headOf("timeout 5 time rm x")
 	require.True(t, ok)
-	assert.Equal(t, "time", h)
+	assert.Equal(t, "rm", h)
 }

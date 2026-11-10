@@ -286,9 +286,12 @@ func (s writeScope) segmentWritesInScope(bases []string, seg, raw string) bool {
 	if !ok {
 		return false
 	}
-	toks := tokenizeRaw(raw) // raw keeps quoted paths intact
+	toks := unwrapLaunchers(tokenizeRaw(raw)) // raw keeps quoted paths intact
 	if len(toks) < 2 || toks[0] != head {
-		return false // a path-qualified raw head never reaches here: headOf refuses it
+		// tokens resolve like segmentTokens did for headOf, so a timed or reniced
+		// write parses like its bare twin; a path-qualified raw head never reaches
+		// here (headOf refuses it), an unresolved grammar leaving the launcher
+		return false
 	}
 	args, ancestors, ok := spec.parseFlags(toks[1:])
 	if !ok || len(args) == 0 {

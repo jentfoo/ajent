@@ -123,6 +123,13 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		want bool
 	}{
 		{"mkdir_relative", "mkdir build", true},
+		// a launcher prefix parses like its bare twin, flags and all
+		{"timeout_prefix_mkdir", "timeout 5 mkdir -p sub/x", true},
+		{"time_prefix_mkdir", "time mkdir build", true},
+		{"nice_prefix_rmdir", "nice rmdir a b", true},
+		// an unresolved launcher grammar leaves the wrapper heading: fail safe
+		{"nice_unknown_flag_refused", "nice --unknown mkdir x", false},
+		{"time_gnu_flag_refused", "time -f ls build", false},
 		{"mkdir_parents_flag", "mkdir -p a/b/c", true},
 		{"mkdir_absolute_in_cwd", "mkdir " + cwd + "/x", true},
 		{"rmdir_relative", "rmdir build", true},

@@ -52,6 +52,10 @@ func TestClassify(t *testing.T) {
 		{"bash ls", "", "ls -la", nil, VerdictAllow},
 		{"bash grep pipeline", "", "grep foo f | sort", nil, VerdictAllow},
 		{"bash git status", "", "git status", nil, VerdictAllow},
+		// a launcher prefix exposes the wrapped command's own verdict
+		{"bash time ls", "", "time ls -la", nil, VerdictAllow},
+		{"bash nice grep", "", "nice grep foo src/", nil, VerdictAllow},
+		{"bash timed go test prompts", "", "time go test ./...", nil, VerdictPrompt},
 		// quoting a write flag cannot flip the verdict to allow
 		{"bash git quoted output", "", `git diff "--output=/tmp/evil.patch"`, nil, VerdictPrompt},
 		{"bash git quoted ext diff", "", `git log '--ext-diff'`, nil, VerdictPrompt},
@@ -154,6 +158,18 @@ func TestClassifyEdgeCases(t *testing.T) {
 	// a bare launcher still unwraps into the wrapped command's own verdict
 	t.Run("bare_launcher_still_allows", func(t *testing.T) {
 		assert.Equal(t, VerdictAllow, Classify(bashCall("nohup git status"), noRO))
+	})
+
+	// an unknown launcher flag fails safe: the grammar refuses and the launcher
+	// itself heads the line, naming nothing verifiably read-only
+	t.Run("launcher_unknown_flag_prompts", func(t *testing.T) {
+		for _, cmd := range []string{
+			"time -f '%e s' ls",
+			"nice --unknown ls",
+			"timeout --unknown-flag 5 make test",
+		} {
+			assert.Equal(t, VerdictPrompt, Classify(bashCall(cmd), noRO), cmd)
+		}
 	})
 
 	// and its write form still rejects through the same unwrap
