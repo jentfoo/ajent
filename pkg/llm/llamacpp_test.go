@@ -189,6 +189,26 @@ func TestParseOpenAIModels(t *testing.T) {
 		assert.Equal(t, "gemma-4:26b-a4b", got[1].Name)
 	})
 
+	t.Run("vllm_max_model_len_sets_context", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join("testdata", "openaimodels", "models_vllm.json"))
+		require.NoError(t, err)
+
+		got, err := parseOpenAIModels(data)
+		require.NoError(t, err)
+		require.Len(t, got, 1)
+		require.NotNil(t, got[0].ContextWindow)
+		assert.Equal(t, 500000, *got[0].ContextWindow) // max_model_len
+		assert.Nil(t, got[0].Input)                    // vLLM reports no modalities here
+	})
+
+	t.Run("meta_n_ctx_beats_max_model_len", func(t *testing.T) {
+		body := []byte(`{"data":[{"id":"a","max_model_len":500000,"meta":{"n_ctx":32768}}]}`)
+		got, err := parseOpenAIModels(body)
+		require.NoError(t, err)
+		require.NotNil(t, got[0].ContextWindow)
+		assert.Equal(t, 32768, *got[0].ContextWindow) // the loaded length wins
+	})
+
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseOpenAIModels([]byte("not json"))
 		assert.Error(t, err)

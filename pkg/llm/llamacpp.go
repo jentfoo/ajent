@@ -175,11 +175,12 @@ func (p *compatProvider) CountTokens(ctx context.Context, req Request) (int, err
 // them, in which case every listed model stays available.
 type openAIModels struct {
 	Data []struct {
-		ID      string `json:"id"`
-		Name    string `json:"name"`
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-		Status  struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Object      string `json:"object"`
+		OwnedBy     string `json:"owned_by"`
+		MaxModelLen int    `json:"max_model_len"` // vLLM
+		Status      struct {
 			Value string `json:"value"` // llama.cpp router: "loaded" or "unloaded"
 		} `json:"status"`
 		Meta struct {
@@ -196,8 +197,8 @@ type openAIModels struct {
 // flavor whose own endpoint cannot describe what is loaded (a llama.cpp router). A
 // llama.cpp router marks models it has not yet swapped in as unloaded, whereas
 // llama-swap proxies load unloaded models on demand when a turn is requested.
-// Its meta.n_ctx carries the real context window, which beats configuration for
-// that field.
+// The context window comes from llama.cpp's meta.n_ctx (the loaded length, which
+// beats configuration) and falls back to vLLM's max_model_len.
 func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 	var wire openAIModels
 	if err := json.Unmarshal(body, &wire); err != nil {
@@ -231,8 +232,12 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 		if len(input) > 0 {
 			m.Input = input
 		}
-		if d.Meta.NCtx > 0 {
-			m.ContextWindow = &d.Meta.NCtx
+		ctx := d.Meta.NCtx
+		if ctx == 0 {
+			ctx = d.MaxModelLen
+		}
+		if ctx > 0 {
+			m.ContextWindow = &ctx
 		}
 		out = append(out, m)
 	}
