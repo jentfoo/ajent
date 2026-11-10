@@ -27,8 +27,8 @@ const (
 	controlSocketMax = 100
 
 	// tokenPrefixLen is how much of a writer token names one instance's files:
-	// short enough for the socket budget, taken from the ULID's random tail so
-	// tokens minted in the same millisecond still name different instances.
+	// short enough for the socket budget, taken from the id's tail so tokens
+	// minted in the same second still name different instances.
 	tokenPrefixLen = 8
 
 	// connQueue is the soft bound on one connection's staged outbound lines:
@@ -87,8 +87,9 @@ func controlLayout(sessionID, token string) (dir, sock, reg string, warn string,
 	return dir, sock, reg, warn, nil
 }
 
-// tokenSuffix takes a token's trailing chars, the random half of its ULID, so
-// simultaneous writers never share one instance's file names.
+// tokenSuffix takes a token's trailing chars. The random tail sits at the low
+// end of the packed id, so this window always holds all 28 tail bits plus some
+// second bits, keeping simultaneous writers on distinct file names.
 func tokenSuffix(token string) string {
 	if len(token) > tokenPrefixLen {
 		return token[len(token)-tokenPrefixLen:]

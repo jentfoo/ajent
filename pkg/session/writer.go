@@ -232,13 +232,13 @@ func (w *Writer) appendLocked(typ Type, data any) (Entry, error) {
 	if w.checkGoneLocked() {
 		return Entry{}, ErrTranscriptGone
 	}
-	// TS shares the id's monotonic millisecond so ordering metadata matches append order
-	id, ts := newULID()
+	// one held-forward clock feeds both, so ordering by the id's second or this
+	// ts always matches append order even when the wall clock steps back
 	e := Entry{
-		ID:       id,
+		ID:       NewID(),
 		ParentID: w.head,
 		Type:     typ,
-		TS:       ts,
+		TS:       monoMilli(),
 		Data:     payload,
 	}
 	line, err := json.Marshal(e)

@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"sync"
 	"time"
 )
@@ -9,70 +10,59 @@ import (
 // crockford is the base32 alphabet ULID uses, minus I L O U.
 const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
+// idTailBits sizes an id's random tail. 12 Crockford chars pack 60 bits:
+// 32-bit unix seconds (to 2106) above this tail.
+const idTailBits = 28
+
 // clock supplies timestamps so tests are deterministic.
 var clock = func() time.Time { return time.Now().UTC() }
 
 var (
-	mu       sync.Mutex
-	lastMS   int64
-	randTail [10]byte // re-seeded per advancing millisecond, incremented within one
+	mu     sync.Mutex
+	lastMS int64  // held-forward millisecond clock feeding ids and entry stamps
+	idSec  uint64 // second idTail counts within, from lastMS
+	idTail uint32 // random-seeded counter, re-seeded per advancing second
 )
 
-// NewID returns a 26-char Crockford ULID: a 48-bit millisecond timestamp plus
-// 80 random bits, lexically sortable by creation time.
-func NewID() string {
-	id, _ := newULID()
-	return id
-}
-
-// newULID returns a fresh id and the monotonic millisecond embedded in it, so a
-// caller stamping metadata beside the id reads back exactly what the id encodes.
-func newULID() (string, int64) {
-	var b [16]byte
-
+// monoMilli returns a monotonic millisecond stamp: an advancing clock is
+// adopted fresh, otherwise the last value holds. Ids and entry stamps share it,
+// so ordering by either always agrees with append order.
+func monoMilli() int64 {
 	mu.Lock()
+	defer mu.Unlock()
+	return holdMSLocked()
+}
+
+// holdMSLocked advances lastMS to the clock when possible. Caller holds mu.
+func holdMSLocked() int64 {
 	if ms := clock().UnixMilli(); ms > lastMS {
-		lastMS = ms                   // fresh timestamp: re-seed entropy so prefixes spread across real time
-		_, _ = rand.Read(randTail[:]) // entropy failure leaves zero, still monotonic per process
+		lastMS = ms
 	}
-	incrementRand(randTail[:]) // strictly increasing even when the clock is pinned or ticks backward
-	ms := lastMS
-	for i := range 6 {
-		b[i] = byte(uint64(lastMS) >> uint((5-i)*8))
-	}
-	copy(b[6:16], randTail[:])
-	out := encodeULID(b)
-	mu.Unlock()
-	return out, ms
+	return lastMS
 }
 
-// incrementRand carries a big-endian counter forward by one.
-func incrementRand(r []byte) {
-	for i := len(r) - 1; i >= 0; i-- {
-		r[i]++
-		if r[i] != 0 {
-			break
-		}
-	}
-}
+// NewID returns a 12-char Crockford id packing 60 bits as 32-bit unix seconds
+// plus a 28-bit random tail, lexically ordered by creation time to the second.
+// Same-second ids across processes collide with probability at most 2^-28 per
+// pair; within one process they are strictly increasing.
+func NewID() string {
+	mu.Lock()
+	defer mu.Unlock()
 
-// encodeULID renders a 128-bit id as Crockford chars, MSB first.
-func encodeULID(id [16]byte) string {
-	var out [26]byte
+	sec := uint64(holdMSLocked()) / 1000
+	if sec != idSec { // fresh second: re-seed entropy so tails spread across real time
+		idSec = sec
+		var b [4]byte
+		_, _ = rand.Read(b[:]) // entropy failure leaves zero, still monotonic per process
+		idTail = binary.BigEndian.Uint32(b[:]) >> (32 - idTailBits)
+	}
+	idTail++                    // strictly increasing even when the clock is pinned or ticks backward
+	idTail &= 1<<idTailBits - 1 // wrap at 2^28 ids in one second is unreachable; mask documents width
+
+	v := sec<<idTailBits | uint64(idTail)
+	var out [12]byte
 	for i := range out {
-		out[i] = crockford[readBits5(id[:], i*5)]
+		out[i] = crockford[v>>(5*(11-i))&0x1f]
 	}
 	return string(out[:])
-}
-
-// readBits5 returns the five bits of b starting at start, MSB first.
-func readBits5(b []byte, start int) byte {
-	var v uint32
-	for k := range 5 { // bits at start..start+4, MSB first
-		i := start + k
-		if i < len(b)*8 && b[i/8]&(0x80>>uint(i%8)) != 0 {
-			v |= 1 << (4 - k)
-		}
-	}
-	return byte(v)
 }

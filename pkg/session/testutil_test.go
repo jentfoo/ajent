@@ -21,14 +21,15 @@ func ids(entries []Entry) []string {
 	return out
 }
 
-// idTimeMS decodes the millisecond timestamp a Crockford ULID embeds. Tests use
-// it to tie an entry's ts back to its own id without reaching into package state.
-func idTimeMS(id string) int64 {
-	var ms int64
-	for i := range 10 { // ten chars carry 50 bits; the timestamp is the top 48
-		ms = ms<<5 | int64(strings.IndexByte(crockford, id[i]))
+// idTimeSec decodes the unix second an id embeds (first seven chars carry 35
+// bits, the top 32 are the second). Tests use it to tie an entry's ts back to
+// its own id without reaching into package state.
+func idTimeSec(id string) int64 {
+	var v int64
+	for i := range 7 {
+		v = v<<5 | int64(strings.IndexByte(crockford, id[i]))
 	}
-	return ms >> 2
+	return v >> 3
 }
 
 // msgData marshals a user text message payload for tests.

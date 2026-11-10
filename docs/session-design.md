@@ -72,15 +72,24 @@ can read files written by newer ones.
 
 ### IDs
 
-IDs are Crockford ULIDs: a millisecond timestamp plus a random tail. They sort
-lexically by creation time (so `Store.List` can order sessions newest first),
-and the random tail makes them unique without a central counter. The counter's
-timestamp only moves forward: on an advancing clock it is adopted fresh
-(re-seeding entropy so prefixes spread across real time). Otherwise
-(same-millisecond bursts, tests pinning `clock`, an OS stepping back) the
-current timestamp is held and the random suffix incremented. IDs stay strictly
-increasing within a process even when the wall clock ticks backward, while
-remaining unique across processes.
+IDs are 12 Crockford characters packing 60 bits: 32-bit unix seconds plus a
+28-bit random tail. They sort lexically by creation time to the second (so
+`Store.List` can order sessions newest first). Two decisions sit behind that
+split:
+
+- **Second granularity is exact within a process.** The clock only moves
+  forward: on an advancing second it is adopted fresh (re-seeding entropy so
+  tails spread across real time), otherwise the current second is held and the
+  tail incremented, so IDs stay strictly increasing even when the wall clock
+  ticks backward.
+- **Cross-process same-second ties resolve by random tail.** Two processes
+  minting in one second order by tail: a deterministic total order every racer
+  agrees on (what the name-race settlement needs), not a chronological one.
+  Uniqueness leans on that tail, priced at ~2^-28 per coincident pair.
+
+Sub-second ordering across processes is the deliberate loss. If it ever
+matters, the fallback shape is ~15 chars (48-bit ms + 27-bit tail) at nearly
+the same entropy margin, no writer change.
 
 ## The writer
 
@@ -90,8 +99,9 @@ mutex so concurrent appends form one linear chain.
 `Append(typ, data)` stamps `ParentID` from the current head and writes exactly
 one line under the mutex. That write is fenced by an exclusive lock on the
 transcript (see concurrent access below), so concurrent *processes* interleave whole
-lines rather than bytes. The entry timestamp shares the id's monotonic
-millisecond: ts-derived ordering (`Store.List`, `Stale`) always agrees with append
+lines rather than bytes. The entry timestamp and each new id come from one
+held-forward clock (a millisecond stamp, the id's second derived from it):
+ts-derived ordering (`Store.List`, `Stale`) always agrees with append
 order even when the wall clock steps back. The new id becomes the head only
 *after* a successful write, so an append that fails to hit disk never advances it.
 
@@ -177,7 +187,7 @@ coordination by four rules:
    the file has grown, so a concurrent writer's entries never land unseen.
 
 **Name races** between two `--session <name>` creators settle
-deterministically: the older session id keeps the name and the younger takes a numeric
+deterministically: the smaller session id keeps the name and the other takes a numeric
 suffix through a recorded `session_name` entry before its first prompt.
 
 ## The store

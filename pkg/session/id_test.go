@@ -1,6 +1,7 @@
 package session
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ func setClock(t time.Time) func() {
 func pinClock(t time.Time) func() {
 	mu.Lock()
 	oldFloor := lastMS
+	oldSec := idSec
 	mu.Unlock()
 	restoreClock := setClock(t)
 	resetIDCounter()
@@ -27,6 +29,7 @@ func pinClock(t time.Time) func() {
 		restoreClock()
 		mu.Lock()
 		lastMS = oldFloor
+		idSec = oldSec
 		mu.Unlock()
 	}
 }
@@ -37,38 +40,51 @@ func resetIDCounter() {
 	mu.Lock()
 	defer mu.Unlock()
 	lastMS = 0
+	idSec = 0
+}
+
+// idValue decodes an id's packed integer (seconds above the random tail), so
+// the lexical sort pins against numeric order.
+func idValue(id string) uint64 {
+	var v uint64
+	for i := range len(id) {
+		v = v<<5 | uint64(strings.IndexByte(crockford, id[i]))
+	}
+	return v
 }
 
 func TestNewID(t *testing.T) {
-	// the sorted-by-time and monotonic cases mutate the package clock, so this cannot run in parallel
+	// the cases below mutate the package clock, so this cannot run in parallel
 
 	t.Run("length_and_alphabet", func(t *testing.T) {
 		id := NewID()
-		assert.Len(t, id, 26)
+		assert.Len(t, id, 12)
 		for _, c := range id {
 			assert.Contains(t, crockford, string(c))
 		}
 	})
 
-	// increasing timestamps produce ids that sort in that order
+	// increasing seconds produce ids that sort in that order
 	t.Run("sorted_by_time", func(t *testing.T) {
-		t.Cleanup(setClock(time.UnixMilli(1_700_000_000_123).UTC()))
+		base := time.Now().Add(time.Hour).UTC()
+		t.Cleanup(pinClock(base)) // a future stamp is adopted outright, floors restored after
 
-		base := int64(1_750_234_567_890)
 		var prev string
 		for i := range 5 {
-			setClock(time.UnixMilli(base + int64(i)*1000).UTC())
+			setClock(base.Add(time.Duration(i) * time.Second))
 			id := NewID()
 			if prev != "" {
 				assert.Greater(t, id, prev)
+				assert.Greater(t, idValue(id), idValue(prev)) // lexical order reduces to the integers
 			}
 			prev = id
 		}
 	})
 
-	// one pinned timestamp still yields increasing ids
-	t.Run("monotonic_within_ms", func(t *testing.T) {
-		t.Cleanup(setClock(time.UnixMilli(1_700_000_123).UTC()))
+	// one pinned second still yields increasing ids
+	t.Run("monotonic_within_second", func(t *testing.T) {
+		base := time.Now().Add(time.Hour).UTC()
+		t.Cleanup(pinClock(base))
 
 		var prev string
 		for range 200 {
@@ -79,34 +95,20 @@ func TestNewID(t *testing.T) {
 			prev = id
 		}
 	})
-}
 
-func TestNewULID(t *testing.T) {
-	// resets the package counter and clock, so this cannot run in parallel
-
-	t.Run("ms_matches_embedded_id", func(t *testing.T) {
+	// a wall clock stepping backward holds the stamp while ids still advance
+	t.Run("backward_clock_holds_stamp", func(t *testing.T) {
 		base := time.Now().Add(time.Hour).UTC()
 		t.Cleanup(pinClock(base))
 
-		id, ms := newULID()
-
-		assert.Equal(t, base.UnixMilli(), ms) // a fresh clock is adopted outright
-		assert.Equal(t, idTimeMS(id), ms)     // and is exactly what the id encodes
-	})
-
-	// a wall clock stepping backward holds the timestamp while ids still advance
-	t.Run("backward_clock_holds_ms", func(t *testing.T) {
-		base := time.Now().Add(time.Hour).UTC()
-		t.Cleanup(pinClock(base))
-
-		id1, ms1 := newULID()
+		id1 := NewID()
+		ms := monoMilli()
 		setClock(base.Add(-time.Minute)) // the wall clock steps backward
-		id2, ms2 := newULID()
+		id2 := NewID()
 
-		assert.Equal(t, base.UnixMilli(), ms1)
-		assert.Equal(t, idTimeMS(id1), ms1) // ts equals what each id encodes
-		assert.Equal(t, idTimeMS(id2), ms2)
-		assert.Equal(t, ms1, ms2) // the counter holds its millisecond
-		assert.Greater(t, id2, id1)
+		assert.Equal(t, base.UnixMilli(), ms)    // a fresh clock is adopted outright
+		assert.Equal(t, ms, monoMilli())         // and held through the backward step
+		assert.Equal(t, ms/1000, idTimeSec(id2)) // the id shares that held second
+		assert.Greater(t, id2, id1)              // ids keep advancing past it
 	})
 }

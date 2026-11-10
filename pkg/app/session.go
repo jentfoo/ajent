@@ -269,7 +269,8 @@ func openSession(store *session.Store, mode ResumeMode, cwd string, target, mode
 	}
 	// freshNamed is fresh plus the create-race check: a second --session <name>
 	// losing the race suffix-renames itself before its first prompt, so exactly
-	// one session carries the name (the older session id, ULIDs sort by time).
+	// one session carries the name (the smaller session id keeps it, ids order
+	// lexically).
 	freshNamed := func(name string) (*session.Writer, snapshot, string, error) {
 		w, snap, note, err := fresh(name)
 		if err != nil || w == nil {
@@ -409,14 +410,14 @@ func nameRivals(listed []session.Info, name, selfPath string) []session.Info {
 	}, listed)
 }
 
-// renameRaceLoser settles a --session <name> create race: the older session id
-// (ULIDs sort by time) keeps the name, the younger suffix-renames to name-2,
+// renameRaceLoser settles a --session <name> create race: the smaller session
+// id (ids order lexically) keeps the name, the larger suffix-renames to name-2,
 // -3, ... until nothing matches, recorded as a session_name entry so
 // SessionData stays untouched. Deterministic, so both racers cannot rename.
 // It returns the notice naming the rename, empty when this run won or raced
 // nobody.
 func renameRaceLoser(store *session.Store, cwd, name string, w *session.Writer) string {
-	// the root entry id is the head right after Create, and it sorts by creation
+	// the root entry id is the head right after Create, and id order settles the race
 	mine := w.Head()
 	listed, err := store.List(cwd)
 	if err != nil {

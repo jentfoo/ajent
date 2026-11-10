@@ -505,7 +505,10 @@ One entry is one line:
 {"id":"01J...","parentId":"01J...","type":"message","ts":1730000000000,"data":{...}}
 ```
 
-`id` is a Crockford ULID, so ids sort lexically by creation time and `ts` is unix milliseconds.
+`id` is a 12-char Crockford id: 32-bit unix seconds plus a random tail, so ids
+sort lexically by creation time to the second. `ts` is unix milliseconds. Ids
+are opaque strings, so transcripts started on older builds keep their longer
+(26-char) ids.
 `parentId` links the entry into the session tree (empty means root), which is what makes
 branching, rewind history and abandoned forks reconstructible. Types and payloads:
 
