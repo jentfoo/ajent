@@ -93,6 +93,9 @@ type HeadlessOptions struct {
 	Scope      ToolScope
 	AllowTools []string
 	DenyTools  []string
+	// BlockAutoDenied is accepted for script parity and changes nothing: a
+	// one-shot never opens an approval dialog to begin with.
+	BlockAutoDenied bool
 
 	Out      io.Writer
 	Errw     io.Writer
@@ -115,6 +118,9 @@ type RunOptions struct {
 	Attach      string   // --attach [name|id|socket]: mirror that session's control socket
 	AttachGiven bool     // --attach was given, bare or with a target
 	Force       bool     // --force: with --attach take the control seat from its holder
+	// BlockAutoDenied settles every ask fail-closed instead of opening an
+	// approval dialog; orthogonal to Scope, which only names the starting gate.
+	BlockAutoDenied bool
 
 	SessMode     ResumeMode
 	SessTarget   string
@@ -124,14 +130,15 @@ type RunOptions struct {
 // ServeOptions carries what RunServe needs; the driver derives the rest from
 // the set and registry.
 type ServeOptions struct {
-	Set          *config.Set
-	Reg          *llm.Registry
-	Active       llm.Model
-	SessMode     ResumeMode
-	SessTarget   string
-	SessResolved SessionResolution
-	Warnings     []string
-	Scope        ToolScope
+	Set             *config.Set
+	Reg             *llm.Registry
+	Active          llm.Model
+	SessMode        ResumeMode
+	SessTarget      string
+	SessResolved    SessionResolution
+	Warnings        []string
+	Scope           ToolScope
+	BlockAutoDenied bool // passes through to Driver like Scope does
 }
 
 // AttachOptions carries what RunAttach needs: the socket to follow and the

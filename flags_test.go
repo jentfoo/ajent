@@ -213,8 +213,10 @@ func TestCliFlagsValidate(t *testing.T) {
 		{"interactive_read_only", []string{"--read-only"}, true},
 		{"interactive_allow_auto", []string{"--allow-auto"}, true},
 		{"interactive_allow_autowrite", []string{"--allow-autowrite"}, true},
+		{"interactive_block_autodenied", []string{"--block-autodenied"}, true},
 		{"simple_prompt", []string{"-p", "hi"}, true},
 		{"prompt_with_allow_all", []string{"-p", "hi", "--allow-all"}, true},
+		{"prompt_with_block_autodenied", []string{"-p", "hi", "--block-autodenied"}, true},
 		{"prompt_with_json", []string{"-p", "hi", "-o", "json"}, true},
 		{"prompt_with_resume_id", []string{"-p", "hi", "--resume", "abc"}, true},
 		{"prompt_with_continue", []string{"-p", "hi", "--continue"}, true},
@@ -319,6 +321,7 @@ func TestCliFlagsValidate(t *testing.T) {
 			{"output_format_refused", []string{"--attach", "/x.sock", "-o", "json"}, "only applies to a local run"},
 			{"delete_combined", []string{"--delete", "a", "--attach", "/x.sock"}, "cannot be combined"},
 			{"no_tools_refused", []string{"--attach", "/x.sock", "--no-tools"}, "only applies to a local run"},
+			{"block_autodenied_refused", []string{"--attach", "/x.sock", "--block-autodenied"}, "only applies to a local run"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				f, perr := parseFlags(tc.argv)

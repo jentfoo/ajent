@@ -255,6 +255,9 @@ The CLI is deliberately small. Run `ajent --help` for the full list, and the imp
                        classified, and a one-shot takes the verdict as final
     --allow-autowrite  like --allow-auto plus workspace-confined writes run
                        without approval
+    --block-autodenied deny what the model classifier does not approve instead
+                       of opening an approval dialog; one-shot runs are
+                       unaffected (already unattended)
 -p, --prompt <text>    run one turn non-interactively, print the result and exit
 -o, --output <shape>   one-shot output: text (final answer) or json (one event per line)
     --system <text>    replace ajent's default prose guidance in the system prompt

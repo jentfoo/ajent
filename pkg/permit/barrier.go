@@ -45,10 +45,11 @@ type Barrier struct {
 	deny       func(agent.ToolCall) bool // config-declared denied commands, nil = none
 	scope      writeScope                // auto+write's writable roots, zero allows nothing
 
-	grants []string        // construction grants, re-applied after every mode change
-	allows map[string]bool // session allows by allowSessionKey
-	open   []*pendingAsk   // live dialogs, re-evaluated on mode change
-	warm   map[string]context.CancelFunc
+	blockAutoDenied bool            // no dialog for a call the classifier did not approve
+	grants          []string        // construction grants, re-applied after every mode change
+	allows          map[string]bool // session allows by allowSessionKey
+	open            []*pendingAsk   // live dialogs, re-evaluated on mode change
+	warm            map[string]context.CancelFunc
 }
 
 // pendingAsk tracks one open approval dialog so a mode change can resolve it.
@@ -75,16 +76,17 @@ type Dialogs struct {
 // Grants pre-populate the session-allow memory and survive the mode changes
 // that clear earned grants.
 type Options struct {
-	Mode           Mode // starting gate, ignored unless ModeSet
-	ModeSet        bool // whether Mode overrides the default
-	Grants         []string
-	Dialogs        *Dialogs                   // approval UI, nil meaning unattended
-	Classifier     ClassifierFn               // required: auto-mode verdicts for every gated call
-	Notice         func(string)               // required: transient status notices
-	DryRun         func(agent.ToolCall) error // required: registry-backed edit dry run
-	SafeCommands   []string                   // exact tool names or bash lines skipping the prompt
-	DeniedCommands []string                   // exact tool names or bash lines refused in every mode
-	WriteRoots     []string                   // auto+write's writable roots, empty allowing none
+	Mode            Mode // starting gate, ignored unless ModeSet
+	ModeSet         bool // whether Mode overrides the default
+	Grants          []string
+	Dialogs         *Dialogs                   // approval UI, nil meaning unattended
+	Classifier      ClassifierFn               // required: auto-mode verdicts for every gated call
+	Notice          func(string)               // required: transient status notices
+	DryRun          func(agent.ToolCall) error // required: registry-backed edit dry run
+	SafeCommands    []string                   // exact tool names or bash lines skipping the prompt
+	DeniedCommands  []string                   // exact tool names or bash lines refused in every mode
+	WriteRoots      []string                   // auto+write's writable roots, empty allowing none
+	BlockAutoDenied bool                       // settle asks fail-closed instead of opening an approval dialog
 }
 
 // NewBarrier builds a Barrier from o, consulting ro for whether built-in tools
@@ -95,15 +97,16 @@ func NewBarrier(ro func(string) bool, o Options) *Barrier {
 		panic("permit: Classifier, Notice and DryRun are required at construction")
 	}
 	b := &Barrier{
-		mode:       ModeAllowRead,
-		allows:     make(map[string]bool),
-		warm:       make(map[string]context.CancelFunc),
-		ro:         ro,
-		grants:     o.Grants,
-		dialogs:    o.Dialogs,
-		classifier: newCachedClassifier(o.Classifier, classCacheMax),
-		notice:     o.Notice,
-		dryRun:     o.DryRun,
+		mode:            ModeAllowRead,
+		allows:          make(map[string]bool),
+		warm:            make(map[string]context.CancelFunc),
+		ro:              ro,
+		grants:          o.Grants,
+		dialogs:         o.Dialogs,
+		classifier:      newCachedClassifier(o.Classifier, classCacheMax),
+		notice:          o.Notice,
+		dryRun:          o.DryRun,
+		blockAutoDenied: o.BlockAutoDenied,
 	}
 	if len(o.WriteRoots) > 0 {
 		b.scope = newWriteScope(o.WriteRoots[0], o.WriteRoots[1:]...)
@@ -321,6 +324,8 @@ func holdForDialog(ctx context.Context, p Prompter, verdict <-chan Class) (<-cha
 // Asker resolves a guard's ask into allow or deny. It consults session allows,
 // holds the prompter while the user types, then opens an approval dialog. In the
 // auto modes a concurrent classification can approve the call without a dialog.
+// With BlockAutoDenied no dialog exists: anything short of a classifier allow
+// settles as an unattended run's ask would.
 func (b *Barrier) Asker() tools.Asker {
 	return func(ctx context.Context, call agent.ToolCall) tools.Decision {
 		g := b.gateNow()
@@ -339,6 +344,17 @@ func (b *Barrier) Asker() tools.Asker {
 
 		if b.dialogs == nil { // nobody to ask; the auto modes still get a verdict
 			return b.unattendedAsk(ctx, call)
+		}
+
+		// block-autodenied: no approval dialog exists, so any non-allow verdict
+		// settles fail-closed exactly as an unattended run's would. Prefetch has
+		// still warmed the cache, so a banked verdict resolves at once.
+		if g.blockAutoDenied {
+			d := b.unattendedAsk(ctx, call)
+			if d.Action != tools.ActionAllow && ctx.Err() == nil { // an abort explains itself, like the dialog path
+				b.autoDenyNotice()
+			}
+			return d
 		}
 
 		// the auto modes classify the call while the user types, the verdict racing
@@ -703,15 +719,26 @@ func (b *Barrier) resolveNotice(scope string, auto bool) {
 	}
 }
 
+// autoDenyNotice reports one auto-denied call where a dialog no longer opens,
+// so an interactive user sees why the tool never ran.
+func (b *Barrier) autoDenyNotice() {
+	b.mu.Lock()
+	n := b.notice
+	b.mu.Unlock()
+
+	n("Tool auto denied")
+}
+
 // gate is the barrier's decision state, snapshotted under the lock so a verdict
 // never races a Set* installer.
 type gate struct {
-	mode   Mode
-	ro     func(string) bool
-	dryRun func(agent.ToolCall) error
-	safe   func(agent.ToolCall) bool
-	deny   func(agent.ToolCall) bool
-	scope  writeScope
+	mode            Mode
+	ro              func(string) bool
+	dryRun          func(agent.ToolCall) error
+	safe            func(agent.ToolCall) bool
+	deny            func(agent.ToolCall) bool
+	scope           writeScope
+	blockAutoDenied bool
 }
 
 // gateFor snapshots the decision state alongside mode.
@@ -719,7 +746,8 @@ func (b *Barrier) gateFor(m Mode) gate {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return gate{mode: m, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
+	return gate{mode: m, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny,
+		scope: b.scope, blockAutoDenied: b.blockAutoDenied}
 }
 
 // gateNow snapshots the decision state with the live mode.
@@ -727,7 +755,8 @@ func (b *Barrier) gateNow() gate {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	return gate{mode: b.mode, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny, scope: b.scope}
+	return gate{mode: b.mode, ro: b.ro, dryRun: b.dryRun, safe: b.safe, deny: b.deny,
+		scope: b.scope, blockAutoDenied: b.blockAutoDenied}
 }
 
 // staticVerdict computes the guard's verdict for call under mode without blocking.

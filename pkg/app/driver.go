@@ -47,7 +47,7 @@ const shutdownDrainWait = 100 * time.Millisecond
 // socket is the only front end and a startup failure returns a non-nil error.
 // Returns the transcript label for an exit-time `--resume` hint, empty when
 // there is nothing to resume.
-func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope) (string, error) {
+func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope, blockAutoDenied bool) (string, error) {
 	serve := term == nil
 	providers := llm.NewProviders(reg)
 	rc := llm.ReasoningFrom(set.Settings().Reasoning, active)
@@ -421,6 +421,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		if m, ok := scope.barrierMode(); ok {
 			po.Mode, po.ModeSet = m, true
 		}
+		// --block-autodenied: asks settle fail-closed instead of opening a dialog,
+		// orthogonal to which gate starts live
+		po.BlockAutoDenied = blockAutoDenied
 		// the ask-a-person paths install as one unit: dialogs open through the
 		// broker, note injection steers the running turn without stopping
 		// it, and Hold runs the typing gate's dialog hold so an approval dialog

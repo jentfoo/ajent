@@ -43,18 +43,19 @@ type cliFlags struct {
 	deleteOld     bool   // --delete-old: sweep unnamed sessions unused past the cutoff
 	deleteOldDays int    // days from --delete-old <days>, 0 when the default applies
 
-	prompt      string
-	promptGiven bool   // -p/--prompt appeared, even when its value trims away
-	system      string // --system: replaces ajent's default prose guidance when non-empty
-	output      string
-	stats       bool
-	allowAll    bool
-	readOnly    bool
-	allowAuto   bool
-	autoWrite   bool
-	noTools     bool
-	allowTools  []string
-	denyTools   []string
+	prompt          string
+	promptGiven     bool   // -p/--prompt appeared, even when its value trims away
+	system          string // --system: replaces ajent's default prose guidance when non-empty
+	output          string
+	stats           bool
+	allowAll        bool
+	readOnly        bool
+	allowAuto       bool
+	autoWrite       bool
+	blockAutoDenied bool // --block-autodenied: asks settle fail-closed, never a dialog
+	noTools         bool
+	allowTools      []string
+	denyTools       []string
 
 	args     []string // positional arguments, joined into a bootstrap prompt
 	headless []string // headless flag names actually given, for validation
@@ -121,6 +122,9 @@ func parseFlags(argv []string) (cliFlags, error) {
 		"start in auto mode: unverifiable calls are model-classified, and a one-shot takes the verdict as final")
 	fs.BoolVar(&f.autoWrite, "allow-autowrite", false,
 		"like --allow-auto plus workspace-confined writes run without approval")
+	fs.BoolVar(&f.blockAutoDenied, "block-autodenied", false,
+		"deny calls the model classifier does not approve instead of opening an "+
+			"approval dialog; one-shot runs are already unattended and unaffected")
 	fs.BoolVar(&f.noTools, "no-tools", false,
 		"one-shot: withhold the whole tool set, built-ins and MCP alike")
 	fs.StringSliceVar(&f.allowTools, "allow-tools", nil,
@@ -223,6 +227,9 @@ func (f cliFlags) validate() error {
 		}
 		if f.system != "" {
 			locals = append(locals, "--system")
+		}
+		if f.blockAutoDenied {
+			locals = append(locals, "--block-autodenied") // configures the local barrier attach never builds
 		}
 		locals = append(locals, f.headless...)
 		if len(locals) > 0 {

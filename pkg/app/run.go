@@ -110,11 +110,12 @@ func Run(o RunOptions) int {
 	if o.Serve {
 		return RunServe(ServeOptions{
 			Set: set, Reg: reg, Active: active,
-			SessMode:     o.SessMode,
-			SessTarget:   o.SessTarget,
-			SessResolved: o.SessResolved,
-			Warnings:     warnings,
-			Scope:        o.Scope,
+			SessMode:        o.SessMode,
+			SessTarget:      o.SessTarget,
+			SessResolved:    o.SessResolved,
+			Warnings:        warnings,
+			Scope:           o.Scope,
+			BlockAutoDenied: o.BlockAutoDenied,
 		})
 	}
 
@@ -131,16 +132,17 @@ func Run(o RunOptions) int {
 	if route == routeHeadless {
 		return RunHeadless(HeadlessOptions{
 			Set: set, Reg: reg, Active: active,
-			SessMode:     o.SessMode,
-			SessTarget:   o.SessTarget,
-			SessResolved: o.SessResolved,
-			Warnings:     warnings,
-			Prompt:       text,
-			Output:       o.Output,
-			Stats:        o.Stats,
-			Scope:        o.Scope,
-			AllowTools:   o.AllowTools,
-			DenyTools:    o.DenyTools,
+			SessMode:        o.SessMode,
+			SessTarget:      o.SessTarget,
+			SessResolved:    o.SessResolved,
+			Warnings:        warnings,
+			Prompt:          text,
+			Output:          o.Output,
+			Stats:           o.Stats,
+			Scope:           o.Scope,
+			AllowTools:      o.AllowTools,
+			DenyTools:       o.DenyTools,
+			BlockAutoDenied: o.BlockAutoDenied,
 		})
 	}
 
@@ -183,7 +185,7 @@ func Run(o RunOptions) int {
 		go version.CheckForUpdate(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 	}
 
-	resumeLabel, derr := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope)
+	resumeLabel, derr := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope, o.BlockAutoDenied)
 	if derr != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", derr)
 		return ExitUsage
@@ -205,7 +207,7 @@ func RunServe(o ServeOptions) int {
 	for _, w := range o.Warnings {
 		_, _ = fmt.Fprintln(os.Stderr, w)
 	}
-	label, err := Driver(nil, o.Set, o.Reg, o.Active, o.SessMode, o.SessTarget, o.SessResolved, nil, o.Scope)
+	label, err := Driver(nil, o.Set, o.Reg, o.Active, o.SessMode, o.SessTarget, o.SessResolved, nil, o.Scope, o.BlockAutoDenied)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
 		return ExitUsage

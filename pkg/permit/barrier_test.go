@@ -841,6 +841,153 @@ func TestAskerUnattendedAuto(t *testing.T) {
 	})
 }
 
+func TestAskerBlockAutoDenied(t *testing.T) {
+	t.Parallel()
+
+	// a deny verdict settles fail-closed without ever opening a dialog
+	t.Run("deny_resolves_without_dialog", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassDeny}
+		n := &noticeRecorder{}
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Classifier: cl.Classify, Notice: n.record}, ModeAuto))
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"rm -rf build"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.Zero(t, p.count())
+		assert.EqualValues(t, 1, cl.calls.Load())
+		require.Len(t, n.all(), 1) // one notice stands in for the dialog that never opened
+	})
+
+	// unsure is never cached, so a transient failure re-classifies instead of
+	// becoming a permanent denial
+	t.Run("unsure_denies_and_reclassifies", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassUnsure}
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Classifier: cl.Classify}, ModeAuto))
+
+		for range 2 {
+			d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+			assert.Equal(t, tools.ActionDeny, d.Action)
+		}
+		assert.Zero(t, p.count())
+		assert.EqualValues(t, 2, cl.calls.Load())
+	})
+
+	// an allow verdict still runs the call, even with a hold gate armed: no dialog
+	// is coming, so there is nothing to defer it behind
+	t.Run("allow_runs_mid_hold", func(t *testing.T) {
+		p := newFakePrompter()
+		release := p.beginHold() // never released; the verdict must not wait on typing
+		defer release()
+		cl := &fakeClassifier{verdict: ClassAllow}
+		n := &noticeRecorder{}
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Classifier: cl.Classify, Notice: n.record}, ModeAuto))
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Zero(t, p.count())
+		require.Len(t, n.all(), 1)
+	})
+
+	// a construction grant answers before any classification, widening no deny path
+	t.Run("session_grant_still_allows", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassDeny} // would deny if ever consulted
+		n := &noticeRecorder{}
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Grants: []string{"write"}, Classifier: cl.Classify,
+			Notice: n.record}, ModeAllowRead))
+
+		d := runAsk(b, t.Context(), "write", []byte(`{}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Zero(t, p.count())
+		assert.Zero(t, cl.calls.Load())
+		assert.Empty(t, n.all())
+	})
+
+	// a configured safe command resolves statically before the asker's classifier
+	t.Run("safe_command_still_allows", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassDeny} // would deny if ever consulted
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, SafeCommands: []string{"git status"},
+			Classifier: cl.Classify}, ModeAuto))
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"git status"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Zero(t, p.count())
+		assert.Zero(t, cl.calls.Load())
+	})
+
+	// a core writer gets no classifier verdict under plain auto: denied, not prompted
+	t.Run("core_writer_denied_without_model", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassAllow} // would allow if ever consulted
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Classifier: cl.Classify}, ModeAuto))
+
+		d := runAsk(b, t.Context(), "write", []byte(`{}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Equal(t, unattendedDenyReason, d.Reason)
+		assert.Zero(t, p.count())
+		assert.Zero(t, cl.calls.Load())
+	})
+
+	// outside the auto modes nothing classifies: every ask denies without a dialog
+	t.Run("read_only_denies_without_model", func(t *testing.T) {
+		p := newFakePrompter()
+		cl := &fakeClassifier{verdict: ClassAllow} // would allow if ever consulted
+		b := newTestBarrierOpts(p, withMode(Options{
+			BlockAutoDenied: true, Classifier: cl.Classify}, ModeAllowRead))
+
+		d := runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`))
+		assert.Equal(t, tools.ActionDeny, d.Action)
+		assert.Zero(t, p.count())
+		assert.Zero(t, cl.calls.Load())
+	})
+
+	// a mode change while the classification runs still discards the stale verdict,
+	// inheriting unattendedAsk's rule rather than forking it
+	t.Run("mode_change_discards_stale_verdict", func(t *testing.T) {
+		for _, c := range []struct {
+			name string
+			next Mode
+			want tools.Action
+		}{
+			{"new_mode_asks", ModeAllowRead, tools.ActionDeny},
+			{"new_mode_allows", ModeAllowAll, tools.ActionAllow},
+		} {
+			t.Run(c.name, func(t *testing.T) {
+				p := newFakePrompter()
+				cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
+				b := newTestBarrierOpts(p, withMode(Options{
+					BlockAutoDenied: true, Classifier: cl.Classify}, ModeAuto))
+
+				done := make(chan tools.Decision, 1)
+				go func() {
+					done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm -rf tmpbuild"}`))
+				}()
+				require.Eventually(t, func() bool { return cl.calls.Load() > 0 }, time.Second, 10*time.Millisecond)
+
+				b.SetMode(c.next) // the mode that launched the classifier no longer decides
+				close(cl.release)
+
+				select {
+				case got := <-done:
+					assert.Equal(t, c.want, got.Action)
+				case <-time.After(time.Second):
+					t.Fatal("ask never settled")
+				}
+				assert.Zero(t, p.count()) // still no dialog under either mode
+			})
+		}
+	})
+}
+
 func TestGrantSessionAllows(t *testing.T) {
 	t.Parallel()
 

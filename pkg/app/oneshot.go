@@ -249,8 +249,10 @@ func RunHeadless(o HeadlessOptions) int {
 		safe:        o.Set.Settings().Permissions.SafeCommands,
 		denied:      o.Set.Settings().Permissions.DeniedCommands,
 	}
+	// BlockAutoDenied rides along for script parity: a one-shot already settles
+	// every ask fail-closed, so the flag changes nothing here.
 	barrier := permit.NewBarrier(toolsReg.ReadOnly, bd.options(permit.Options{
-		Mode: m, ModeSet: true, Grants: o.AllowTools,
+		Mode: m, ModeSet: true, Grants: o.AllowTools, BlockAutoDenied: o.BlockAutoDenied,
 	}))
 	bd.install(barrier)
 	// a batch's classified calls launch concurrently and agent_start calls reserve
