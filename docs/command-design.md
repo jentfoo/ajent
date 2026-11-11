@@ -168,6 +168,13 @@ the host, which is the only side that knows which live objects a re-read actuall
 `config-design.md`'s Reload section states its two rules: a reload writes nothing and
 never enables nor disables a tool.
 
+One seam next to `Compact` carries `/help` beyond its static list. `Help(ctx, question)`
+answers one question from the build-embedded user-facing docs (README plus
+`docs/features/*`). It runs outside the turn loop: a slow provider cannot stall the pump,
+and it refuses while a turn streams instead of queueing behind it. The reverse overlap is
+resolved the other way: a submitted prompt aborts an in-flight answer rather than letting
+the two interleave. An answer stays out of the transcript and model context, like `/update`.
+
 `Dispatched()` is owned by the pump and flips true on this run's first prompt,
 never on a command or a `!`. It stays false on a resumed session until then,
 so `/tools` selection opens free despite existing history.
@@ -176,7 +183,7 @@ so `/tools` selection opens free despite existing history.
 
 | Command | Behaviour |
 |---|---|
-| `/help` | markdown list of commands and keybindings through `Console.Print` |
+| `/help [question]` | bare: markdown list of commands and keybindings through `Console.Print`. With a question: one docs answer through the same seam, printing nothing itself |
 | `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown, with sub-agent spend called out when nonzero) |
 | `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
 | `/model [name]` | resolve by name, or open the picker. `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it. A no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |

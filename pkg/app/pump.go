@@ -119,6 +119,8 @@ func runPump(ctx context.Context, pump <-chan pumpLine, ag *agent.Agent, console
 				if line.input == nil && strings.TrimSpace(line.rest) == "" && len(line.blocks) == 0 {
 					continue
 				}
+				// a submitted prompt outranks a docs answer mid-stream, so the two never interleave
+				console.help.abort() // nil-safe: no embedded docs, nothing in flight
 				// connect every MCP server in full, once, so its tools exist before this
 				// (the first) turn is assembled, and /tools or /mcp changes made up to now hold
 				if console.mcp.m != nil {

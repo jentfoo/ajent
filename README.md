@@ -23,11 +23,11 @@ go install github.com/jentfoo/ajent@latest
 For those that would prefer to test out `ajent` rather than read the docs, you can onboard quickly:
 1. Assuming go and your `~/go/bin` `PATH` are setup: `go install github.com/jentfoo/ajent@latest`
 2. Then run `ajent`. On first start it walks you through wiring up your first provider (alternatively refer to the configuration below to define `~/.ajent/models.json`).
-3. Try your first prompt to learn about features and how to use `ajent`:
-   ```
-   Review @docs/*design.md and provide a concise overview of the user
-   facing features and key combinations I should be aware of as a new user.
-   ```
+3. Try your first prompt to learn about features and how to use `ajent`: `/help Provide a concise overview of the user facing features and key combinations I should be aware of as a new user.`
+
+If you need help, just ask in a session:
+  * Bare `/help` lists commands and keybindings.
+  * Ask with `/help how do I mark tools as read-only` for answers from ajent's own documentation.
 
 ## Design Philosophy
 
@@ -270,7 +270,8 @@ The CLI is deliberately small. Run `ajent --help` for the full list, and the imp
     --stats            one-shot: print a tool and token summary when the run ends
     --serve            run with no terminal, serving the session over the
                        control socket
-    --attach <name|id> mirror a running session on this terminal and
+    --attach [name|id|socket]
+                       mirror a running session on this terminal and
                        interact with it from either process
     --force            with --delete: remove the session even while another
                        ajent instance holds it live; with --attach: take
@@ -307,7 +308,7 @@ and the run stays up until it is ended. Serve implies control whatever
 A plain one-shot (`-p`, piped stdio) never opens a socket: it exits with its
 one turn, so there is nothing to attach to.
 
-`ajent --attach <name|id>` turns a second ajent process into that controller,
+`ajent --attach [name|id|socket]` turns a second ajent process into that controller,
 with a full terminal of its own: it backfills the conversation, then mirrors
 streaming output, tool activity and status live, and every input works from
 either side — prompts, slash commands and `!shell` submit remotely, Esc and
@@ -318,7 +319,7 @@ answer winning. Attach claims the control seat; if another controller holds it,
 and without it the second process attaches as a read-only viewer instead. Detaching is local
 to the attached terminal: ctrl+c twice leaves the session running, and only
 `/exit` (from either side) ends it. The target resolves like `--resume` does:
-an exact name, a full id or a unique prefix; bare `--attach` opens a picker of
+an exact name, a full id or a unique prefix. Bare `--attach` opens a picker of
 live sessions; with no match, ajent says what is running. If the connection
 drops while the session lives on, the attach terminal keeps its scrollback and
 reconnects automatically, following a restarted instance when exactly one

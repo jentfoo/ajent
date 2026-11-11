@@ -74,6 +74,7 @@ governs its assembly and use.
 | Plan workflow kickoffs | the planning contract, the implementation kickoff, the review kickoff and the retry prompt |
 | Tool-call classifier (`auto`) | one-word verdict on an unverifiable shell command, fresh context |
 | Staged shell results | the `!` user message: `User Ran:` / `Output:` ahead of your next prompt, while `!!` sends nothing |
+| `/help` docs answers | one isolated, tool-less Q&A over README + `docs/features/*`, separate from the session's context |
 | Controller-submitted prompts | no in-context marker, only the transcript's origin annotation |
 
 ## Staged shell results
@@ -117,6 +118,27 @@ cache-stable like any other user turn, while the annotation rides along untouche
 through the queue join, the transcript write and resume. Any future source of injected
 prompts (an extension, a hook) follows the same rule: annotate rather than wrap, unless
 the model must tell the text apart from a user's own words.
+
+---
+
+## `/help` docs answers
+
+A `/help <question>` runs on a separate request that never touches the live session: its
+own throwaway thread, an empty tool set (principle 5 holds by construction), and its
+spend billed without occupying session context. The system block is one text block:
+instruction text outside one provenance-tagged copy of each embedded document,
+concatenated in one fixed order (README first as `<ajent_readme path="README.md">`, then
+every features file as `<ajent_features path="docs/features/cli.md">` and so on) so the
+block stays byte-stable.
+The question rides verbatim as its own user turn, never spliced into the doc block, so
+repeat questions within one run hit the cached prefix, exactly like the classifier: `Cache`
+on plus the run's session id.
+
+Honesty is explicit in the instructions: answer only from these documents, name what they
+do not cover rather than guessing, and point at `--help` or an in-session command instead
+of inventing a flag. Reasoning stays off (principle 7), the output cap is bounded, and the
+docs are treated as untrusted-ish text: kept out of any user turn, tool-less by
+construction, and never fed back into another request automatically.
 
 ---
 

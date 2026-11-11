@@ -53,6 +53,8 @@ type fakeConsole struct {
 	sessionName    string // reported by SessionName, updated by SetSessionName
 	setSessionName error  // returned by SetSessionName when non-nil
 
+	helpAsks []string // questions handed to Help
+
 	copyCalls []string // texts handed to CopyClipboard
 	copyErr   error    // returned by CopyClipboard when non-nil
 
@@ -277,6 +279,15 @@ func (f *fakeConsole) Dispatched() bool                   { return f.dispatched 
 func (f *fakeConsole) Exit()                              { f.exited = true }
 
 func (f *fakeConsole) Compact(context.Context, string) error { return nil }
+
+// Help records the question; tests assert on helpAsks.
+func (f *fakeConsole) Help(_ context.Context, question string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.helpAsks = append(f.helpAsks, question)
+	return nil
+}
 
 func (f *fakeConsole) Reload(context.Context) error {
 	f.mu.Lock()

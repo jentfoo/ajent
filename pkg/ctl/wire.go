@@ -331,8 +331,8 @@ type SubmitParams struct {
 	PendingID string `json:"pendingId,omitempty"`
 }
 
-// InterruptResult names what an interrupt stopped: turn, survey, shell or
-// empty when nothing ran.
+// InterruptResult names what an interrupt stopped: turn, survey, help, shell
+// or empty when nothing ran.
 type InterruptResult struct {
 	Stopped string `json:"stopped,omitempty"`
 }

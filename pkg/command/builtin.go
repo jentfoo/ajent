@@ -22,7 +22,8 @@ const (
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{
 		Name:        "help",
-		Description: "list commands and keybindings",
+		Description: "list commands and keybindings, or ask the docs a question",
+		Args:        "[question]",
 		Handler:     helpCommand,
 	})
 	r.Register(Command{
@@ -114,8 +115,46 @@ func RegisterBuiltins(r *Registry, c Console) {
 	})
 }
 
-// helpCommand renders the command list and keybindings as markdown through Console.Print.
-func helpCommand(_ context.Context, _ string, c Console) error {
+// helpKeys is the curated keybinding summary bare /help appends. Curated, not
+// exhaustive: docs/features/tui.md carries every combination across surfaces.
+func helpKeys(b *strings.Builder) {
+	lines := []string{
+		"`↑`/`↓` — move a visual row; recall older/newer history once at the first/last character",
+		"`Ctrl+P` / `Ctrl+N` — up/down, same as `↑`/`↓`",
+		"`←`/`→` or `Ctrl+B`/`Ctrl+F` — by cell; `Alt+B`/`Alt+F`, `Ctrl+←`/`→`, `Alt+←`/`→` — by word",
+		"`Home` / `Ctrl+A`, `End` / `Ctrl+E` — start/end of the visual row",
+		"`Enter` submits; `Ctrl+J` or `Alt+Enter` insert a newline (rebindable, keymap config)",
+		"`Backspace` deletes back, `Delete` forward; `Esc` with text clears the whole draft",
+		"`Ctrl+K` — delete from cursor to end of line",
+		"`Ctrl+U` — delete from start of line to cursor",
+		"`Ctrl+W` or `Alt+Backspace` — delete the word before the cursor",
+		"`Ctrl+Y` — restore what the last clear or kill removed (one level deep)",
+		"`Ctrl+C` — with text clears the draft; interrupts a turn, or quits when idle",
+		"`Ctrl+D` — quit on an empty editor; deletes forward otherwise",
+		"`Ctrl+L` — redraw the screen",
+		"`Ctrl+Z` — suspend to the shell",
+		"`Ctrl+R` — search history as you type",
+		"`Alt+↑` — pull the newest queued prompt back into the editor",
+		"`Esc Esc` — rewind onto an earlier message while idle; `ctrl+x` in the picker copies the highlighted message",
+		"`Tab` / `Shift+Tab` — completion forward and back; `/` at line start opens the command menu, `@` completes paths, `!`/`!!` lines complete like bash",
+		"`!cmd` — run a shell command, staged ahead of your next message",
+		"`!!cmd` — same run shown only to you: output never reaches model context or transcript",
+		"`Ctrl+V` — probe the clipboard and attach a found image",
+		"large bracketed pastes collapse to a `[pasted N lines]` placeholder, expanded on send",
+		"`Shift+Tab` / `Shift+→` / `Shift+←` — cycle the permission mode, forward or back (out-of-band control event)",
+	}
+	for _, line := range lines {
+		b.WriteString("- " + line + "\n")
+	}
+}
+
+// helpCommand renders the command list and keybindings as markdown through
+// Console.Print, closing with where questions go. With a question it delegates
+// to Help, printing nothing itself.
+func helpCommand(ctx context.Context, arg string, c Console) error {
+	if q := strings.TrimSpace(arg); q != "" {
+		return c.Help(ctx, q)
+	}
 	var b strings.Builder
 	b.WriteString("# Commands\n\n")
 	for _, cmd := range c.Commands().List() {
@@ -127,14 +166,8 @@ func helpCommand(_ context.Context, _ string, c Console) error {
 		b.WriteString(line + "\n")
 	}
 	b.WriteString("\n# Keybindings\n\n")
-	b.WriteString("- `↑`/`↓` — recall history / move line\n")
-	b.WriteString("- `Ctrl+C` — interrupt a turn, or quit when idle\n")
-	b.WriteString("- `Ctrl+D` — quit on an empty editor\n")
-	b.WriteString("- `Esc` `Esc` — rewind onto an earlier message while idle; `ctrl+x` in the picker copies the highlighted message\n")
-	b.WriteString("- `/` at line start — a command; the menu opens as you type, `Tab` takes the highlight\n")
-	b.WriteString("- `@` anywhere — a file reference; `Tab` completes the path\n")
-	b.WriteString("- `!cmd` — run a shell command, staged ahead of your next message; `Tab` completes like bash\n")
-	b.WriteString("- `Shift+Tab` / `Shift+→` / `Shift+←` — cycle the permission mode, forward or back (out-of-band control event)\n")
+	helpKeys(&b)
+	b.WriteString("\nAsk about ajent itself with `/help <question>`.\n")
 	c.Print(b.String())
 	return nil
 }

@@ -43,11 +43,13 @@ const shutdownDrainWait = 100 * time.Millisecond
 // turn rather than starting a second one. sessMode decides whether this run starts
 // fresh or resumes a saved transcript, and sessTarget names it for the id and name
 // modes. sessResolved carries CheckSessionTarget's resolution of sessTarget
-// for the open to adopt directly. A nil term runs serve mode: the control
+// for the open to adopt directly. helpDocs carries the build-embedded user-facing
+// documentation /help answers from; empty leaves /help warning that this build
+// has no docs. A nil term runs serve mode: the control
 // socket is the only front end and a startup failure returns a non-nil error.
 // Returns the transcript label for an exit-time `--resume` hint, empty when
 // there is nothing to resume.
-func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope, blockAutoDenied bool) (string, error) {
+func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, sessMode ResumeMode, sessTarget string, sessResolved SessionResolution, args []string, scope ToolScope, blockAutoDenied bool, helpDocs []HelpDoc) (string, error) {
 	serve := term == nil
 	providers := llm.NewProviders(reg)
 	rc := llm.ReasoningFrom(set.Settings().Reasoning, active)
@@ -644,6 +646,16 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	if ictl != nil {
 		ictl.runner.Seed(st.Messages) // a resumed transcript already holds /init ids
 	}
+	// the docs controller answers /help from the build-embedded files on its own
+	// warm thread. Without them /help warns that this build carries no docs.
+	hctl := newHelpController(helpDeps{
+		ag: ag, st: st, ui: ui,
+		providerFor: providers.ProviderFor,
+		session:     sessionHint(rec),
+		docs:        helpDocs,
+	})
+	hub.helpCtl = hctl
+	console.help = hctl
 	command.RegisterBuiltins(cmds, console)
 	for _, c := range append(planCommands(ctl), initCommands(ictl)...) {
 		cmds.Register(c)

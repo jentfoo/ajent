@@ -274,7 +274,7 @@ func (c *Conn) Submit(ctx context.Context, params ctl.SubmitParams) error {
 }
 
 // Interrupt runs the Esc body remotely and names what stopped: turn, survey,
-// shell or empty when nothing ran.
+// help, shell or empty when nothing ran.
 func (c *Conn) Interrupt(ctx context.Context) (string, error) {
 	var res ctl.InterruptResult
 	_, err := c.Call(ctx, ctl.MethodInterrupt, nil, &res)

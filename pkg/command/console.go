@@ -119,6 +119,9 @@ type Console interface {
 	// Compact reduces the session context toward the compaction threshold.
 	// instructions is an optional /compact <instructions> focus for the summariser.
 	Compact(ctx context.Context, instructions string) error
+	// Help answers one question about ajent from its embedded documentation,
+	// rendering the answer through Print. Refused while a turn streams.
+	Help(ctx context.Context, question string) error
 	// Exit signals the driver to quit.
 	Exit()
 }

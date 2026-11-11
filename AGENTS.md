@@ -37,9 +37,32 @@ The README carries the other half of the contract: what **new users** must know 
 get started. It covers model setup (`~/.ajent/models.json`), the important
 `config.json` options, common flags, and general patterns (like slash commands) that
 make everything else discoverable on their own. It highlights what a newcomer needs,
-not every function or feature. Those live in `--help`, `/commands`, and the design
-docs. Update it when you introduce something new users need to find. Don't grow it
-into a reference mirroring either surface.
+not every function or feature. Those live in `--help`, `/commands`, and
+`docs/features/`. Update it when you introduce something new users need to find.
+Don't grow it into a reference mirroring either surface.
+
+`docs/features/` completes that user-facing half: one usage-level file per surface,
+written for the people using ajent rather than the engineers building it, so feature
+questions get answered from what ajent actually does instead of guesswork, covering
+everything the README trims out. Any change that adds, renames or alters something
+user visible (a flag, keybinding, command, config key, dialog, notice or default)
+updates the matching file in the same commit as the code. One fact lives in
+exactly one file: cross-reference another file by name rather than restating it, and a
+README claim may never contradict its features entry.
+
+- `agents.md` - sub-agents (`agent_start`/`poll`/`list`) and the `/plan` two-model workflow
+- `cli.md` - install, update, first run, every command-line flag, headless one-shots (prompt sources, exit codes, `-o json` events, scripting)
+- `commands.md` - input-line grammar (`/command`, `!shell`, `!!`, `@path`), completion,
+  every slash command, project instructions
+- `config.md` - every `config.json` key with its layer, default and `AJENT_*` binding, live vs restart behavior
+- `mcp.md` - `mcp.json` servers, read-only marking, loading and lifecycle, `/mcp`
+- `models.md` - `models.json` providers, flavors, discovery, model declarations, reasoning controls
+- `permissions.md` - the five barrier modes, decision order, classifier, approval dialog,
+  session grants, safe/denied lists, headless refusals
+- `sessions.md` - naming, resume matching, rewind/fork, deletion, concurrent processes,
+  compaction, control socket overview
+- `tui.md` - paint modes, screen anatomy, every keybinding per surface, status line,
+  markdown rendering, images
 
 | Document | Package(s) / scope | What it contains |
 |---|---|---|

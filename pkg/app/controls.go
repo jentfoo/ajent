@@ -43,6 +43,8 @@ func interruptNotice(stopped string) string {
 	switch stopped {
 	case stopSurvey.String():
 		return "cancelled project survey"
+	case stopHelp.String():
+		return "cancelled help answer"
 	case stopShell.String():
 		return "cancelled shell command"
 	default:

@@ -115,8 +115,8 @@ type hubSnapshot struct {
 
 // hubDeps is what the driver can supply at hub construction. Objects built
 // later (tool registry, agent, barrier, steer queue, stager, /init controller,
-// line router) are assigned onto the hub as they appear, always on the driver
-// goroutine before the first loop that could race them.
+// /help controller, line router) are assigned onto the hub as they appear, always
+// on the driver goroutine before the first loop that could race them.
 type hubDeps struct {
 	ui        *tui.UI
 	dialogs   *interactionBroker
@@ -140,6 +140,7 @@ type sessionHub struct {
 	stager     *command.Stager
 	barrier    barrierModeCycler // permission gate, a cycler when wired
 	initCtl    *initController
+	helpCtl    *helpController                          // /help docs answers Esc can stop; nil without docs
 	rewindTo   func(head, cause string) (string, error) // rewind/fork to an entry; ends a plan first
 	tools      *tools.Registry                          // registry the tool rows mirror
 	// console is the wired command console the settings, model and tool
@@ -608,6 +609,7 @@ const (
 	stopNothing interruptStop = iota
 	stopTurn
 	stopSurvey
+	stopHelp
 	stopShell
 )
 
@@ -618,6 +620,8 @@ func (s interruptStop) String() string {
 		return "turn"
 	case stopSurvey:
 		return "survey"
+	case stopHelp:
+		return "help"
 	case stopShell:
 		return "shell"
 	default:
@@ -626,14 +630,17 @@ func (s interruptStop) String() string {
 }
 
 // Interrupt stops active work in priority order: a running turn (its queued
-// prompts recover to the editor), an /init survey, then a staged shell
-// command. It names what was stopped. Safe from any goroutine.
+// prompts recover to the editor), an /init survey, a /help answer, then a
+// staged shell command. It names what was stopped. Safe from any goroutine.
 func (h *sessionHub) Interrupt() interruptStop {
 	if abortRunning(h.ag, h.q, h.stager) {
 		return stopTurn
 	}
 	if h.initCtl.abort() { // nil-safe: no survey, no stop
 		return stopSurvey
+	}
+	if h.helpCtl.abort() { // nil-safe: no docs wiring, nothing to stop
+		return stopHelp
 	}
 	if h.stager.Pending() {
 		h.stager.Cancel()

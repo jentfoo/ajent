@@ -220,9 +220,9 @@ Params and results with their wire keys:
   surface through their effects instead. Several queued prompts may be joined into one user
   message at a step boundary, so one committed entry's `queueIds` can name several of your rows.
 - **`interrupt`** runs the Esc body. It aborts a running turn (then an `/init` survey, then a
-  staged shell command) in that priority order, covers the between-turns drain window, and
-  clears queued prompts as `queue.dropped` with cause `interrupt`. `{stopped}` names what it
-  stopped (`turn`, `survey`, `shell`) and is empty when nothing ran.
+  `/help` answer, then a staged shell command) in that priority order, covers the between-turns
+  drain window, and clears queued prompts as `queue.dropped` with cause `interrupt`. `{stopped}`
+  names what it stopped (`turn`, `survey`, `help`, `shell`) and is empty when nothing ran.
 - **`mode.cycle`** `{back}` steps the permission mode like Shift+Tab, backwards when `back`,
   re-evaluating open approval dialogs under the new mode. `{mode}` names the mode now in
   effect and the same change announces as a `permission` event. An empty result means no gate
@@ -446,7 +446,7 @@ since additions are additive changes.
 - **Stop reasons** (`turn.end.stop`): `end_turn`, `tool_use`, `max_tokens`, `incomplete`,
   `aborted`, `error`, and `unknown` when nothing better is known. `turn.end.error` is set on a
   transport or context failure, which is separate from a tool's own error result.
-- **What an interrupt stopped** (`interrupt` result): `turn`, `survey`, `shell`, empty for nothing.
+- **What an interrupt stopped** (`interrupt` result): `turn`, `survey`, `help`, `shell`, empty for nothing.
 - **Queue drop causes**: `interrupt`, `rewind`, `recalled`.
 - **Head-move causes** (`branch.changed.cause`): `rewind`, `fork`, `compact`. No other event may
   move a head, and only these plus appended entries change what history means.
@@ -601,7 +601,7 @@ context and surfaces wire refusals unchanged.
 | `State(ctx) (ctl.State, uint64, error)` | `state.get` | snapshot and its watermark |
 | `Backfill(ctx) (ctl.State, []session.Entry, uint64, error)` | `state.get` plus the file read | snapshot, branch through its head, watermark. Errors when recording is off |
 | `Submit(ctx, ctl.SubmitParams) error` | `submit` | sets `Line` and optionally `PendingID` |
-| `Interrupt(ctx) (string, error)` | `interrupt` | what stopped: `turn`, `survey`, `shell`, empty for nothing |
+| `Interrupt(ctx) (string, error)` | `interrupt` | what stopped: `turn`, `survey`, `help`, `shell`, empty for nothing |
 | `ModeCycle(ctx, back bool) (string, error)` | `mode.cycle` | mode now in effect, empty when no gate exists |
 | `ModeSet(ctx, mode string) (string, error)` | `mode.set` | mode now in effect, and a session without a gate refuses |
 | `ToolsSet(ctx, names []string) (ctl.ToolsSetResult, error)` | `tools.set` | the tool rows after the reshape (widen-only past the first dispatched prompt) |

@@ -99,6 +99,7 @@ func main() {
 		Attach:          f.attach,
 		AttachGiven:     f.attachGiven,
 		Force:           f.force,
+		HelpDocs:        helpDocs(),
 
 		SessMode:     sessMode,
 		SessTarget:   sessTarget,

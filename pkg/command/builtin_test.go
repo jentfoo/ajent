@@ -29,22 +29,50 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	assert.Equal(t, want, commandNames(r))
 }
 
-func TestHelpPrintsCommandList(t *testing.T) {
+func TestHelp(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
+	setup := func(t *testing.T) (*fakeConsole, Command) {
+		t.Helper()
 
-	cmd, ok := r.Get("help")
-	require.True(t, ok)
-	require.NoError(t, cmd.Handler(t.Context(), "", c))
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		cmd, ok := r.Get("help")
+		require.True(t, ok)
+		return c, cmd
+	}
 
-	require.Len(t, c.prints, 1)
-	assert.Contains(t, c.prints[0], "# Commands")
-	assert.Contains(t, c.prints[0], "/model")
-	assert.Contains(t, c.prints[0], "/exit")
+	t.Run("prints_command_list", func(t *testing.T) {
+		c, cmd := setup(t)
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+
+		require.Len(t, c.prints, 1)
+		assert.Contains(t, c.prints[0], "# Commands")
+		assert.Contains(t, c.prints[0], "/model")
+		assert.Contains(t, c.prints[0], "/exit")
+	})
+
+	t.Run("bare_prints_reference", func(t *testing.T) {
+		c, cmd := setup(t)
+		require.NoError(t, cmd.Handler(t.Context(), "  ", c)) // whitespace-only stays bare
+
+		require.Len(t, c.prints, 1)
+		for _, want := range []string{"# Commands", "!!cmd", "Ctrl+K", "Ctrl+U", "Ctrl+Y", "Ctrl+J", "/help <question>"} {
+			assert.Contains(t, c.prints[0], want)
+		}
+		assert.Empty(t, c.helpAsks) // never the Help seam
+	})
+
+	t.Run("question_delegates_to_help", func(t *testing.T) {
+		c, cmd := setup(t)
+		q := "how do I mark commands as read-only"
+		require.NoError(t, cmd.Handler(t.Context(), q, c))
+
+		assert.Equal(t, []string{q}, c.helpAsks) // the question rides verbatim
+		assert.Empty(t, c.prints)                // prints nothing itself
+	})
 }
 
 func TestExitSignalsConsoleExit(t *testing.T) {

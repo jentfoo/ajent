@@ -116,6 +116,7 @@ func Run(o RunOptions) int {
 			Warnings:        warnings,
 			Scope:           o.Scope,
 			BlockAutoDenied: o.BlockAutoDenied,
+			HelpDocs:        o.HelpDocs,
 		})
 	}
 
@@ -185,7 +186,7 @@ func Run(o RunOptions) int {
 		go version.CheckForUpdate(func(msg string) { ui.Notify(msg, tui.LevelInfo) })
 	}
 
-	resumeLabel, derr := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope, o.BlockAutoDenied)
+	resumeLabel, derr := Driver(ui, set, reg, active, o.SessMode, o.SessTarget, o.SessResolved, o.Args, o.Scope, o.BlockAutoDenied, o.HelpDocs)
 	if derr != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", derr)
 		return ExitUsage
@@ -207,7 +208,7 @@ func RunServe(o ServeOptions) int {
 	for _, w := range o.Warnings {
 		_, _ = fmt.Fprintln(os.Stderr, w)
 	}
-	label, err := Driver(nil, o.Set, o.Reg, o.Active, o.SessMode, o.SessTarget, o.SessResolved, nil, o.Scope, o.BlockAutoDenied)
+	label, err := Driver(nil, o.Set, o.Reg, o.Active, o.SessMode, o.SessTarget, o.SessResolved, nil, o.Scope, o.BlockAutoDenied, o.HelpDocs)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "ajent:", err)
 		return ExitUsage

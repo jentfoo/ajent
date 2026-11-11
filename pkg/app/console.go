@@ -42,6 +42,7 @@ type uiConsole struct {
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 	hub      *sessionHub     // control plane, rename tracking
+	help     *helpController // docs answers behind /help; nil when the build carried no docs
 	reload   reloadDeps      // what /reload re-applies beyond the fields above
 
 	// q gates state writes against a live drain goroutine
@@ -472,6 +473,17 @@ func (c *uiConsole) Compact(ctx context.Context, instructions string) error {
 	}
 	_, err := c.comp.run(ctx, agent.CompactManual, instructions)
 	return err
+}
+
+// Help answers one question about ajent from the embedded docs. It returns at
+// once: the answer lands on its own goroutine through Print and notices.
+func (c *uiConsole) Help(ctx context.Context, question string) error {
+	if c.help == nil { // unwired docs warn instead of panicking or calling
+		c.ui.Notify("help unavailable: this build carries no embedded docs", tui.LevelWarn)
+		return nil
+	}
+	c.help.ask(ctx, question)
+	return nil
 }
 
 func (c *uiConsole) Exit() {

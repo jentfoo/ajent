@@ -75,6 +75,14 @@ const (
 // open to adopt as a locator instead of rescanning the workspace.
 type SessionResolution = session.Info
 
+// HelpDoc is one embedded document /help answers from. Only the repo-root
+// package can embed README.md beside docs/features/*.md, so main constructs
+// these and every run option carries the same value down to the driver.
+type HelpDoc struct {
+	Name string // path as the model sees it: "README.md" or "docs/features/cli.md"
+	Body string
+}
+
 // HeadlessOptions carries everything main resolved before deciding not to open a UI.
 type HeadlessOptions struct {
 	Set        *config.Set
@@ -122,6 +130,10 @@ type RunOptions struct {
 	// approval dialog; orthogonal to Scope, which only names the starting gate.
 	BlockAutoDenied bool
 
+	// HelpDocs carries the build-embedded docs /help answers from: README plus
+	// docs/features. Empty leaves /help warning that this build has no docs.
+	HelpDocs []HelpDoc
+
 	SessMode     ResumeMode
 	SessTarget   string
 	SessResolved SessionResolution // check-time target resolution, avoids a second scan
@@ -139,6 +151,10 @@ type ServeOptions struct {
 	Warnings        []string
 	Scope           ToolScope
 	BlockAutoDenied bool // passes through to Driver like Scope does
+
+	// HelpDocs carries the build-embedded docs /help answers from; empty leaves
+	// /help warning that this build has no docs.
+	HelpDocs []HelpDoc
 }
 
 // AttachOptions carries what RunAttach needs: the socket to follow and the
