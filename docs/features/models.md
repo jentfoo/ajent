@@ -16,11 +16,12 @@ places, both under the provider they belong to:
 - **declarations** - your per-provider `models` list in models.json
 - **discovery** - asking the provider for its model list (see below)
 
-The merge rule: when a provider declares models, that declaration *is* the
-whole list for that provider. Discovery then only fills fields an entry left
-unset (a real context window, modalities) and never adds or removes entries.
-A provider that declares nothing gets whatever discovery reports. A model that
-left the catalogue keeps serving until you switch away.
+The merge rule: when a provider declares models, that declaration is the
+whole list for that provider. Discovery fills fields an entry left unset (a
+real context window, modalities) and never removes entries. It adds models to
+a declared list only through `discoverAdd` (below). A provider that declares
+nothing gets whatever discovery reports. A model that left the catalogue keeps
+serving until you switch away.
 
 Nothing is compiled in except per-flavor endpoint and quirk defaults, so a
 bare `"id"` is already a complete model entry: it gets a name derived from the
@@ -81,6 +82,7 @@ Per provider you can set:
 | `timeouts` | connect / TLS / header / idle / total bounds as durations. An explicit `"0s"` disables a bound, which is how you wait out a just-in-time model load (lmstudio's defaults already release header and idle, llamacpp its idle) |
 | `retry` | transport retry policy: `attempts`, `base`, `max`, `jitter`. Honors a server's `Retry-After` but caps the wait, so an agent never sleeps silently instead of failing |
 | `discover` | whether this provider's models are fetched from the server. On by default for every flavor with a known model list (below), and any other OpenAI-compatible endpoint opts in with `"discover": true`, which asks its `/v1/models` |
+| `discoverAdd` | what discovery may add to a declared list: `"loaded"` adds only entries the endpoint reports resident right now, and `"all"` adds everything it listed. Unset keeps your declaration as the whole list. Aimed at lazy-loading proxies like llama-swap, where an unloaded entry still serves a turn |
 | `routing` | openrouter only: upstream provider preference (`order`, `allowFallbacks`, `dataCollection`, `only`, `ignore`, `sort`, `max_price`, ...). Both ajent's camelCase and OpenRouter's own snake_case spellings load unchanged |
 | `compat` | quirk defaults applied to every model under the provider. Same fields as a model's own compat block (below) |
 | `models` | your declared list for this provider, see Model declarations |
@@ -180,9 +182,9 @@ It accepts the display and capability fields (`name`, `reasoning`, `input`,
 `contextWindow`, `maxTokens`, `compat`, `thinkingLevelMap`, `headers`,
 `samplingParams`) but cannot introduce a model, rename an id or move an
 endpoint. An override on an id you declared is inert and warns: edit the
-declaration instead (a provider that declares models has no discovered ones for
-it to land on). Overrides naming ids discovery has not reported yet are kept,
-not warned about.
+declaration instead (with or without `discoverAdd`, a declared entry always
+beats its discovered twin). Overrides naming ids discovery has not reported yet
+are kept, not warned about.
 
 ## Discovery
 
