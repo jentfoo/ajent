@@ -290,9 +290,11 @@ Rules:
   sources are skipped. Nested discovery beyond these two: no ancestor walk.
 - **Provenance marker carries the absolute path**, so the model can point at
   which instruction file told it something.
-- Loaded once at startup and kept for the session, so a changed `AGENTS.md` applies
-  on next launch. There is no mid-session reload or file watching, keeping the
-  system block cache-stable per principle 1.
+- Loaded once at startup and kept for the session. There is no file watching: a
+  changed `AGENTS.md` applies on next launch, or at an explicit `/reload`, which swaps
+  the instructions between turns through `Agent.SetProjectInstructions`, never within
+  one, so the system block stays cache-stable per principle 1 at the cost of one
+  cache miss.
 
 ---
 

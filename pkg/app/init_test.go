@@ -289,7 +289,7 @@ func TestInitWatch(t *testing.T) {
 		w.TurnEnd(agent.TurnResult{})
 
 		require.Len(t, got, 1)
-		assert.Contains(t, got[0], "applies on the next start")
+		assert.Contains(t, got[0], "run /reload to apply it")
 	})
 
 	t.Run("denied_write_stays_quiet", func(t *testing.T) {

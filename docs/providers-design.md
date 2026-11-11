@@ -245,9 +245,10 @@ denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
 gateway serving two dialects is one provider entry. Dialect and endpoint are
 therefore resolved at **model**-resolution time, and `Model.BaseURL` plus
 `Model.Caps.Dialect` are what the adapter is built from, which never re-derives
-them. `Providers` caches on `provider + dialect + baseURL` for that reason: the
-vendor name alone would collapse two models onto whichever adapter was built
-first.
+them. `Providers` caches on `provider + dialect + baseURL` plus a per-provider
+config era for that reason: the vendor name alone would collapse two models onto
+whichever adapter was built first, and a models.json re-read that edited a
+credential must build a fresh adapter rather than keep serving the stale one.
 
 Detection returns a sparse `Compat` (a zero one when no vendor family matches)
 and never sets `Reasoning`. Family matching (provider key and base URL) is

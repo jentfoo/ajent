@@ -112,6 +112,10 @@ type Console interface {
 	// picker is unrestricted before it and widen-only after, so a resumed session
 	// can reshape the recorded set ahead of its first prompt.
 	Dispatched() bool
+	// Reload re-reads config.json, models.json, mcp.json and AGENTS.md and
+	// re-applies them to the live session. Tools a reload discovers arrive
+	// disabled; only /tools enables them.
+	Reload(ctx context.Context) error
 	// Compact reduces the session context toward the compaction threshold.
 	// instructions is an optional /compact <instructions> focus for the summariser.
 	Compact(ctx context.Context, instructions string) error

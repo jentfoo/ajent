@@ -38,7 +38,7 @@ type Options struct {
 	Parent              func() *tokens.Accounting  // parent ledger, one child per job
 	Tools               ToolSource                 // parent registry view a child's read-only set filters
 	Env                 agent.Environment
-	ProjectInstructions []agent.ProjectInstruction
+	ProjectInstructions func() []agent.ProjectInstruction // re-read by /reload, so it is resolved per job
 
 	// Root seeds the manager's context root: every job derives from it and Close
 	// cancels it, so process shutdown reaches jobs directly.

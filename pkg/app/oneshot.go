@@ -159,7 +159,7 @@ func RunHeadless(o HeadlessOptions) int {
 		Parent:              func() *tokens.Accounting { return st.Tokens },
 		Tools:               childToolSource{reg: toolsReg},
 		Env:                 env,
-		ProjectInstructions: proj,
+		ProjectInstructions: func() []agent.ProjectInstruction { return proj },
 		Root:                ctx, // job contexts die with the run's signal-notified root
 		Notice:              func(msg string) { notify(msg, agent.LevelInfo) },
 		Deliver: func(in agent.Input) bool {

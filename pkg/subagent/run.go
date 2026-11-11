@@ -71,13 +71,18 @@ func (m *Manager) run(ctx context.Context, j *job) (string, error) {
 
 	inRepo := gitInWorkTree(ctx, m.opts.Env.Cwd)
 	tools := newToolSet(childTools(m.opts.Tools, inRepo))
+	// project instructions resolve per job, so a /reload reaches jobs started after it
+	var proj []agent.ProjectInstruction
+	if f := m.opts.ProjectInstructions; f != nil {
+		proj = f()
+	}
 
 	a := agent.New(state, agent.Options{
 		Provider:            m.opts.Provider,
 		Tools:               tools,
 		Sinks:               []agent.Sink{sink},
 		Env:                 m.opts.Env,
-		ProjectInstructions: m.opts.ProjectInstructions,
+		ProjectInstructions: proj,
 		SystemSnippets:      []string{childContract(inRepo)}, // the system snippet a child gets
 		MaxSteps:            m.opts.MaxSteps,                 // bounds a runaway investigation
 	})

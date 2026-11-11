@@ -62,6 +62,7 @@ type server struct {
 	name          string
 	cfg           ServerConfig
 	source        string  // "mcp: <name>", the /tools grouping key
+	reloadAdd     bool    // introduced by a reload, not startup: its tools register disabled
 	c             *Client // nil while disconnected
 	logs          *ringLog
 	defs          []ToolDef     // last filtered tool list, for status/tool groups and drift compare
@@ -113,18 +114,19 @@ func New(cfg map[string]ServerConfig, opts Options) *Manager {
 	m.backoff = reconnectDelay  // seam for tests to skip real retry pacing
 	m.closeAfter = closeTimeout // seam for tests to shrink the sweep bound
 	for name, sc := range cfg {
-		m.servers[name] = m.newServer(name, sc)
+		m.servers[name] = m.newServer(name, sc, false) // startup additions follow config
 	}
 	return m
 }
 
-func (m *Manager) newServer(name string, cfg ServerConfig) *server {
+func (m *Manager) newServer(name string, cfg ServerConfig, addedByReload bool) *server {
 	return &server{
-		name:   name,
-		cfg:    cfg,
-		regEra: cfg,
-		source: "mcp: " + name,
-		logs:   &ringLog{max: 200},
+		name:      name,
+		cfg:       cfg,
+		regEra:    cfg,
+		source:    "mcp: " + name,
+		reloadAdd: addedByReload,
+		logs:      &ringLog{max: 200},
 		notice: func(msg string, warn bool) {
 			m.opts.Notice("mcp "+name+": "+msg, warn)
 		},
@@ -399,7 +401,7 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 			Diag:     s.diag,
 		})
 		st := StateDisabled // known but inactive by default, config-off or a restored subset leaves the rest off
-		if m.impliedEnabled(cfg, n) {
+		if m.impliedEnabled(s, cfg, n) {
 			st = StateEnabled
 		}
 		if keep != nil {
@@ -448,14 +450,18 @@ func (s *server) defsSnapshot() []ToolDef {
 
 // impliedEnabled reports whether cfg leaves name enabled before any live /tools
 // toggle. A recorded tools.enabled is an explicit enablement authoritative over
-// config (an empty set disables everything); without one, config governs the
-// default. register derives defaults through this too, so captures and
-// registrations cannot disagree about what a default state is.
-func (m *Manager) impliedEnabled(cfg ServerConfig, name string) bool {
+// config (an empty set disables everything); without one, a reload addition
+// starts off and config governs every other default. register derives defaults
+// through this too, so captures and registrations cannot disagree about what a
+// default state is.
+func (m *Manager) impliedEnabled(s *server, cfg ServerConfig, name string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.haveRestore { // the recorded enabled set wins over the config default
 		return slices.Contains(m.opts.Restore, name)
+	}
+	if s.reloadAdd { // a reload addition starts off, only /tools turns it on
+		return false
 	}
 	return !disabledByConfig(cfg)
 }
@@ -475,16 +481,16 @@ func (m *Manager) SetRestore(names []string) {
 // registered. Deliberate /tools toggles survive re-registration, while tools still
 // at their era default adopt whatever the config now says instead of freezing
 // stale defaults over an enabled flip.
-func (m *Manager) captureLive(source string, era ServerConfig) *toolState {
+func (m *Manager) captureLive(s *server, era ServerConfig) *toolState {
 	keep := &toolState{
-		enabled:  bulk.SliceToSet(m.opts.Registrar.EnabledNames(source)),
-		disabled: bulk.SliceToSet(m.opts.Registrar.DisabledNames(source)),
+		enabled:  bulk.SliceToSet(m.opts.Registrar.EnabledNames(s.source)),
+		disabled: bulk.SliceToSet(m.opts.Registrar.DisabledNames(s.source)),
 	}
 	maps.DeleteFunc(keep.enabled, func(n string, _ struct{}) bool {
-		return m.impliedEnabled(era, n)
+		return m.impliedEnabled(s, era, n)
 	})
 	maps.DeleteFunc(keep.disabled, func(n string, _ struct{}) bool {
-		return !m.impliedEnabled(era, n)
+		return !m.impliedEnabled(s, era, n)
 	})
 	return keep
 }
@@ -496,7 +502,7 @@ func (m *Manager) captureKeep(s *server) *toolState {
 	s.regMu.Lock() // a swap never interleaves with the capture
 	defer s.regMu.Unlock()
 
-	return m.captureLive(s.source, s.regEra)
+	return m.captureLive(s, s.regEra)
 }
 
 // Disconnect closes and unregisters a server without removing its config.
@@ -548,9 +554,9 @@ func (m *Manager) Reload(ctx context.Context) error {
 	for name, sc := range cfg {
 		if s, ok := m.servers[name]; ok {
 			existing[name] = s
-		} else {
-			m.servers[name] = m.newServer(name, sc)
+			continue
 		}
+		m.servers[name] = m.newServer(name, sc, true)
 	}
 	m.mu.Unlock()
 

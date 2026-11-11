@@ -495,6 +495,82 @@ func TestSave(t *testing.T) {
 	})
 }
 
+func TestSetReload(t *testing.T) {
+	// AJENT_HOME is process wide, so these cases cannot run in parallel
+	setup := func(t *testing.T) (*Set, string) {
+		t.Helper()
+		home := t.TempDir()
+		t.Setenv("AJENT_HOME", home)
+		ws := filepath.Join(home, "proj")
+		require.NoError(t, os.MkdirAll(ws, 0o755))
+		writeConfig(t, userPathFor(t), `{"model":"first","reasoning":{"level":"low"}}`)
+
+		s, _, err := Load(Options{Workspace: ws, Flags: mustFlagLayer(t, map[string]any{"ui.render": "plain"})})
+		require.NoError(t, err)
+		return s, ws
+	}
+
+	t.Run("picks_up_user_edit", func(t *testing.T) {
+		s, _ := setup(t)
+		writeConfig(t, userPathFor(t), `{"model":"second","reasoning":{"level":"high"}}`)
+
+		warns, err := s.Reload()
+		require.NoError(t, err)
+		assert.Empty(t, warns)
+		assert.Equal(t, "second", s.Settings().Model)
+		assert.Equal(t, "high", s.Settings().Reasoning.Level)
+	})
+
+	t.Run("drops_removed_key", func(t *testing.T) {
+		s, _ := setup(t)
+		writeConfig(t, userPathFor(t), `{"model":"second"}`)
+
+		_, err := s.Reload()
+		require.NoError(t, err)
+		assert.Equal(t, "medium", s.Settings().Reasoning.Level) // back to the default layer
+	})
+
+	t.Run("keeps_session_override", func(t *testing.T) {
+		s, _ := setup(t)
+		require.NoError(t, s.SetSession("model", "session-pick"))
+		writeConfig(t, userPathFor(t), `{"model":"second"}`)
+
+		_, err := s.Reload()
+		require.NoError(t, err)
+		assert.Equal(t, "session-pick", s.Settings().Model)
+		assert.Equal(t, "session", s.Source("model"))
+	})
+
+	t.Run("keeps_flag_layer", func(t *testing.T) {
+		s, _ := setup(t)
+		writeConfig(t, userPathFor(t), `{"model":"second","ui":{"render":"alt"}}`)
+
+		_, err := s.Reload()
+		require.NoError(t, err)
+		assert.Equal(t, "plain", s.Settings().UI.Render)
+		assert.Equal(t, "flag", s.Source("ui.render"))
+	})
+
+	t.Run("picks_up_new_project_layer", func(t *testing.T) {
+		s, ws := setup(t)
+		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), `{"model":"project-model"}`)
+
+		_, err := s.Reload()
+		require.NoError(t, err)
+		assert.Equal(t, "project-model", s.Settings().Model)
+		assert.Equal(t, "project", s.Source("model"))
+	})
+
+	t.Run("error_keeps_previous", func(t *testing.T) {
+		s, _ := setup(t)
+		writeConfig(t, userPathFor(t), `{"model":`)
+
+		_, err := s.Reload()
+		require.Error(t, err)
+		assert.Equal(t, "first", s.Settings().Model)
+	})
+}
+
 func userPathFor(t *testing.T) string {
 	t.Helper()
 

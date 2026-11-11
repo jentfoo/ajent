@@ -44,7 +44,8 @@ last in the filter so no configuration can reach past it.
 The manager is configured by func fields supplied by `pkg/app`, mirroring
 `permit.Barrier`: how to build a provider and resolve the child model/reasoning,
 the parent ledger (for per-job `Child()` spend), the read-only tool source, env,
-project instructions, and a context root (`Options.Root`) that seeds job contexts,
+project instructions (a func resolved per job, so `/reload` reaches jobs started
+after it), and a context root (`Options.Root`) that seeds job contexts,
 UI callbacks for activity rows, keyed notices and the
 status segment, a delivery hook that steers into a running parent turn, and the
 concurrency cap plus poll timeout. Its surface is lifecycle operations:
@@ -132,7 +133,8 @@ Each job builds a fresh agent:
   ledger (`Accounting.Child()`) whose usage rolls into the parent as **child spend**
   (see accounting below), and the parent's context bar never moves for it.
 - **Tools**: `&toolSet{tools: childTools(src, inRepo)}` over the wiring-time
-  source. The options carry project instructions plus
+  source. The options carry project instructions resolved per job from the shared
+  store, so a `/reload` reaches jobs started after it, plus
   `SystemSnippets: []string{childContract(inRepo)}`, and the session has no recorder
   and no resume.
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it

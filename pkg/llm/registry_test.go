@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -589,6 +590,49 @@ func TestRegistryWithCache(t *testing.T) {
 	})
 }
 
+func TestRegistrySetFile(t *testing.T) {
+	t.Parallel()
+
+	t.Run("adds_provider", func(t *testing.T) {
+		r, _ := NewRegistry(File{}, nil, RegistryOptions{})
+		assert.Empty(t, r.Models())
+
+		warnings := r.SetFile(testFile())
+		assert.Empty(t, warnings)
+		assert.Len(t, r.Models(), 3)
+	})
+	t.Run("keeps_active_model", func(t *testing.T) {
+		r, _ := NewRegistry(testFile(), nil, RegistryOptions{})
+		m, err := r.Resolve("opus")
+		require.NoError(t, err)
+		r.SetActive(m)
+
+		r.SetFile(testFile())
+		assert.Equal(t, m.Key(), r.Active().Key())
+	})
+	t.Run("adopts_widened_window", func(t *testing.T) {
+		r, _ := NewRegistry(testFile(), nil, RegistryOptions{})
+		m, err := r.Resolve("opus")
+		require.NoError(t, err)
+		r.SetActive(m)
+
+		wider := testFile()
+		wider.Providers["anthropic"].Models[0].ContextWindow = ptr(500000)
+		r.SetFile(wider)
+		assert.Equal(t, 500000, r.Active().ContextWindow)
+	})
+	t.Run("keeps_stale_active", func(t *testing.T) {
+		r, _ := NewRegistry(testFile(), nil, RegistryOptions{})
+		m, err := r.Resolve("opus")
+		require.NoError(t, err)
+		r.SetActive(m)
+
+		r.SetFile(File{}) // the model is gone; requests still name it rather than nothing
+		assert.Equal(t, m.Key(), r.Active().Key())
+		assert.Empty(t, r.Models())
+	})
+}
+
 func TestRegistryRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -644,6 +688,43 @@ func TestRegistryRefresh(t *testing.T) {
 		assert.Empty(t, warnings)
 		assert.Equal(t, "openrouter/z-ai/glm-5.2", r.Active().Key())
 		assert.Equal(t, 800000, r.Active().ContextWindow) // discovery's real window
+	})
+
+	t.Run("setfile_during_refresh_governs", func(t *testing.T) {
+		data, err := os.ReadFile(filepath.Join("testdata", "openrouter/models.json"))
+		require.NoError(t, err)
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		var once sync.Once
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			once.Do(func() { close(entered) })
+			<-release // hold discovery open while SetFile lands
+			_, _ = w.Write(data)
+		}))
+		t.Cleanup(srv.Close)
+
+		f := File{Providers: map[string]ProviderConfig{"openrouter": {BaseURL: srv.URL}}}
+		r, _ := NewRegistry(f, nil, RegistryOptions{Env: func(string) string { return "" }})
+		done := make(chan struct{})
+		go func() {
+			_, _ = r.Refresh(t.Context(), DiscoverOptions{
+				Env: func(string) string { return "" },
+				Now: func() time.Time { return testNow },
+			})
+			close(done)
+		}()
+		<-entered
+
+		next := File{Providers: map[string]ProviderConfig{
+			"openrouter": {BaseURL: srv.URL},
+			"other":      {Models: []ModelConfig{{ID: "only-in-next"}}}, // marks the newer file
+		}}
+		r.SetFile(next)
+		close(release)
+		<-done
+
+		_, err = r.Resolve("other/only-in-next")
+		assert.NoError(t, err)
 	})
 
 	t.Run("vanished_active_keeps_serving", func(t *testing.T) {

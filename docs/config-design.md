@@ -2,8 +2,9 @@
 
 How `pkg/config` answers "where does this value come from", and how `/settings`
 changes it. It is the single configuration system for ajent: layered loading
-with per-key provenance, a schema-derived environment binding, session overrides
-that survive resume, and an ordered writer that preserves unknown keys.
+with per-key provenance, a schema-derived environment binding, session
+overrides that survive resume, an ordered writer that preserves unknown keys,
+and a mid-session re-read (`/reload`) that keeps all of that intact.
 
 ## The home directory
 
@@ -39,17 +40,20 @@ Configuration resolves lowest to highest precedence:
    and `ui.render` ride it, and the one-shot flags deliberately do not (see below).
 7. **session** — per-key session overrides that survive resume, recorded from
    `/settings` and runtime mode cycles, empty at a fresh start.
+
 Merge is per-key: objects fold deeply, arrays and scalars replace wholesale. A
 JSON `null` never replaces an object subtree (it cannot deep-fold), so it is
 ignored at merge time instead of stripping every default beneath it. Object keys
 that match the schema only by letter case are normalized to each field's
 declared name when a file layer loads, so merge, provenance and typed decode
 agree on one spelling.
+
 File layers follow one document rule, shared with models.json and mcp.json via
 `RelaxedObject`: blank or comment-only content behaves as an absent layer,
 while any other top-level value that is not an object fails startup naming the
 file and line. A stray word must never surface later as "layer user is not a
 JSON object".
+
 `Resolved.Explain(key)` returns the resolved value plus the layer that supplied
 it. That is the difference between a config system and a mystery.
 
@@ -69,6 +73,44 @@ goroutine (a permission mode cycle never waits for the turn). A mutex
 serializes layer writes and merge, and each merged `Resolved` is immutable once
 built, so readers hold a stable snapshot across later writes.
 
+## Reload
+
+`Set.Reload()` re-reads the user, project, local and environment layers in place. The
+`*Set` pointer never changes, so closures holding it keep working. It **leaves session
+overrides and flags untouched**, which is what makes a reload safe: those outrank every
+file layer, so applying merged values can never undo a choice `/model`, Shift+Tab or a
+"this session only" edit already made. No provenance check is needed anywhere on the
+path. A failed layer read aborts the reload with an error and leaves the previous
+configuration live, so a half-written `config.json` never takes effect.
+
+Two rules bound what `/reload` (command-design.md) does with the merged result:
+
+- **It writes nothing**: no session overrides, no config files. Adopting a model the
+  files name goes through the host's `applyModel`, which rebases state, ledger and status
+  line without the persistence `SetModel` adds.
+- **It never enables a tool, nor disables a live one.** `tools.enabled` is not
+  re-applied. An MCP server this edit adds or widens keeps its live enabled set across
+  re-registration (mcp-design.md), and nothing already running is turned off. A server
+  dropped from the file still narrows the set.
+
+One asymmetry: config.json's `model` is adopted mid-session, but models.json's
+`defaultModel` is not; an edited file default waits for a restart.
+
+Startup-only keys (see The schema) cannot be re-applied: they were copied by value into
+objects built before the console exists, spanning agent loop bounds, sub-agent manager
+fields, UI and keymap setup, the tool registry's advertised commands and diff echo, the
+barrier's safe/denied lists and the control socket. `/reload` compares them against the
+last reported values and names what moved, reporting an edit once instead of on every
+later reload.
+
+## Secrets
+
+A literal `apiKey` belongs in the user layer only. Reading a project or local layer strips
+`providers.*.apiKey` and warns per removed key. Those files end up on disk other people can
+read or commit, so a shared secret is ignored rather than honored. The user layer keeps its
+key but checks the file's permissions whenever it carries one, warning when the file is
+group or world readable.
+
 ## The schema
 
 The schema is a single typed settings root whose fields mirror the config
@@ -78,6 +120,12 @@ permissions, compaction, sub-agent settings, and UI render/palette.
 
 Enum-valued keys are stored as their text names and parsed by the caller, each
 package parsing its own.
+
+A key copied once into objects built during startup is **startup-only**: no session
+override reaches the live object, so `/reload` reports an edit instead of applying it.
+Most such keys take no `/settings` row; `subagent.maxConcurrent` and `maxSteps` keep
+theirs because an override still persists to a later run. Each key's section below
+gives its reason, and pkg/app's `startupKeys` snapshot is the full list.
 
 Retain defaults per model rather than per layer: the global layers pin no
 value, so an unset policy survives layering and resolves against the model's
@@ -173,17 +221,14 @@ has no `AJENT_*` binding.
 
 ### Subagent
 
-The `subagent` block ships compiled-in `maxConcurrent` and `maxPollWait`
-defaults, and `model` is deliberately left out so `Explain` on it reports
-`(default)` and an empty value means inherit the session model. All three bind
-for free through EnvLayer's reflection (`AJENT_SUBAGENT_MODEL`,
-`AJENT_SUBAGENT_MAXCONCURRENT`, `AJENT_SUBAGENT_MAXPOLLWAIT`), but only the
-first two are edited from `/settings`. `maxPollWait` is startup-time
-configuration like `agent.maxSteps`: pkg/app builds the sub-agent manager once,
-so a session override could never reach a live poll window. It is a Go duration
-string (`"20m"`, `"90s"`). An unparseable or negative value is a startup
-warning that falls back to the compiled-in default, which twins pkg/subagent's
-own default.
+The `subagent` block ships compiled-in `maxConcurrent`, `maxSteps` and
+`maxPollWait` defaults, and `model` is deliberately left out so `Explain` on it reports
+`(default)` and an empty value means inherit the session model. All four bind for free
+through EnvLayer's reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`,
+`AJENT_SUBAGENT_MAXSTEPS`, `AJENT_SUBAGENT_MAXPOLLWAIT`). The first three are
+startup-only (see above). `maxPollWait` is a Go duration string (`"20m"`, `"90s"`); an
+unparseable or negative value warns at startup and falls back to the compiled-in
+default, which twins pkg/subagent's own.
 
 Per `## The rule` below, `subagent.model` is a plain
 string key, resolved against the model registry by the caller, never an llm
@@ -196,25 +241,19 @@ iterations, and `turnRetries`, how often a failed model call is re-requested
 within a step (a permanent failure never retries, and `0` keeps the default rather
 than disabling). Both are deliberately absent from the defaults
 layer, so `Explain` reports `(default)`, and `AJENT_AGENT_MAXSTEPS` and
-`AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are startup-time
-configuration: pkg/app copies them into `agent.Options` once at process start,
-so they are deliberately absent from `/settings`, whose session overrides could
-never reach the running agent.
+`AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are startup-only: pkg/app copies them into `agent.Options`
+once at process start.
 
 The block also holds `systemPrompt`: when set it replaces ajent's default prose
 guidance (the opening sentence and guideline bullets) in the system prompt. It is
-startup-time configuration like its siblings. `pkg/app` copies it into
-`agent.Options.SystemPrompt`, so a `/settings` override could never reach a live
-turn, and `AJENT_AGENT_SYSTEM_PROMPT` binds for free through EnvLayer, with the
-command-line flag `--system` outranking both via the flag layer. It has no row in
-`/settings`: like `maxSteps`, it is set only by config files, env or the flag,
-never at runtime.
+startup-only like its siblings, copied into `agent.Options.SystemPrompt`, and
+`AJENT_AGENT_SYSTEM_PROMPT` binds for free through EnvLayer, with the command-line flag
+`--system` outranking both via the flag layer.
 
 ### UI
 
 `ui.render` is a `tui.Mode` name defaulting to `"auto"`, read once before
-`tui.New`. A `/settings` override could never reach the live renderer, so, like
-`agent.maxSteps`, it has no row.
+`tui.New`: no override could reach the live renderer after that.
 
 `ui.color` is a `tui.ColorProfile` name defaulting to `"auto"`, read once beside
 `ui.render` and, like it, absent from `/settings`: the theme is built before
@@ -240,16 +279,16 @@ providers-design.md, "First-run setup").
 
 `ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
 defaults to detection, forcing the capability the way `ui.color` forces depth.
-Like `ui.render` it is read once before `tui.New` with no `/settings` row, and
-an unknown name falls back to detection (see tui-design.md, "Terminal images").
+Like `ui.render` it is read once before `tui.New`, and an unknown name falls back
+to detection (see tui-design.md, "Terminal images").
 
 `ui.keymap` names the keys that submit a prompt (`submit`) and those that insert
 a newline (`newline`). The lists are overrides over hard-coded defaults
 (`enter` submits, `ctrl+j` and `alt+enter` insert a newline), so an unlisted key
 keeps its default. The editor resolves each line-ending key against the map,
 which shapes the prompt field and a question's free-text answer while confirm
-and option-select surfaces keep physical `enter`. Like `ui.render` it is read
-once before `tui.New` with no `/settings` row. An unknown name, one key bound to
+and option-select surfaces keep physical `enter`. Like `ui.render` it is read once
+before `tui.New`. An unknown name, one key bound to
 both actions or an override that leaves nothing to submit warns and falls back
 to the defaults at startup (see tui-design.md, "Keys").
 
@@ -264,10 +303,9 @@ are seeded so a session saved blocked comes back blocked.
 `control.enabled`, off by default, is the deliberate act of turning on a local
 control surface for an interactive run: it exposes the running session on a
 same-user unix socket for controllers. `--serve` always implies it, since a serve
-run with no socket has no prompt source at all. It is read once at process start,
-with no `/settings` row, no session override and no live toggle. The socket is a
-runtime artifact, so a key that could flip mid-run would leave a controller attached
-to nothing.
+run with no socket has no prompt source at all. It is read once at process start: the
+socket is a runtime artifact, so a key that could flip mid-run would leave a controller
+attached to nothing.
 
 ## The writer
 
@@ -334,8 +372,8 @@ writes are best-effort, so a broken cache directory cannot break startup.
 
 The notice can be switched off entirely with `disableUpdateCheck` (a top-level
 Settings bool, env `AJENT_DISABLEUPDATECHECK`). It is read once at startup in
-pkg/app and deliberately has no `/settings` row, like `agent.maxSteps`. A
-session override could never reach the already-running check.
+pkg/app: a session override could never reach the already-running check, and an edit has
+nothing to restart into since it gates only the probe itself.
 
 ## The rule
 

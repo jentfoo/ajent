@@ -139,7 +139,8 @@ clipboard writer (the one write path behind `/copy`, see
 `clipboard-copy-feature.md`), read handles onto the model registry, agent
 state, tool registry, command registry and resolved config, settings writers
 that save to a layer or record a session override, mutators that apply and
-persist model, reasoning and tool-set changes, plus dispatch-state reporting
+persist model, reasoning and tool-set changes, a full re-read of the
+configuration files (`Reload`, see below), plus dispatch-state reporting
 and exit.
 
 `pkg/app` implements it once (`uiConsole`) over the objects the driver already
@@ -158,6 +159,15 @@ The permissions-mode row applies its parsed mode to the live barrier for this
 run only and records no `setting_change`, so every start uses the resolved
 config default.
 
+`Reload` is the widest of the mutators and the thinnest command: the handler calls it
+and turns an error into a notice, nothing more. It is refused while a turn runs, since
+the system and tool blocks must stay stable within one; that check is only a snapshot,
+so a drain starting mid-reload finds every state write queued behind itself instead of
+racing State. Every progress notice belongs to
+the host, which is the only side that knows which live objects a re-read actually moved.
+`config-design.md`'s Reload section states its two rules: a reload writes nothing and
+never enables nor disables a tool.
+
 `Dispatched()` is owned by the pump and flips true on this run's first prompt,
 never on a command or a `!`. It stays false on a resumed session until then,
 so `/tools` selection opens free despite existing history.
@@ -174,6 +184,7 @@ so `/tools` selection opens free despite existing history.
 | `/tools` | multi-select, grouped by source. Free selection before this run's first prompt (a resumed session preselects its recorded set), widen-only after |
 | `/session [name]` | report the session's name, or set it. An invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer, each edited in place with save-to-layer (see `config-design.md`). Rows come in three kinds: enum from a fixed set, model picker, and integer with min/max validation for sub-agent settings. A currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden |
+| `/reload` | re-read `config.json`, `models.json`, `mcp.json` and `AGENTS.md` and re-apply them to the live session, refused while a turn runs. Newly discovered tools arrive disabled and startup-only keys are reported rather than applied (see `config-design.md`) |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all. Unknown verbs warn. Esc never cancels jobs, so this is the only stop path |
 | `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
@@ -183,7 +194,7 @@ so `/tools` selection opens free despite existing history.
 | `/exit` | quit |
 
 `/help`, `/model`, `/reasoning`, `/usage`, `/copy`, `/compact`, `/tools`, `/session`,
-`/mcp`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins.
+`/mcp`, `/reload`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins.
 `/plan*` and `/init` are feature commands the driver adds on top.
 
 Registration goes through one helper in `pkg/app` that always calls

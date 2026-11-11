@@ -171,6 +171,12 @@ between requests (plus instruction reloads and tool-set changes), so the
 provider's prompt cache survives. Composition and wording are specified in
 `prompt-design.md`.
 
+Instruction reloads are the one deliberate exception, gated:
+`SetProjectInstructions` replaces the AGENTS.md content and **reports false while
+a turn runs**, so the block can never change mid-turn. The refusal also gives the
+loop's unlocked read its happens-before edge. `/reload` (`command-design.md`) is the
+only caller.
+
 ### Fixed-overhead accounting (`base`) is replaced, not accumulated
 
 The system block plus tool schemas ride with every request but carry no provider

@@ -5,8 +5,10 @@ import (
 	"sync"
 )
 
-// Providers caches one Provider per endpoint so /model switching never rebuilds
-// an adapter. It keeps the registry out of front ends' reach.
+// Providers caches one Provider per endpoint and config era, so /model
+// switching never rebuilds an adapter while an edited models.json does. Era-keyed
+// entries are never evicted; each edit strands only its adapters. It keeps the
+// registry out of front ends' reach.
 type Providers struct {
 	reg *Registry
 
@@ -24,9 +26,10 @@ func (c *Providers) ProviderFor(m Model) (Provider, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// two models on one provider may differ in dialect or endpoint, so the vendor
-	// name alone would collapse them onto whichever adapter was built first
-	key := m.Provider + "\x00" + m.Caps.Dialect.String() + "\x00" + m.BaseURL
+	// dialect and baseURL split adapters within a provider; the era rebuilds one
+	// after an edited models.json, e.g. a rotated credential
+	key := m.Provider + "\x00" + m.Caps.Dialect.String() + "\x00" + m.BaseURL + "\x00" +
+		c.reg.providerEra(m.Provider)
 	if p, ok := c.m[key]; ok {
 		return p, nil
 	}

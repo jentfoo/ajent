@@ -83,14 +83,15 @@ type Compaction struct {
 
 // Subagent configures research sub-agents.
 type Subagent struct {
-	Model         string `json:"model,omitempty"` // llm model key, empty inherits the session model
-	MaxConcurrent int    `json:"maxConcurrent,omitempty"`
+	Model string `json:"model,omitempty"` // llm model key, empty inherits the session model
+	// MaxConcurrent and MaxSteps are startup-only: an override reaches a later
+	// run (/reload reports it), never the live manager.
+	MaxConcurrent int `json:"maxConcurrent,omitempty"`
 	// MaxPollWait is how long one agent_poll blocks before reporting the job
 	// still running: a Go duration string ("20m", "90s"), empty takes the
 	// built-in default. Read once when pkg/app builds the manager.
 	MaxPollWait string `json:"maxPollWait,omitempty"`
-	// MaxSteps caps one child turn's tool-calling iterations, <= 0 means
-	// unlimited. Applied at spawn so /settings changes reach the next job.
+	// MaxSteps caps one child turn's tool-calling iterations, <= 0 means unlimited.
 	MaxSteps int `json:"maxSteps,omitempty"`
 }
 

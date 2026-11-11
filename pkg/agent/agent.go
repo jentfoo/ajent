@@ -32,7 +32,7 @@ type Options struct {
 	Sinks               []Sink                                // fanned out in registration order
 	Tools               ToolSet                               // nil disables tool calling entirely
 	Env                 Environment                           // OS facts layered into the system prompt
-	ProjectInstructions []ProjectInstruction                  // AGENTS.md content, loaded once at startup
+	ProjectInstructions []ProjectInstruction                  // AGENTS.md content; SetProjectInstructions swaps it between turns
 	SystemSnippets      []string                              // extra system blocks, appended after project instructions
 	SystemPrompt        string                                // replaces the default opening sentence and guidelines when non-empty
 	Transforms          []Transform                           // applied in assembly order
@@ -121,6 +121,19 @@ func (a *Agent) Running() bool {
 	defer a.mu.Unlock()
 
 	return a.running
+}
+
+// SetProjectInstructions replaces the AGENTS.md content layered into the system
+// block, reporting false while a turn runs. The block must stay stable within a
+// turn, so /reload applies between them.
+func (a *Agent) SetProjectInstructions(p []ProjectInstruction) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		return false
+	}
+	a.opts.ProjectInstructions = p
+	return true
 }
 
 // BaseEstimate returns the token estimate of what rides with every request: the

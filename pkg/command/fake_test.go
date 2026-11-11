@@ -46,6 +46,8 @@ type fakeConsole struct {
 	dispatched   bool
 	setModel     llm.Model
 	toolsChanged int
+	reloaded     int
+	reloadErr    error // returned by Reload
 	exited       bool
 
 	sessionName    string // reported by SessionName, updated by SetSessionName
@@ -275,6 +277,13 @@ func (f *fakeConsole) Dispatched() bool                   { return f.dispatched 
 func (f *fakeConsole) Exit()                              { f.exited = true }
 
 func (f *fakeConsole) Compact(context.Context, string) error { return nil }
+
+func (f *fakeConsole) Reload(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reloaded++
+	return f.reloadErr
+}
 
 // noticesSeen returns a snapshot of recorded notices.
 func (f *fakeConsole) noticesSeen() []string {

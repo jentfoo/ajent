@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/go-analyze/bulk"
@@ -40,6 +41,7 @@ type Set struct {
 	session  Layer // mutable, above every file layer
 
 	workspace string
+	envFn     func(string) string // captured so a reload reads the same environment
 	userPath  string
 	projPath  string
 	localPath string
@@ -61,49 +63,25 @@ func Load(opts Options) (*Set, []string, error) {
 		env = os.Getenv
 	}
 
-	var warns []string
-	s := &Set{workspace: opts.Workspace, defaults: Defaults()}
-
 	userPath, err := UserPath(ConfigFileName)
 	if err != nil {
-		return nil, warns, fmt.Errorf("config: %w", err)
+		return nil, nil, fmt.Errorf("config: %w", err)
 	}
-	s.userPath = userPath
-
-	data, w, err := loadFile(userPath)
-	warns = append(warns, w...)
-	if err != nil {
-		return nil, warns, err
-	}
-	if data != nil {
-		s.user = Layer{Name: "user", Path: userPath, Data: data}
-	}
-
 	projDir := ProjectDir(opts.Workspace)
-	s.projPath = filepath.Join(projDir, ConfigFileName)
-	data, w, err = loadFile(s.projPath)
-	warns = append(warns, w...)
+	s := &Set{
+		defaults:  Defaults(),
+		flags:     opts.Flags,
+		workspace: opts.Workspace,
+		envFn:     env,
+		userPath:  userPath,
+		projPath:  filepath.Join(projDir, ConfigFileName),
+		localPath: filepath.Join(projDir, LocalConfigFileName),
+	}
+
+	warns, err := s.readLayers()
 	if err != nil {
 		return nil, warns, err
 	}
-	if data != nil {
-		s.project = Layer{Name: "project", Path: s.projPath, Data: data}
-	}
-
-	s.localPath = filepath.Join(projDir, LocalConfigFileName)
-	data, w, err = loadFile(s.localPath)
-	warns = append(warns, w...)
-	if err != nil {
-		return nil, warns, err
-	}
-	if data != nil {
-		s.local = Layer{Name: "local", Path: s.localPath, Data: data}
-	}
-
-	eLayer, eWarns := EnvLayer(env)
-	warns = append(warns, eWarns...)
-	s.env = eLayer
-	s.flags = opts.Flags
 
 	resolved, err := Merge(s.layers()...)
 	if err != nil {
@@ -116,7 +94,67 @@ func Load(opts Options) (*Set, []string, error) {
 	return s, warns, nil
 }
 
-// layers returns the configuration stack lowest to highest precedence.
+// Reload re-reads the user, project, local and environment layers from disk,
+// keeping session overrides and flags. A failure leaves the previous layers in
+// place; warnings report what the files themselves are missing or dropping.
+func (s *Set) Reload() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.readLayers()
+}
+
+// readLayers reads the file and environment layers, assigning them only once
+// every read succeeded. Callers hold the write lock.
+func (s *Set) readLayers() ([]string, error) {
+	data, warns, err := loadFile(s.userPath)
+	if err != nil {
+		return warns, err
+	}
+	var user Layer
+	if data != nil {
+		if hasAPIKey(data) {
+			if permWarn := CheckSecretPerms(s.userPath); permWarn != "" {
+				warns = append(warns, permWarn)
+			}
+		}
+		user = Layer{Name: "user", Path: s.userPath, Data: data}
+	}
+
+	project, w, err := readSharedLayer("project", s.projPath, "project files get committed")
+	warns = append(warns, w...)
+	if err != nil {
+		return warns, err
+	}
+	local, w, err := readSharedLayer("local", s.localPath, "local files are shared")
+	warns = append(warns, w...)
+	if err != nil {
+		return warns, err
+	}
+
+	eLayer, eWarns := EnvLayer(s.envFn)
+	warns = append(warns, eWarns...)
+
+	s.user, s.project, s.local, s.env = user, project, local, eLayer
+	s.valid = false
+	return warns, nil
+}
+
+// readSharedLayer loads a committed or shared layer file, stripping any literal
+// apiKey and warning with reason. A missing file yields a zero Layer.
+func readSharedLayer(name, path, reason string) (Layer, []string, error) {
+	data, warns, err := loadFile(path)
+	if err != nil || data == nil {
+		return Layer{}, warns, err
+	}
+	stripped, keys := stripKeys(data, "providers.*.apiKey")
+	for _, k := range keys {
+		warns = append(warns, fmt.Sprintf("%s: ignored apiKey at %q; %s", path, k, reason))
+	}
+	return Layer{Name: name, Path: path, Data: stripped}, warns, nil
+}
+
+// layers returns the configuration stack lowest to highest precedence. Callers
+// hold the lock.
 func (s *Set) layers() []Layer {
 	return []Layer{s.defaults, s.user, s.project, s.local, s.env, s.flags, s.session}
 }
@@ -356,4 +394,70 @@ func loadFile(path string) ([]byte, []string, error) {
 		}
 	}
 	return data, warns, nil
+}
+
+// hasAPIKey reports whether any non-empty literal apiKey exists in data.
+func hasAPIKey(data []byte) bool {
+	v, err := parseNode(data)
+	if err != nil || !v.isObject() {
+		return false
+	}
+	found := false
+	var scan func(o *object, path string)
+	scan = func(o *object, path string) {
+		for _, k := range o.keys {
+			cv := o.m[k]
+			p := join(path, k)
+			if cv.isObject() {
+				scan(cv.obj, p)
+				continue
+			}
+			var s string
+			if k == "apiKey" && json.Unmarshal(cv.raw, &s) == nil && s != "" {
+				found = true
+			}
+		}
+	}
+	scan(v.obj, "")
+	return found
+}
+
+// stripKeys removes every value matching pattern and returns the stripped data
+// plus the removed dotted paths. A "*" segment matches any single key.
+func stripKeys(data []byte, patterns ...string) ([]byte, []string) {
+	v, err := parseNode(data)
+	if err != nil || !v.isObject() {
+		return data, nil
+	}
+	var removed []string
+	for _, pat := range patterns {
+		stripMatch(v.obj, splitPath(pat), nil, &removed)
+	}
+	out, _ := indentJSON(v.marshal())
+	return out, removed
+}
+
+// stripMatch removes matching leaves from o; path tracks the current dotted prefix.
+func stripMatch(o *object, parts []string, path []string, removed *[]string) {
+	if len(parts) == 0 {
+		return
+	}
+	for _, key := range o.keys {
+		cv := o.m[key]
+		if parts[0] != "*" && parts[0] != key {
+			continue
+		}
+		p := append(append([]string{}, path...), key)
+		switch {
+		case len(parts) == 1:
+			if cv.isObject() { // a whole subtree matches the final segment
+				collectLeaves(cv, strings.Join(p, "."), removed)
+			} else {
+				*removed = append(*removed, strings.Join(p, "."))
+			}
+			removeKey(o, key)
+		case cv.isObject():
+			stripMatch(cv.obj, parts[1:], p, removed)
+		}
+	}
 }

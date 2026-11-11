@@ -218,6 +218,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 	if perr != nil {
 		ui.Notify("could not read AGENTS.md: "+perr.Error(), tui.LevelWarn)
 	}
+	// /reload swaps the instructions here so sub-agents read one live copy; the
+	// agent's own block is swapped through SetProjectInstructions in reloadDeps.
+	projStore := &projectStore{p: proj}
 	opts := agent.Options{
 		Sinks:               []agent.Sink{sink},
 		Env:                 env,
@@ -331,8 +334,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 			Parent:              func() *tokens.Accounting { return st.Tokens },
 			Tools:               childToolSource{reg: toolsReg},
 			Env:                 env,
-			ProjectInstructions: proj,
-			Root:                appRoot, // job contexts die with the app root, not only at Close
+			ProjectInstructions: projStore.get, // resolved per job, so /reload reaches later ones
+			Root:                appRoot,       // job contexts die with the app root, not only at Close
 
 			Activity: func(key, text string, rank int) {
 				// ranked by job number so rows hold their place, oldest first,
@@ -532,7 +535,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		ui.Notify("mcp: "+w, tui.LevelWarn)
 	}
 	var mgr *mcp.Manager
-	if toolsReg != nil && merr == nil {
+	if toolsReg != nil {
+		// a broken mcp.json still gets a manager, so /reload can pick up the fix
 		mgr = mcp.New(servers, mcp.Options{
 			Registrar: registryAdapter{toolsReg},
 			Workspace: config.Cwd(),
@@ -587,6 +591,19 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		ui: ui, set: set, reg: reg, st: st, tools: toolsReg, commands: cmds,
 		starts: starts, quit: quitNow, permit: barrier,
 		q: q, snap: snap, hub: hub, dialogs: dialogs, lane: lane,
+		reload: reloadDeps{
+			// drainLive, not ag.Running: State is owned from dispatch until the drain
+			// settles, including the gap between batched turns
+			running: q.drainLive,
+			project: func(p []agent.ProjectInstruction) bool {
+				if !ag.SetProjectInstructions(p) {
+					return false
+				}
+				projStore.set(p) // sub-agents spawned after this read the same copy
+				return true
+			},
+			startup: startupKeysOf(set.Settings()),
+		},
 	}
 	console.refreshBase = func() {
 		// BaseEstimate reports 0 while a turn owns State, and that turn's own SetBase

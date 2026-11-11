@@ -17,7 +17,7 @@ const (
 )
 
 // RegisterBuiltins installs /help, /model, /reasoning, /usage, /compact, /tools,
-// /session, /mcp, /agents, /settings and /exit into r against c. The driver adds
+// /session, /mcp, /reload, /agents, /settings and /exit into r against c. The driver adds
 // its feature commands (/plan*, /init) to the same registry on top.
 func RegisterBuiltins(r *Registry, c Console) {
 	r.Register(Command{
@@ -79,6 +79,11 @@ func RegisterBuiltins(r *Registry, c Console) {
 		Args:        "[connect|disconnect|logs|reload] [name]",
 		Complete:    mcpCompletion(c),
 		Handler:     mcpCommand,
+	})
+	r.Register(Command{
+		Name:        "reload",
+		Description: "re-read config.json, models.json, mcp.json and AGENTS.md",
+		Handler:     reloadCommand,
 	})
 	r.Register(Command{
 		Name:        "agents",

@@ -48,6 +48,31 @@ func TestAgentBaseEstimate(t *testing.T) {
 	})
 }
 
+func TestAgentSetProjectInstructions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("applies_when_idle", func(t *testing.T) {
+		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
+		bare := a.BaseEstimate(false)
+
+		assert.True(t, a.SetProjectInstructions([]ProjectInstruction{
+			{Body: "the entire AGENTS.md body rides in the system block"},
+		}))
+		assert.Greater(t, a.BaseEstimate(false), bare)
+	})
+	t.Run("refused_while_running", func(t *testing.T) {
+		st := &State{Model: llm.Model{ID: "test"}, Reasoning: llm.ReasoningConfig{}}
+		a := newTestAgent(st, &llm.ScriptedProvider{}, nil)
+		a.mu.Lock()
+		a.running = true
+		a.mu.Unlock()
+
+		assert.False(t, a.SetProjectInstructions([]ProjectInstruction{{Body: "x"}}))
+		assert.Empty(t, a.opts.ProjectInstructions)
+	})
+}
+
 // fakeRead is a minimal tool so mapSet has something to expose schemas for.
 type fakeRead struct{}
 

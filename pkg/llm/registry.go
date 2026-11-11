@@ -3,10 +3,13 @@ package llm
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"maps"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +26,7 @@ type Registry struct {
 	dupAlias map[string]struct{} // aliases claimed by more than one model, never resolved silently
 	entries  map[string]ProviderConfig
 	flavors  map[string]Flavor
+	eras     map[string]string // per-provider declaration fingerprints; adapter caches key on them
 	env      func(string) string
 	file     File
 	cache    map[string]CacheEntry
@@ -85,6 +89,7 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 	var models []Model
 	entries := make(map[string]ProviderConfig, len(f.Providers))
 	flavors := make(map[string]Flavor, len(f.Providers))
+	eras := make(map[string]string, len(f.Providers))
 
 	for name, cfg := range f.Providers {
 		if cfg.Disabled {
@@ -109,6 +114,7 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		ctx := modelContext{provider: name, dialect: dialect, baseURL: resolveBaseURL(cfg.BaseURL, def.baseURL)}
 		entries[name] = cfg
 		flavors[name] = flavor
+		eras[name] = providerFingerprint(cfg)
 
 		for _, w := range compatWarnings(cfg.Compat, dialect) {
 			warnings = append(warnings, "provider "+name+": "+w)
@@ -154,7 +160,7 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.entries, r.flavors = entries, flavors
+	r.entries, r.flavors, r.eras = entries, flavors, eras
 	r.models = models
 	// only user-declared thresholds land here
 	declared := bulk.SliceFilter(func(m Model) bool { return m.CompactThreshold != 0 }, models)
@@ -191,6 +197,19 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		}
 	}
 	return warnings
+}
+
+// providerFingerprint hashes a provider declaration, so an unchanged re-read keeps
+// adapter caches valid while an edited one invalidates them. Marshal is a stable
+// form: struct field order is fixed and map keys sort.
+func providerFingerprint(cfg ProviderConfig) string {
+	data, err := json.Marshal(cfg)
+	if err != nil { // impossible while every field stays JSON-shaped
+		panic("llm: cannot fingerprint provider config: " + err.Error())
+	}
+	h := fnv.New64a()
+	_, _ = h.Write(data)
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 // SetCompactDefault sets the compaction threshold for models that declare none of
@@ -436,6 +455,12 @@ func (r *Registry) Refresh(ctx context.Context, opts DiscoverOptions) (map[strin
 
 	cache, warnings := Discover(ctx, file, prev, opts)
 
+	// a concurrent SetFile governs: rebuild the file that is live now, not the one
+	// discovery probed, or an edit landing mid-pass reverts until the next pass
+	r.mu.RLock()
+	file = r.file
+	r.mu.RUnlock()
+
 	warnings = append(warnings, r.rebuild(file, cache)...)
 
 	// Reconcile against the live pointer under one lock, so a switch that landed
@@ -473,6 +498,27 @@ func (r *Registry) RefreshModels(notify func(msg string, warn bool)) int {
 		notify("could not save the model cache: "+err.Error(), true)
 	}
 	return len(r.Models()) - before
+}
+
+// SetFile installs a new models.json view, rebuilding the catalogue against the
+// existing discovery cache and keeping the active model when it still resolves.
+// Warnings report providers the new file cannot serve. Callers serialize:
+// r.file lands before rebuild, so overlapping calls could apply in reverse.
+func (r *Registry) SetFile(f File) []string {
+	active := r.Active()
+
+	r.mu.Lock()
+	cache := r.cache
+	r.file = f
+	r.mu.Unlock()
+
+	warnings := r.rebuild(f, cache)
+	if active.ID != "" {
+		if m, err := r.Resolve(active.Key()); err == nil {
+			r.SetActive(m)
+		}
+	}
+	return warnings
 }
 
 // Models returns every known model, sorted by provider then id.
@@ -577,6 +623,15 @@ func (r *Registry) ProviderConfigFor(m Model) (ProviderConfig, Flavor, bool) {
 
 	cfg, ok := r.entries[m.Provider]
 	return cfg, r.flavors[m.Provider], ok
+}
+
+// providerEra fingerprints a provider's current declaration, changing when a
+// rebuild replaces it, so adapter caches invalidate on an edited models.json.
+func (r *Registry) providerEra(provider string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	return r.eras[provider]
 }
 
 // ProviderNames returns every configured provider name, sorted.

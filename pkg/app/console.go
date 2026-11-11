@@ -42,6 +42,7 @@ type uiConsole struct {
 	agents   agentsAdapter   // the sub-agent manager adapter, or nil
 	permit   *permit.Barrier // live permission gate, nil when tools are disabled
 	hub      *sessionHub     // control plane, rename tracking
+	reload   reloadDeps      // what /reload re-applies beyond the fields above
 
 	// q gates state writes against a live drain goroutine
 	q *steerQueue
@@ -288,8 +289,8 @@ func (c *uiConsole) ResetSessionSetting(key string) error {
 }
 
 // reapplyResolved refreshes the live surface key's override had driven, reading
-// the resolved settings that now fold every lower layer. Keys with no live
-// effect (limits, subagent concurrency) are read per use and need nothing.
+// the resolved settings that now fold every lower layer. Startup-only keys are
+// absent: their objects read config only at startup or /reload.
 func (c *uiConsole) reapplyResolved(key string) {
 	switch {
 	case key == keyPermissionMode:
@@ -336,8 +337,7 @@ func (c *uiConsole) reapplyModel() {
 		return
 	}
 	c.queueState("model "+key, func() {
-		c.applyModel(m)
-		_ = c.set.ClearSession("model") // undo the override applyModel just re-pinned
+		c.applyModel(m) // silent rebase: the reset already dropped any override
 	})
 }
 
@@ -371,16 +371,28 @@ func (c *uiConsole) applyCompactThreshold(value any) {
 }
 
 func (c *uiConsole) SetModel(m llm.Model) {
-	c.queueState("model "+m.Key(), func() { c.applyModel(m) })
-}
-
-// applyModel switches the live model, rebases the ledger and records the change.
-// Picking the already-active model is a no-op: nothing to rebase, record or
-// announce, so a stray /model does not spam the history with an unchanged line.
-func (c *uiConsole) applyModel(m llm.Model) {
-	if m.Key() == c.st.Model.Key() {
+	// picking the already-active model is a no-op: nothing to rebase, record or
+	// announce, so a stray /model does not spam the history with an unchanged line.
+	if c.st != nil && m.Key() == c.st.Model.Key() {
 		return
 	}
+	c.queueState("model "+m.Key(), func() {
+		c.applyModel(m)
+		// record a session override so Explain and Settings report (session), keeping
+		// the choice for this run without rewriting any config layer.
+		_ = c.set.SetSession("model", m.Key())
+		c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
+		if c.rec != nil {
+			c.rec.ModelChange(m, "command")
+		}
+	})
+}
+
+// applyModel rebases the registry, agent state, token ledger and status line onto
+// m without persisting or recording anything, so /reload can adopt a model the
+// config files name without pinning a session override. Unconditional: the same
+// key can now carry a different window or threshold.
+func (c *uiConsole) applyModel(m llm.Model) {
 	// keep the stored reasoning override untouched so a temporary switch does not lose
 	// the user's choice. Recompute only the live effective level for display (buildRequest
 	// already clamps requests) from the raw preference, restoring it on switching back.
@@ -407,14 +419,6 @@ func (c *uiConsole) applyModel(m llm.Model) {
 	// could never fire on this model.
 	t.Reseed(tokens.EstimateFor(m, c.st.Reasoning.Retain, c.st.Messages))
 	c.ui.SetContext(tuisink.ContextInfo(t.Context()))
-	// record a session override so Explain and Settings report (session). The
-	// user-layer persist is the direct /model command's job, not this apply.
-	_ = c.set.SetSession("model", m.Key())
-	c.ui.Notify("model: "+m.Key(), tui.LevelInfo)
-
-	if c.rec != nil {
-		c.rec.ModelChange(m, "command")
-	}
 }
 
 func (c *uiConsole) SetReasoning(rc llm.ReasoningConfig) {

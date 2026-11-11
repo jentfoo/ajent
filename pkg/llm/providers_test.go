@@ -48,4 +48,22 @@ func TestProvidersProviderFor(t *testing.T) {
 	t.Run("differing_base_url_gets_its_own_adapter", func(t *testing.T) {
 		assert.NotSame(t, get("chat"), get("elsewhere"))
 	})
+
+	// an edited apiKey reaches the next request, so the adapter must rebuild
+	t.Run("credential_edit_rebuilds_adapter", func(t *testing.T) {
+		first := get("chat")
+		p := f.Providers["gateway"]
+		p.APIKey = "rotated"
+		edited := f
+		edited.Providers = map[string]ProviderConfig{"gateway": p}
+		require.Empty(t, cache.reg.SetFile(edited))
+		assert.NotSame(t, first, get("chat"))
+	})
+
+	t.Run("identical_file_keeps_adapter", func(t *testing.T) {
+		require.Empty(t, cache.reg.SetFile(f)) // an unchanged re-read keeps the era
+		first := get("chat")
+		require.Empty(t, cache.reg.SetFile(f))
+		assert.Same(t, first, get("chat"))
+	})
 }

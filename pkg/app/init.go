@@ -188,9 +188,8 @@ func initCommands(ctl *initController) []command.Command {
 	}}
 }
 
-// initWatch notices the turn that writes AGENTS.md, so the driver can say it only
-// applies on the next start. Project instructions are read once at startup, so there
-// is no mid-session reload.
+// initWatch notices the turn that writes AGENTS.md, so the driver can point at
+// /reload. Project instructions are otherwise read once, at startup.
 type initWatch struct {
 	agent.NopSink
 	notify func(msg string, level tui.Level)
@@ -230,7 +229,7 @@ func (w *initWatch) TurnEnd(agent.TurnResult) {
 	w.path = ""
 	w.mu.Unlock()
 	if w.notify != nil {
-		w.notify("init: "+agentsFileName+" written; it applies on the next start", tui.LevelInfo)
+		w.notify("init: "+agentsFileName+" written; run /reload to apply it", tui.LevelInfo)
 	}
 }
 

@@ -26,7 +26,7 @@ import (
 // newTestServer builds a server with no live connection, for direct register()
 // unit checks.
 func (m *Manager) newTestServer(name string) *server {
-	return m.newServer(name, ServerConfig{})
+	return m.newServer(name, ServerConfig{}, false)
 }
 
 // fakeRegistrar records registrations so manager tests can inspect state without
@@ -289,7 +289,7 @@ func TestConfigDisabledServer(t *testing.T) {
 			Registrar: fr,
 			Restore:   []string{"fake__tool_01"}, // enabled via /tools in the prior session
 		}))
-		s := mgr.newServer("fake", ServerConfig{Enabled: &disabled})
+		s := mgr.newServer("fake", ServerConfig{Enabled: &disabled}, false)
 
 		defs := []ToolDef{
 			{Name: "tool_00", InputSchema: jsonRawObject},
@@ -744,7 +744,7 @@ func TestRegisterPreservesLiveDisabled(t *testing.T) {
 	fr.set("srv__b", StateDisabled)
 
 	// capture the live split and re-register as a refresh would (unregister first)
-	keep := mgr.captureLive(s.source, ServerConfig{})
+	keep := mgr.captureLive(s, ServerConfig{})
 	fr.Unregister(s.source)
 	mgr.register(s, nil, defs, keep)
 
@@ -822,7 +822,7 @@ func TestImpliedEnabled(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mgr := New(nil, wired(Options{Registrar: newFakeRegistrar(), Restore: tt.restore}))
-			assert.Equal(t, tt.want, mgr.impliedEnabled(tt.cfg, tt.tool))
+			assert.Equal(t, tt.want, mgr.impliedEnabled(&server{}, tt.cfg, tt.tool))
 		})
 	}
 }
@@ -869,21 +869,21 @@ func TestCaptureLiveSubtractsDefaults(t *testing.T) {
 
 	// against the config that produced this split only the deliberate toggle remains,
 	// so an unchanged re-registration keeps it while anything untouched follows defaults
-	keep := mgr.captureLive(s.source, ServerConfig{})
+	keep := mgr.captureLive(s, ServerConfig{})
 	assert.Empty(t, keep.enabled)
 	assert.Equal(t, map[string]struct{}{"srv__b": {}}, keep.disabled)
 
 	// against a config-disabled era the same split reads as pure default: b was never
 	// a toggle and a must have been turned on deliberately
 	var off bool
-	keep = mgr.captureLive(s.source, ServerConfig{Enabled: &off})
+	keep = mgr.captureLive(s, ServerConfig{Enabled: &off})
 	assert.Equal(t, map[string]struct{}{"srv__a": {}}, keep.enabled)
 	assert.Empty(t, keep.disabled)
 
 	// a restored enabled set makes the implication per name: only b's extra enablement departs
 	fr.set("srv__b", StateEnabled)
 	restored := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a"}}))
-	keep = restored.captureLive(s.source, ServerConfig{})
+	keep = restored.captureLive(restored.newTestServer("srv"), ServerConfig{})
 	assert.Empty(t, keep.disabled)
 	assert.Equal(t, map[string]struct{}{"srv__b": {}}, keep.enabled)
 }
@@ -1228,6 +1228,48 @@ func TestReload(t *testing.T) {
 
 		assert.Empty(t, fr.AllNames("mcp: fake")) // tools go with the server
 		assert.Nil(t, mgr.serverByName("fake"))
+	})
+
+	// a server the edit adds registers disabled even though its config leaves the
+	// tools on: a reload never enables, /tools picks the set up
+	t.Run("added_server_lands_disabled", func(t *testing.T) {
+		mgr, fr, ws := setup(t, `{"servers":{}}`)
+		require.Empty(t, mgr.ServerNames())
+
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(""))
+		require.NoError(t, mgr.Reload(t.Context()))
+
+		require.Eventually(t, func() bool {
+			return len(fr.AllNames("mcp: fake")) > 0
+		}, 5*time.Second, 20*time.Millisecond)
+		for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+			assert.Equal(t, StateDisabled, mustState(fr, "fake__"+n))
+		}
+		// the widen-only picker reads the disabled split, so the set must be listed there
+		assert.ElementsMatch(t, []string{"fake__tool_00", "fake__tool_01", "fake__tool_02"},
+			fr.DisabledNames("mcp: fake"))
+	})
+
+	// a deliberate /tools enable on a reload-added server must survive a reconnect
+	// like it does on a startup server: the recorded set is explicit enablement, so
+	// it outranks the reload-add default
+	t.Run("added_server_keeps_tools_enable", func(t *testing.T) {
+		mgr, fr, ws := setup(t, `{"servers":{}}`)
+		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(""))
+		require.NoError(t, mgr.Reload(t.Context()))
+		require.Eventually(t, func() bool {
+			return len(fr.AllNames("mcp: fake")) > 0
+		}, 5*time.Second, 20*time.Millisecond)
+
+		fr.set("fake__tool_00", StateEnabled) // the /tools reshape
+		mgr.SetRestore([]string{"fake__tool_00"})
+		mgr.Disconnect("fake")
+		require.NoError(t, mgr.Connect(t.Context(), "fake"))
+		require.Eventually(t, func() bool {
+			return len(fr.AllNames("mcp: fake")) > 0
+		}, 5*time.Second, 20*time.Millisecond)
+		assert.Equal(t, StateEnabled, mustState(fr, "fake__tool_00"))
+		assert.Equal(t, StateDisabled, mustState(fr, "fake__tool_01"))
 	})
 
 	// flipping enabled false -> true must reach a connected server: nothing was ever

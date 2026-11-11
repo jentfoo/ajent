@@ -71,7 +71,7 @@ Sub-agents only function in a read only form. They exist only to keep the main c
 
 ### Project instructions
 
-`AGENTS.md` in the working directory (and `~/.ajent/AGENTS.md` for habits you want everywhere) is read at startup and injected into every turn's system prompt. Editing it applies on the next start, not mid-session.
+`AGENTS.md` in the working directory (and `~/.ajent/AGENTS.md` for habits you want everywhere) is read at startup and injected into every turn's system prompt. Editing it applies on the next start, or at a `/reload` between turns.
 
 `/init` writes that file for you. It reads the project's `README*` itself, then fans the build and the codebase out to read-only sub-agents in parallel. One surveying job covers the Makefile, CI config and `CONTRIBUTING.md`, and one to four split the tree between them, scaled to its size and balanced by where the code actually is. Their summaries come back as ordinary tool results, and a single turn distills them into `AGENTS.md`. The write goes through the normal permission barrier, so you see the diff and approve it like any other. Run `/init` again later and it corrects the existing file against a fresh survey rather than replacing it. Esc cancels a survey in progress.
 

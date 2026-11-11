@@ -25,7 +25,7 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	want := []string{"help", "model", "reasoning", "usage", "copy", "compact", "tools", "session", "mcp", "agents", "settings", "update", "exit"}
+	want := []string{"help", "model", "reasoning", "usage", "copy", "compact", "tools", "session", "mcp", "reload", "agents", "settings", "update", "exit"}
 	assert.Equal(t, want, commandNames(r))
 }
 

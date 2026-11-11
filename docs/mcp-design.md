@@ -223,7 +223,8 @@ package stays free of `pkg/tools`.
   the client (see *Notifications never block mcp-go's reader*).
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without
   removing the config. `Reload` re-reads `mcp.json`, disconnects removed servers
-  and connects new ones, leaving the process running. Filter fields
+  and connects new ones, leaving the process running. A server a reload adds
+  registers its tools disabled; only `/tools` turns them on. Filter fields
   (`tools.allow/deny`, `excludeTools`, `readOnly`, `enabled`) apply immediately by
   re-registering the source with its live enabled set preserved. Connection fields
   (`command`, `args`, `env`, `url`, `headers`, `transport`) take effect only on
