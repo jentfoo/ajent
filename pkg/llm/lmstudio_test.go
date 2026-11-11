@@ -47,6 +47,11 @@ func TestParseLMStudioModels(t *testing.T) {
 		assert.True(t, *got[0].Compat.SupportsToolChoice)
 	})
 
+	t.Run("state_marks_residency", func(t *testing.T) {
+		assert.True(t, got[0].Loaded)
+		assert.False(t, got[1].Loaded)
+	})
+
 	t.Run("malformed_body_errors", func(t *testing.T) {
 		_, err := parseLMStudioModels([]byte("not json"))
 		assert.Error(t, err)
@@ -101,6 +106,11 @@ func TestParseLMStudioV1Models(t *testing.T) {
 		require.NotNil(t, got[0].Compat)
 		require.NotNil(t, got[0].Compat.SupportsToolChoice)
 		assert.True(t, *got[0].Compat.SupportsToolChoice)
+	})
+
+	t.Run("instances_mark_residency", func(t *testing.T) {
+		assert.True(t, got[0].Loaded)
+		assert.False(t, got[1].Loaded)
 	})
 
 	t.Run("malformed_body_errors", func(t *testing.T) {

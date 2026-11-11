@@ -172,6 +172,29 @@ type File struct {
 	Providers    map[string]ProviderConfig `json:"providers"`
 }
 
+// DiscoverAdd controls what discovery contributes to a provider that declares
+// models: "loaded" adds entries the endpoint reports resident, "all" adds
+// everything it listed. Empty keeps the declaration as the whole list.
+type DiscoverAdd string
+
+const (
+	DiscoverAddNone   DiscoverAdd = ""
+	DiscoverAddLoaded DiscoverAdd = "loaded"
+	DiscoverAddAll    DiscoverAdd = "all"
+)
+
+// admits reports whether an undeclared discovered entry joins a declared list.
+func (a DiscoverAdd) admits(m ModelConfig) bool {
+	switch a {
+	case DiscoverAddAll:
+		return true
+	case DiscoverAddLoaded:
+		return m.Loaded
+	default:
+		return false
+	}
+}
+
 // ProviderConfig is one endpoint. Unset fields fall back to the flavor default.
 type ProviderConfig struct {
 	API        Dialect           `json:"api,omitempty"`
@@ -189,6 +212,9 @@ type ProviderConfig struct {
 	Routing    *Routing          `json:"routing,omitempty"` // openrouter only
 	Compat     *Compat           `json:"compat,omitempty"`  // defaults for every model here
 	Models     []ModelConfig     `json:"models,omitempty"`
+	// DiscoverAdd admits undeclared discovered entries to a declared list, per
+	// its admitted set. Empty means the declaration is the whole list.
+	DiscoverAdd DiscoverAdd `json:"discoverAdd,omitempty"`
 	// ModelOverrides adjusts discovered models by id without restating them. An id
 	// declared in Models is not a valid target: edit the declaration instead.
 	ModelOverrides map[string]ModelOverride `json:"modelOverrides,omitempty"`
@@ -237,6 +263,10 @@ type ModelConfig struct {
 
 	Headers        map[string]string `json:"headers,omitempty"`        // merged over the provider's per request
 	SamplingParams map[string]any    `json:"samplingParams,omitempty"` // opaque additions to the request body
+
+	// Loaded is discovery runtime state, set by parsers whose endpoint reports
+	// the model resident. Never read from a declared entry; discoverAdd consults it.
+	Loaded bool `json:"loaded,omitempty"`
 }
 
 // ModelOverride is a partial model applied over a discovered entry. It carries

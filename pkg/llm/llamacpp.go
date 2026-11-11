@@ -67,6 +67,8 @@ func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 	if ctx > 0 {
 		m.ContextWindow = &ctx
 	}
+	// /props describes the model being served, so it is resident by definition
+	m.Loaded = true
 	// the flavor default keeps stream usage off, and discovery enables it only
 	// when /props proves the build can answer. A declared entry or override wins.
 	if llamaSupportsStreamUsage(p.BuildInfo) {
@@ -220,6 +222,8 @@ func parseOpenAIModels(body []byte) ([]ModelConfig, error) {
 			name = d.Name
 		}
 		m := ModelConfig{ID: d.ID, Name: name}
+		// only an explicit status says resident; a plain list omits it entirely
+		m.Loaded = d.Status.Value == "loaded"
 		var input []Modality
 		for _, mod := range d.Architecture.InputModalities {
 			switch Modality(mod) {

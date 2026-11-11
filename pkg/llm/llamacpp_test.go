@@ -25,6 +25,8 @@ func TestParseLlamaProps(t *testing.T) {
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 32768, *got[0].ContextWindow)
 		assert.Equal(t, "qwen3.6-27b-Q4_K_M.gguf", got[0].ID)
+		// /props describes the model being served
+		assert.True(t, got[0].Loaded)
 
 		// the fixture's build reports stream usage support, so discovery enables it
 		require.NotNil(t, got[0].Compat)
@@ -118,7 +120,7 @@ func TestLlamaCppStreamUsageResolution(t *testing.T) {
 	t.Run("declared_compat_beats_discovery", func(t *testing.T) {
 		// a user turning it back off must win over the probed default
 		merged, _ := mergeModels([]ModelConfig{{ID: discovered[0].ID,
-			Compat: &Compat{SupportsUsageInStreaming: ptr(false)}}}, discovered, nil)
+			Compat: &Compat{SupportsUsageInStreaming: ptr(false)}}}, discovered, nil, DiscoverAddNone)
 		m := resolveModel(ctx, base, nil, merged[0])
 		assert.False(t, m.Caps.StreamUsage)
 	})
@@ -126,14 +128,14 @@ func TestLlamaCppStreamUsageResolution(t *testing.T) {
 	t.Run("declared_alias_beats_discovery", func(t *testing.T) {
 		// pre-canonical models.json files spell the opt-out historically
 		merged, _ := mergeModels([]ModelConfig{{ID: discovered[0].ID,
-			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, discovered, nil)
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, discovered, nil, DiscoverAddNone)
 		m := resolveModel(ctx, base, nil, merged[0])
 		assert.False(t, m.Caps.StreamUsage)
 	})
 
 	t.Run("override_alias_beats_discovery", func(t *testing.T) {
 		overridden, _ := mergeModels(nil, discovered, map[string]ModelOverride{
-			discovered[0].ID: {Compat: &Compat{SupportsStreamUsage: ptr(false)}}})
+			discovered[0].ID: {Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, DiscoverAddNone)
 		m := resolveModel(ctx, base, nil, overridden[0])
 		assert.False(t, m.Caps.StreamUsage)
 	})
@@ -156,6 +158,9 @@ func TestParseOpenAIModels(t *testing.T) {
 	got, err := parseOpenAIModels(data)
 	require.NoError(t, err)
 	require.Len(t, got, 3) // no status field: every model stays available
+	for _, m := range got {
+		assert.False(t, m.Loaded) // a plain list reports no residency
+	}
 	assert.Equal(t, []Modality{ModalityText}, got[0].Input)
 	assert.Equal(t, []Modality{ModalityText, ModalityImage}, got[1].Input)
 
@@ -167,6 +172,7 @@ func TestParseOpenAIModels(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, got, 1) // only the loaded model survives
 		assert.Equal(t, "unsloth/GLM-5.3-Flash-GGUF:Q6_K_XL", got[0].ID)
+		assert.True(t, got[0].Loaded)
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 667392, *got[0].ContextWindow) // meta.n_ctx
 	})
@@ -183,6 +189,9 @@ func TestParseOpenAIModels(t *testing.T) {
 		got, err := parseOpenAIModels(body)
 		require.NoError(t, err)
 		require.Len(t, got, 2)
+		for _, m := range got {
+			assert.False(t, m.Loaded) // llama-swap loads on demand, not resident
+		}
 		assert.Equal(t, "qwen3.6:35b-a3b", got[0].ID)
 		assert.Equal(t, "Qwen 3.6 35B A3B (UD-Q4_K_XL)", got[0].Name)
 		assert.Equal(t, "gemma-4:26b-a4b", got[1].ID)

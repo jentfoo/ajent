@@ -124,7 +124,12 @@ func (r *Registry) rebuild(f File, cache map[string]CacheEntry) []string {
 		if e, ok := cache[name]; ok {
 			discovered = e.Models
 		}
-		merged, mw := mergeModels(cfg.Models, discovered, cfg.ModelOverrides)
+		add := cfg.DiscoverAdd
+		if add != DiscoverAddNone && add != DiscoverAddLoaded && add != DiscoverAddAll {
+			warnings = append(warnings, fmt.Sprintf("provider %s: unknown discoverAdd %q; want \"loaded\" or \"all\"", name, add))
+			add = DiscoverAddNone
+		}
+		merged, mw := mergeModels(cfg.Models, discovered, cfg.ModelOverrides, add)
 		for _, w := range mw {
 			warnings = append(warnings, "provider "+name+": "+w)
 		}
@@ -255,25 +260,38 @@ func zeroModelsWarning(name string, flavor Flavor, discover bool) string {
 // mergeModels combines the declared, discovered and overridden entries for one
 // provider, returning the merged list and warnings for unusable overrides.
 //
-// When a provider declares models, that list is the whole list: discovery may
-// fill gaps in those entries but never adds or removes one. Discovery supplies
-// the full list only for a provider that declares nothing. Overrides adjust a
-// discovered entry, so an id the user declared is not a valid target.
-func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelOverride) ([]ModelConfig, []string) {
+// A provider that declares nothing takes discovery's whole list. One that
+// declares models keeps them all and enriches them from matching ids; add
+// admits undeclared discovered entries on top ("loaded" admits resident ones,
+// "all" everything), so a server can surface what it is serving now.
+func mergeModels(declared, discovered []ModelConfig, overrides map[string]ModelOverride, add DiscoverAdd) ([]ModelConfig, []string) {
 	if len(declared) == 0 {
 		return applyOverrides(discovered, overrides)
 	}
-	// a declared list is the whole list, so no override on this provider is reachable
-	warnings := unreachableOverrides(declared, discovered, overrides)
+	warnings := unreachableOverrides(declared, discovered, overrides, add)
 
 	byID := bulk.SliceToIndexBy(func(m ModelConfig) string { return m.ID }, discovered)
-	out := make([]ModelConfig, len(declared))
-	for i, d := range declared {
+	declaredIDs := bulk.SliceToSetBy(func(m ModelConfig) string { return m.ID }, declared)
+	out := make([]ModelConfig, 0, len(declared))
+	for _, d := range declared {
 		if disc, ok := byID[d.ID]; ok {
 			warnings = append(warnings, collapsedAliasWarnings(disc.Compat, d.Compat, d.ID)...)
 			d = enrichModel(d, disc)
 		}
-		out[i] = d
+		out = append(out, d)
+	}
+
+	extra := bulk.SliceFilter(func(m ModelConfig) bool {
+		if _, ok := declaredIDs[m.ID]; ok {
+			return false // the declaration wins and is already enriched above
+		}
+		return add.admits(m)
+	}, discovered)
+	if len(extra) > 0 {
+		var w []string
+		extra, w = applyOverrides(extra, overrides)
+		warnings = append(warnings, w...)
+		out = append(out, extra...)
 	}
 	return out, warnings
 }
@@ -315,8 +333,9 @@ func collapsedAliasWarnings(base, over *Compat, id string) []string {
 // unreachableOverrides names every override a declared model list makes inert, so
 // a user is not left wondering why nothing changed. An id that is neither declared
 // nor discovered stays silent: discovery is asynchronous, so an id that has not
-// arrived yet is not a mistake.
-func unreachableOverrides(declared, discovered []ModelConfig, overrides map[string]ModelOverride) []string {
+// arrived yet is not a mistake. With additions on, a discovered id can still land,
+// so only a declaration itself makes the override inert.
+func unreachableOverrides(declared, discovered []ModelConfig, overrides map[string]ModelOverride, add DiscoverAdd) []string {
 	if len(overrides) == 0 {
 		return nil
 	}
@@ -329,8 +348,10 @@ func unreachableOverrides(declared, discovered []ModelConfig, overrides map[stri
 	for _, id := range sortedOverrideKeys {
 		if _, ok := declaredIDs[id]; ok {
 			out = append(out, fmt.Sprintf("modelOverrides %q is also declared in models, the declaration wins", id))
-		} else if _, ok := discoveredIDs[id]; ok {
-			out = append(out, fmt.Sprintf("modelOverrides %q is not in models, which is the whole list for this provider; declare it to use the override", id))
+		} else if add == DiscoverAddNone {
+			if _, ok := discoveredIDs[id]; ok {
+				out = append(out, fmt.Sprintf("modelOverrides %q is not in models and discoverAdd is unset; declare it or set discoverAdd to use the override", id))
+			}
 		}
 	}
 	return out

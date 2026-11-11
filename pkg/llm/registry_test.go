@@ -63,6 +63,33 @@ func TestNewRegistry(t *testing.T) {
 		assert.Contains(t, warnings[0], "unknown flavor ignored, using generic")
 	})
 
+	t.Run("unknown_discover_add_admits_nothing", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"p": {Flavor: FlavorGeneric, BaseURL: "http://x/v1",
+				DiscoverAdd: DiscoverAddAll, Models: []ModelConfig{{ID: "a"}}},
+		}}
+		cache := map[string]CacheEntry{"p": {Models: []ModelConfig{{ID: "a", Loaded: true}, {ID: "b"}}}}
+		r, warnings := NewRegistry(f, cache, RegistryOptions{})
+		assert.Empty(t, warnings)
+
+		models := r.Models()
+		require.Len(t, models, 2) // the declaration plus the addition
+		assert.Equal(t, "p/b", models[1].Key())
+	})
+
+	t.Run("unknown_discover_add_warns_and_stays_off", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"p": {Flavor: FlavorGeneric, BaseURL: "http://x/v1",
+				DiscoverAdd: DiscoverAdd("resident"), Models: []ModelConfig{{ID: "a"}}},
+		}}
+		cache := map[string]CacheEntry{"p": {Models: []ModelConfig{{ID: "a", Loaded: true}, {ID: "b"}}}}
+		r, warnings := NewRegistry(f, cache, RegistryOptions{})
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], `unknown discoverAdd "resident"`)
+
+		require.Len(t, r.Models(), 1) // the declaration alone
+	})
+
 	t.Run("sorts_by_provider_then_id", func(t *testing.T) {
 		r, warnings := NewRegistry(testFile(), nil, RegistryOptions{})
 		assert.Empty(t, warnings)
@@ -318,20 +345,20 @@ func TestMergeModels(t *testing.T) {
 	}
 
 	t.Run("declared_list_is_the_whole_list", func(t *testing.T) {
-		got, _ := mergeModels(declared, discovered, nil)
+		got, _ := mergeModels(declared, discovered, nil, DiscoverAddNone)
 		require.Len(t, got, 2) // "c" is not added
 		assert.Equal(t, "a", got[0].ID)
 		assert.Equal(t, "b", got[1].ID)
 	})
 
 	t.Run("declared_fields_win", func(t *testing.T) {
-		got, _ := mergeModels(declared, discovered, nil)
+		got, _ := mergeModels(declared, discovered, nil, DiscoverAddNone)
 		require.NotNil(t, got[0].ContextWindow)
 		assert.Equal(t, 1000, *got[0].ContextWindow)
 	})
 
 	t.Run("discovery_fills_unset_fields", func(t *testing.T) {
-		got, _ := mergeModels(declared, discovered, nil)
+		got, _ := mergeModels(declared, discovered, nil, DiscoverAddNone)
 		assert.Equal(t, "Discovered A", got[0].Name)
 		require.NotNil(t, got[1].ContextWindow)
 		assert.Equal(t, 2000, *got[1].ContextWindow) // the real loaded window
@@ -340,28 +367,28 @@ func TestMergeModels(t *testing.T) {
 	t.Run("thinking_budgets_fill_from_discovery", func(t *testing.T) {
 		d := []ModelConfig{{ID: "b"}}
 		disc := []ModelConfig{{ID: "b", ThinkingBudgets: map[Level]int{LevelHigh: 7777}}}
-		got, _ := mergeModels(d, disc, nil)
+		got, _ := mergeModels(d, disc, nil, DiscoverAddNone)
 		assert.Equal(t, 7777, got[0].ThinkingBudgets[LevelHigh])
 	})
 
 	t.Run("discovery_supplies_everything_when_nothing_declared", func(t *testing.T) {
-		got, _ := mergeModels(nil, discovered, nil)
+		got, _ := mergeModels(nil, discovered, nil, DiscoverAddNone)
 		assert.Len(t, got, 3)
 	})
 
 	t.Run("declared_only", func(t *testing.T) {
-		got, _ := mergeModels(declared, nil, nil)
+		got, _ := mergeModels(declared, nil, nil, DiscoverAddNone)
 		assert.Len(t, got, 2)
 	})
 
 	t.Run("both_empty", func(t *testing.T) {
-		got, _ := mergeModels(nil, nil, nil)
+		got, _ := mergeModels(nil, nil, nil, DiscoverAddNone)
 		assert.Empty(t, got)
 	})
 
 	t.Run("override_adjusts_a_discovered_entry", func(t *testing.T) {
 		got, w := mergeModels(nil, discovered,
-			map[string]ModelOverride{"c": {Name: "Renamed C", ContextWindow: ptr(4096)}})
+			map[string]ModelOverride{"c": {Name: "Renamed C", ContextWindow: ptr(4096)}}, DiscoverAddNone)
 		require.Len(t, got, 3)
 		assert.Empty(t, w)
 		assert.Equal(t, "Renamed C", got[2].Name)
@@ -370,7 +397,7 @@ func TestMergeModels(t *testing.T) {
 	})
 
 	t.Run("override_never_adds_a_model", func(t *testing.T) {
-		got, w := mergeModels(nil, discovered, map[string]ModelOverride{"nope": {Name: "X"}})
+		got, w := mergeModels(nil, discovered, map[string]ModelOverride{"nope": {Name: "X"}}, DiscoverAddNone)
 		assert.Len(t, got, 3)
 		assert.Empty(t, w) // an id discovery has not returned yet is not a mistake
 	})
@@ -378,21 +405,60 @@ func TestMergeModels(t *testing.T) {
 	t.Run("override_on_an_excluded_id_warns", func(t *testing.T) {
 		// "c" is discovered but the declared list is the whole list, so the
 		// override is inert, and silence here would look like it applied
-		_, w := mergeModels(declared, discovered, map[string]ModelOverride{"c": {Name: "X"}})
+		_, w := mergeModels(declared, discovered, map[string]ModelOverride{"c": {Name: "X"}}, DiscoverAddNone)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], `modelOverrides "c" is not in models`)
 	})
 
 	t.Run("override_on_a_declared_id_warns", func(t *testing.T) {
-		got, w := mergeModels(declared, discovered, map[string]ModelOverride{"a": {Name: "X"}})
+		got, w := mergeModels(declared, discovered, map[string]ModelOverride{"a": {Name: "X"}}, DiscoverAddNone)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], `modelOverrides "a"`)
 		assert.Equal(t, "Discovered A", got[0].Name) // the declaration still wins
 	})
 
+	t.Run("discover_add_all_appends_undeclared", func(t *testing.T) {
+		got, w := mergeModels(declared, discovered, nil, DiscoverAddAll)
+		assert.Empty(t, w)
+		require.Len(t, got, 3)
+		assert.Equal(t, "c", got[2].ID)
+	})
+
+	t.Run("discover_add_loaded_skips_unloaded", func(t *testing.T) {
+		disc := []ModelConfig{{ID: "a"}, {ID: "c", Loaded: true}, {ID: "d"}}
+		got, _ := mergeModels(declared, disc, nil, DiscoverAddLoaded)
+		require.Len(t, got, 3) // declared a and b stay put, resident "c" joins, idle "d" does not
+		assert.Equal(t, "a", got[0].ID)
+		assert.Equal(t, "b", got[1].ID)
+		assert.Equal(t, "c", got[2].ID)
+	})
+
+	t.Run("additions_dedup_declared_ids", func(t *testing.T) {
+		got, _ := mergeModels(declared, discovered, nil, DiscoverAddAll)
+		require.Len(t, got, 3)
+		assert.Equal(t, 1000, *got[0].ContextWindow) // the declaration still wins
+	})
+
+	t.Run("override_reaches_an_added_entry", func(t *testing.T) {
+		got, w := mergeModels(declared, discovered,
+			map[string]ModelOverride{"c": {Name: "Renamed C"}}, DiscoverAddAll)
+		assert.Empty(t, w) // reachable now that additions are on
+		require.Len(t, got, 3)
+		assert.Equal(t, "Renamed C", got[2].Name)
+	})
+
+	t.Run("override_pending_on_additions_stays_silent", func(t *testing.T) {
+		// "nope" has not been returned yet and "c" is not resident under "loaded",
+		// both arrive asynchronously rather than being mistakes
+		disc := []ModelConfig{{ID: "a"}, {ID: "c"}}
+		_, w := mergeModels(declared, disc,
+			map[string]ModelOverride{"nope": {Name: "X"}, "c": {Name: "Y"}}, DiscoverAddLoaded)
+		assert.Empty(t, w)
+	})
+
 	t.Run("override_does_not_mutate_the_cache", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Name: "Discovered A"}}
-		_, _ = mergeModels(nil, disc, map[string]ModelOverride{"a": {Name: "Renamed"}})
+		_, _ = mergeModels(nil, disc, map[string]ModelOverride{"a": {Name: "Renamed"}}, DiscoverAddNone)
 		assert.Equal(t, "Discovered A", disc[0].Name)
 	})
 
@@ -401,7 +467,7 @@ func TestMergeModels(t *testing.T) {
 	t.Run("declared_alias_optout_beats_discovered_canonical", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsUsageInStreaming: ptr(true)}}}
 		got, _ := mergeModels([]ModelConfig{{ID: "a",
-			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, disc, nil)
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, disc, nil, DiscoverAddNone)
 		require.NotNil(t, got[0].Compat)
 		assert.False(t, *got[0].Compat.SupportsUsageInStreaming)
 	})
@@ -409,7 +475,7 @@ func TestMergeModels(t *testing.T) {
 	t.Run("override_alias_optout_beats_discovered_canonical", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsUsageInStreaming: ptr(true)}}}
 		got, w := mergeModels(nil, disc, map[string]ModelOverride{"a": {
-			Compat: &Compat{SupportsStreamUsage: ptr(false)}}})
+			Compat: &Compat{SupportsStreamUsage: ptr(false)}}}, DiscoverAddNone)
 		assert.Empty(t, w) // different spellings across layers are not a conflict
 		require.NotNil(t, got[0].Compat)
 		assert.False(t, *got[0].Compat.SupportsUsageInStreaming)
@@ -418,7 +484,7 @@ func TestMergeModels(t *testing.T) {
 	t.Run("declared_block_with_both_spellings_warns", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsStore: ptr(true)}}}
 		_, w := mergeModels([]ModelConfig{{ID: "a",
-			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}}, disc, nil)
+			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}}, disc, nil, DiscoverAddNone)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], "model a: compat sets both")
 	})
@@ -426,7 +492,7 @@ func TestMergeModels(t *testing.T) {
 	t.Run("override_block_with_both_spellings_warns", func(t *testing.T) {
 		disc := []ModelConfig{{ID: "a", Compat: &Compat{SupportsStore: ptr(true)}}}
 		_, w := mergeModels(nil, disc, map[string]ModelOverride{"a": {
-			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}})
+			Compat: &Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)}}}, DiscoverAddNone)
 		require.Len(t, w, 1)
 		assert.Contains(t, w[0], "model a: compat sets both")
 	})

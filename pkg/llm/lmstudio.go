@@ -42,7 +42,8 @@ type lmStudioV1Models struct {
 
 // parseLMStudioModels turns the discovery response into model entries. A loaded
 // model reports the context length it was actually loaded with, which is
-// smaller than its maximum whenever the user chose so.
+// smaller than its maximum whenever the user chose so. Entries also carry their
+// state in Loaded, which discoverAdd reads.
 func parseLMStudioModels(body []byte) ([]ModelConfig, error) {
 	var wire lmStudioModels
 	if err := json.Unmarshal(body, &wire); err != nil {
@@ -54,7 +55,8 @@ func parseLMStudioModels(body []byte) ([]ModelConfig, error) {
 			continue
 		}
 		m := ModelConfig{ID: d.ID, Name: d.ID}
-		if ctx := d.LoadedContextLength; ctx > 0 && d.State == "loaded" {
+		m.Loaded = d.State == "loaded"
+		if ctx := d.LoadedContextLength; ctx > 0 && m.Loaded {
 			m.ContextWindow = &ctx
 		} else if d.MaxContextLength > 0 {
 			m.ContextWindow = &d.MaxContextLength
@@ -89,6 +91,7 @@ func parseLMStudioV1Models(body []byte) ([]ModelConfig, error) {
 		if m.Name == "" {
 			m.Name = d.Key
 		}
+		m.Loaded = len(d.LoadedInstances) > 0
 		for _, inst := range d.LoadedInstances {
 			if ctx := inst.Config.ContextLength; ctx > 0 {
 				m.ContextWindow = &ctx

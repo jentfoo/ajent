@@ -115,13 +115,14 @@ Per provider you can set:
 * `timeouts` - connect / TLS / header / idle / total bounds as Go durations, and an explicit `"0s"` disables a bound. Split these because one client timeout would clamp the body read, which is exactly what must be allowed to take minutes.
 * `retry` - attempts and backoff (`base`, `max`, `jitter`), honoring `Retry-After` but capping it at 60s.
 * `discover` - whether this provider's models are fetched from the server. On by default for every flavor with a known model list (anthropic, openai, zai, openrouter, deepseek, together, xai, groq, mistral, moonshotai, google, cerebras, nvidia, huggingface, baseten, lm-studio, llama.cpp and the token-plan flavors), and any other OpenAI-compatible endpoint can opt in with `"discover": true`, which asks its `/v1/models`.
-* `models` - your declared list for this provider. When present, it *is* the whole list, and discovery only fills gaps.
+* `models` - your declared list for this provider. It is always visible and discovery fills gaps in it, but never adds to it unless you set `discoverAdd`.
+* `discoverAdd` - lets a declared list also surface entries the server returned: `"loaded"` adds only what the endpoint reports resident right now (llama.cpp's `/props`, LM Studio's load state, a router's status), and `"all"` adds everything it listed. Useful for lazy-loading proxies like llama-swap, where an entry that is not loaded yet still serves a turn.
 
 ### Models
 
 Models come from exactly two places, both under the provider they belong to:
   * **hand-written declarations** - your per-provider `models` list.
-  * **provider discovery** - asking the provider for its model list. It fills any gaps in what you declared. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
+  * **provider discovery** - asking the provider for its model list. It fills any gaps in what you declared, and with `discoverAdd` can also add entries you did not declare. A llama.cpp multi-model router (which reports nothing useful on `/props`) falls back to its OpenAI-compatible `/v1/models`, and any other server speaking chat-completions can be discovered the same way with `"discover": true`.
 
 The minimal entry (if not using discovery) is just an id. Everything else has a sane default, so you typically only add one to pin something discovery got wrong (a name or context window).
 

@@ -289,7 +289,7 @@ func TestApplyModelDefaults(t *testing.T) {
 
 	t.Run("discovered_window_beats_the_default", func(t *testing.T) {
 		// defaults run after the merge, so a real loaded window is never replaced
-		merged, _ := mergeModels(nil, []ModelConfig{{ID: "m1", ContextWindow: ptr(8192)}}, nil)
+		merged, _ := mergeModels(nil, []ModelConfig{{ID: "m1", ContextWindow: ptr(8192)}}, nil, DiscoverAddNone)
 		got := resolveModel(ctx, base, nil, merged[0])
 		assert.Equal(t, 8192, got.ContextWindow)
 	})
@@ -313,7 +313,7 @@ func TestModelLayering(t *testing.T) {
 		Compat: &Compat{SupportsImages: ptr(false), SupportsPromptCache: ptr(true)},
 	}}
 
-	merged, warnings := mergeModels(nil, discovered, overrides)
+	merged, warnings := mergeModels(nil, discovered, overrides, DiscoverAddNone)
 	require.Len(t, merged, 1)
 	assert.Empty(t, warnings)
 	got := resolveModel(modelContext{provider: "p", dialect: DialectOpenAICompletions},

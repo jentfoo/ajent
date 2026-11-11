@@ -486,10 +486,15 @@ reports the pair as ambiguous.
 
 **The merge rule:** when a provider declares models, that list *is* the list for
 that provider. Discovery may fill fields the declaration left unset but never
-adds or removes an entry. Discovery supplies the whole list only for a provider
-that declares nothing. This is what lets you name three lm-studio models you
-actually use without the picker filling with everything the server has, while
-still learning the real loaded context length of the ones you named.
+adds or removes an entry, unless the provider opts into additions with
+`discoverAdd`. An addition is deliberately narrower than discovery's full
+result: "loaded" takes only what the server reports as serving right now and
+"all" takes everything listed, and a declared id always beats its discovered
+twin. Discovery still supplies the whole list only for a provider that declares
+nothing. This is what lets you name three lm-studio models you actually use
+without the picker filling with everything the server has, while still learning
+the real loaded context length of the ones you named, and it lets a server that
+swaps or lazy-loads models surface them without a config edit.
 
 **Blank ids never register.** Rebuild drops an entry with an empty id whether it
 was declared or discovered: `Resolve("")` already rejects it and it would sort
@@ -513,10 +518,11 @@ entry should not cost a whole declaration. It only adjusts discovered models:
 ajent has no catalogue, so the only models a user has not defined are discovered
 ones. A user who declares a model declares it with the configuration they want,
 so an override on a declared id is **inert and warns**, rather than being
-ignored silently. By the merge rule above, a provider that declares any models
-has no undeclared ones, so its `modelOverrides` never apply at all. Unknown ids
-are ignored without a warning, because discovery is asynchronous and an id that
-has not arrived yet is not a mistake.
+ignored silently. Whether an undeclared id can be reached follows the merge
+rule: without additions the declaration is the whole list, so matching
+overrides warn as inert, while `discoverAdd` makes them apply to whatever
+arrives. An id that has not arrived yet stays silent either way, because
+discovery is asynchronous and its absence is not a mistake.
 
 Discovery endpoints supply a subset of model metadata, and the rest must come from
 `models[]`, `modelOverrides`, or the schema defaults. The hosted catalogue
@@ -525,10 +531,13 @@ reasoning and tool support), while the local servers report less, and llama.cpp
 reports only the id and the context window. Reasoning is discovered at runtime
 only by openrouter, and every other chat-completions list cannot say whether a model
 reasons, so those flavors carry it in their baseline (see Capabilities). The
-local endpoints report the
-context length the model was *loaded* with, which is often smaller than its
-maximum and which nothing else can know. A flavor's native endpoint is tried
-first, and the standard chat-completions list (`/v1/models`) backs it up when that
+local endpoints report the context length the model was *loaded* with, which is
+often smaller than its maximum and which nothing else can know. Discovery also
+records whether an endpoint affirmatively reports a model as serving right now,
+since only the server knows that: `discoverAdd: "loaded"` keys off it, so such
+additions stay empty for endpoints without any load-state concept. A flavor's
+native endpoint is tried first, and the standard chat-completions list
+(`/v1/models`) backs it up when that
 yields nothing usable. A llama.cpp router serves no single loaded model on
 `/props`, so discovery falls through to the OpenAI list. lm-studio's native
 list moved to `/api/v1` in 0.4, and its candidates walk `/api/v1`, then `/api/v0`
@@ -756,8 +765,8 @@ running it. Local models produce broken argument JSON routinely, and losing the
 whole turn each time is unusable. No repair heuristics: an argument that
 "repairs" into a valid-but-wrong call is worse than a visible failure.
 
-**8. Declared models are the whole list for their provider.** Discovery
-enriches, never adds or removes.
+**8. A declared model is always visible.** Discovery fills its gaps and never
+removes it, adding entries only through the provider's `discoverAdd` opt-in.
 
 **9. Discovery never blocks startup and never fails the run.**
 
