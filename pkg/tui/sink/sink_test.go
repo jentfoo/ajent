@@ -153,10 +153,13 @@ func TestInjectContextBlockShape(t *testing.T) {
 	t.Run("label_header_body_collapsed", func(t *testing.T) {
 		h := newHeadless(t)
 		h.s.InjectContext("Denied with note: test\n\nsome longer body")
+		// one snapshot for both halves: the header paints in its own frame, the
+		// committed body lands a beat later through the serialized queue
 		require.Eventually(t, func() bool {
-			return strings.Contains(h.rendered(), "Denied with note: test")
+			out := h.rendered()
+			return strings.Contains(out, "Denied with note: test") &&
+				strings.Contains(out, "some longer body")
 		}, 2*time.Second, time.Millisecond)
-		assert.Contains(t, h.rendered(), "some longer body")
 	})
 
 	t.Run("single_line_note", func(t *testing.T) {
