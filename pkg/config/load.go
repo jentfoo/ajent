@@ -17,9 +17,6 @@ import (
 // ConfigFileName is the user and project preferences file.
 const ConfigFileName = "config.json"
 
-// LocalConfigFileName is the gitignored per-workspace override file.
-const LocalConfigFileName = "config.local.json"
-
 // Options configures Load. Workspace roots the project layers, Env resolves
 // AJENT_* variables (nil uses os.Getenv), and Flags is a caller built layer that
 // wins over everything except session overrides.
@@ -35,7 +32,6 @@ type Set struct {
 	defaults Layer
 	user     Layer
 	project  Layer
-	local    Layer
 	env      Layer
 	flags    Layer
 	session  Layer // mutable, above every file layer
@@ -44,15 +40,14 @@ type Set struct {
 	envFn     func(string) string // captured so a reload reads the same environment
 	userPath  string
 	projPath  string
-	localPath string
 	mu        sync.Mutex // serializes layer writes and resolve, so Resolved stays immutable once built
 	resolved  Resolved   // memoized merge
 	valid     bool       // false after any layer mutation until the next resolve
 }
 
 // Load reads and merges every configuration layer for workspace in precedence
-// order: defaults, user file, project file, local file, AJENT_* environment
-// variables, then opts.Flags. Warnings are returned rather than fatal so a typo
+// order: defaults, user file, project file, AJENT_* environment variables,
+// then opts.Flags. Warnings are returned rather than fatal so a typo
 // never blocks startup.
 func Load(opts Options) (*Set, []string, error) {
 	if opts.Workspace == "" {
@@ -75,7 +70,6 @@ func Load(opts Options) (*Set, []string, error) {
 		envFn:     env,
 		userPath:  userPath,
 		projPath:  filepath.Join(projDir, ConfigFileName),
-		localPath: filepath.Join(projDir, LocalConfigFileName),
 	}
 
 	warns, err := s.readLayers()
@@ -94,7 +88,7 @@ func Load(opts Options) (*Set, []string, error) {
 	return s, warns, nil
 }
 
-// Reload re-reads the user, project, local and environment layers from disk,
+// Reload re-reads the user, project and environment layers from disk,
 // keeping session overrides and flags. A failure leaves the previous layers in
 // place; warnings report what the files themselves are missing or dropping.
 func (s *Set) Reload() ([]string, error) {
@@ -125,16 +119,11 @@ func (s *Set) readLayers() ([]string, error) {
 	if err != nil {
 		return warns, err
 	}
-	local, w, err := readSharedLayer("local", s.localPath, "local files are shared")
-	warns = append(warns, w...)
-	if err != nil {
-		return warns, err
-	}
 
 	eLayer, eWarns := EnvLayer(s.envFn)
 	warns = append(warns, eWarns...)
 
-	s.user, s.project, s.local, s.env = user, project, local, eLayer
+	s.user, s.project, s.env = user, project, eLayer
 	s.valid = false
 	return warns, nil
 }
@@ -156,7 +145,7 @@ func readSharedLayer(name, path, reason string) (Layer, []string, error) {
 // layers returns the configuration stack lowest to highest precedence. Callers
 // hold the lock.
 func (s *Set) layers() []Layer {
-	return []Layer{s.defaults, s.user, s.project, s.local, s.env, s.flags, s.session}
+	return []Layer{s.defaults, s.user, s.project, s.env, s.flags, s.session}
 }
 
 // resolve returns the merged stack, rebuilt only after a layer changed. Safe

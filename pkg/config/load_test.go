@@ -97,7 +97,6 @@ func TestLoad(t *testing.T) {
 
 		writeConfig(t, userPathFor(t), "// no settings yet\n")            // comment-only
 		writeConfig(t, filepath.Join(ProjectDir(ws), ConfigFileName), "") // zero bytes, like touch
-		writeConfig(t, filepath.Join(ProjectDir(ws), LocalConfigFileName), " \t\n ")
 
 		s, warns, err := Load(Options{Workspace: ws})
 		require.NoError(t, err)

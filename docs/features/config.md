@@ -15,7 +15,6 @@ Configuration resolves lowest to highest, one key at a time:
 | default | compiled in (reported as `(default)`) | never |
 | user | `~/.ajent/config.json` | `/settings` saves, `/model`, the theme picker |
 | project | `<workspace>/.ajent/config.json` | `/settings` save to project. Commit at the team's discretion |
-| local | `<workspace>/.ajent/config.local.json` | you, by hand. Overrides project for machine-specific values, keep it out of git |
 | env | one `AJENT_*` variable per scalar key | your shell |
 | flag | `-m/--model`, `--render <mode>`, `--system <text>` | ajent, at startup |
 | session | `/settings` edits and mode cycles | the running session, survives resume |
@@ -25,14 +24,14 @@ in charge. Merge is per-key: objects fold deeply, arrays and scalars replace
 wholesale. `AJENT_HOME` moves the whole home directory (`~/.ajent` by default),
 it is not a config key.
 
-All three files parse leniently: `//` comments and trailing commas are
+Both files parse leniently: `//` comments and trailing commas are
 accepted, blank or comment-only content behaves as an absent file, unknown,
 duplicate or wrong-typed keys warn instead of blocking startup, and a top-level
 value that is not a JSON object fails with the file and line named. Key spellings
 that differ only in letter case are normalized to each key's declared name.
 
 One secret rule: a literal `apiKey` is honored in the user layer only.
-Project and local layers have any `providers.*.apiKey` stripped with a warning,
+The project layer has any `providers.*.apiKey` stripped with a warning,
 because those files end up where other people can read them.
 
 ## Env bindings
@@ -60,7 +59,7 @@ value for one run, env is usually what you want (`AJENT_TOOLS_DIFFECHO=never aje
 
 The default model for a fresh start, as a `provider/model` key or any name the
 registry resolves. A `/model` change writes your most recent choice to the user
-layer, so it survives restarts. A value pinned in project or local config (or an
+layer, so it survives restarts. A value pinned in project config (or an
 `-m` flag) still outranks that write. See `models.md`.
 
 | Key | Default | Env binding |

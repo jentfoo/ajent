@@ -187,7 +187,7 @@ The host defaults to `localhost:8080`, and discovery fills in the model's name a
 ```
 ### ~/.ajent/config.json
 
-This file holds everything else: which model starts a session, how the agent behaves, what the barrier allows, and how the UI looks. It is one of several layers resolved lowest-to-highest (default → `~/.ajent/config.json` (user) → `<workspace>/.ajent/config.json` (project) → `<workspace>/.ajent/config.local.json` (local) → `AJENT_*` env vars → command-line flags).
+This file holds everything else: which model starts a session, how the agent behaves, what the barrier allows, and how the UI looks. It is one of several layers resolved lowest-to-highest (default → `~/.ajent/config.json` (user) → `<workspace>/.ajent/config.json` (project) → `AJENT_*` env vars → command-line flags).
 
 Any scalar key at dotted path `p.q.r` binds to the environment variable `AJENT_P_Q_R`, so `permissions.mode` is `AJENT_PERMISSIONS_MODE`.
 

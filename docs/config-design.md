@@ -31,14 +31,12 @@ Configuration resolves lowest to highest precedence:
    reports `(default)` like any other source.
 2. **user** — the user's `~/.ajent/config.json`.
 3. **project** — `<workspace>/.ajent/config.json`, committed at the team's discretion.
-4. **local** — `<workspace>/.ajent/config.local.json`, never committed, and it
-   overrides project for machine-specific values.
-5. **env** — bound from `AJENT_*` variables, one per scalar key (a dotted path
+4. **env** — bound from `AJENT_*` variables, one per scalar key (a dotted path
    `p.q.r` binds to `AJENT_P_Q_R`). An unparseable number or boolean warns and
    keeps the lower layer rather than failing startup.
-6. **flag** — set by the caller at startup over an empty base. Only `model`
+5. **flag** — set by the caller at startup over an empty base. Only `model`
    and `ui.render` ride it, and the one-shot flags deliberately do not (see below).
-7. **session** — per-key session overrides that survive resume, recorded from
+6. **session** — per-key session overrides that survive resume, recorded from
    `/settings` and runtime mode cycles, empty at a fresh start.
 
 Merge is per-key: objects fold deeply, arrays and scalars replace wholesale. A
@@ -75,7 +73,7 @@ built, so readers hold a stable snapshot across later writes.
 
 ## Reload
 
-`Set.Reload()` re-reads the user, project, local and environment layers in place. The
+`Set.Reload()` re-reads the user, project and environment layers in place. The
 `*Set` pointer never changes, so closures holding it keep working. It **leaves session
 overrides and flags untouched**, which is what makes a reload safe: those outrank every
 file layer, so applying merged values can never undo a choice `/model`, Shift+Tab or a
@@ -105,7 +103,7 @@ later reload.
 
 ## Secrets
 
-A literal `apiKey` belongs in the user layer only. Reading a project or local layer strips
+A literal `apiKey` belongs in the user layer only. Reading the project layer strips
 `providers.*.apiKey` and warns per removed key. Those files end up on disk other people can
 read or commit, so a shared secret is ignored rather than honored. The user layer keeps its
 key but checks the file's permissions whenever it carries one, warning when the file is
@@ -140,7 +138,7 @@ so the next start keeps the most recent choice, and there is no separate last-us
 key. The `/settings` Model row routes through the same picker but defers its
 persistence to the save-to-layer prompt, so a "this session only" answer leaves
 the config files untouched like every other settings row. Because the write
-lands in the user layer when chosen, a `model` pinned in project/local config or
+lands in the user layer when chosen, a `model` pinned in project config or
 an `-m` flag still outranks it, and a resumed session replays its own
 `model_change` entries instead. A failed save is a warning, never a lost switch.
 
@@ -268,7 +266,7 @@ but deliberately undocumented. See tui-design.md, "Semantic styling".
 `ui.theme` is a `tui.Palette` name defaulting to `"dark"`. `AJENT_UI_THEME`
 binds for free through EnvLayer. The default is what makes the first-run picker
 possible: `command.ThemeSetup` opens only while `Source("ui.theme")` still
-reports `default`, so a value in any layer (env, project, local or a previous
+reports `default`, so a value in any layer (env, project or a previous
 answer saved to user) suppresses it. Picking (or dismissing) writes the name to
 the **user** layer and records a session override, so a project pin still
 outranks it. Unlike `ui.render` the palette *can* change at runtime:
