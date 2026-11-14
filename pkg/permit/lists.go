@@ -26,7 +26,7 @@ const (
 // here: they are verified per invocation in their own checkers instead.
 var readOnlyCommands = bulk.SliceToSet([]string{
 	"ls", tools.ToolFind, tools.ToolGrep, "diff", "which", "ps", "jq",
-	"cat", "echo", "head", "tail", "wc", "cd", "pwd", "du",
+	"cat", "cut", "echo", "head", "tail", "wc", "cd", "pwd", "du",
 	"od",
 })
 

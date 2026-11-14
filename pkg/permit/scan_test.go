@@ -163,7 +163,8 @@ func TestAllSegmentsReadOnly(t *testing.T) {
 		want bool
 	}{
 		{"ls -la", true},
-		{"grep foo f | sort", true}, // pipeline tolerated
+		{"cut -d, -f1 f | sort", true}, // listed head plus a checker-gated one
+		{"grep foo f | sort", true},    // pipeline tolerated
 		{"git status && git log --oneline", true},
 		{`sed -n 's/a/b/p' f`, true},
 		// quoting cannot hide a write/exec flag: the verdict holds for the verbatim tokens

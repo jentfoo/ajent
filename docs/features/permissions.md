@@ -69,8 +69,8 @@ Checks run in order, first match wins:
   is trusted by default: an undeclared MCP tool prompts in every non-auto mode.
 - Bash goes through a quote-aware analyser. A line passes only when *every*
   segment it runs is provably read-only:
-  - always-safe heads: `ls cat head tail grep diff which ps jq wc cd pwd du od
-    echo find`
+  - always-safe heads: `ls cat cut head tail grep diff which ps jq wc cd pwd du
+    od echo find`
   - per-invocation checkers for commands with both forms: `git` (pure readers
     like status/log/diff/show pass, dual-form subcommands such as branch/tag/
     config/remote are verified argument by argument), `sed` (no `-i`), `awk`
