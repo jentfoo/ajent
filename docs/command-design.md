@@ -3,18 +3,15 @@
 How `pkg/command` and `pkg/refs` own everything the user does that is not "send
 a message to the model": slash commands through a registry, direct `!` shell
 execution with staged results (`!!` runs excluded from context), `@`-path
-expansion with auto-read, and the completion driving both. It is the single
-dispatch path for submitted lines, and extensions and MCP register into the same
-registry, so a built-in `/tools` and a third-party `/plan` are the same
-mechanism.
-
-## What it is
-
-Three packages sit above the agent, tools and TUI: `pkg/command` (commands,
-the registry, the `Console` interface and shell staging) plus its completion,
-and `pkg/refs`, which owns `@`-reference expansion and the per-directory path
-index. The UI never imports command, and the host adapts `Console` onto `*tui.UI`, so
-headless mode and a sub-agent drive the same commands behind a different front end.
+expansion with auto-read, and the completion driving both. Three packages sit
+above the agent, tools and TUI: `pkg/command` (commands, the registry, the
+`Console` interface and shell staging) plus its completion, and `pkg/refs`,
+which owns `@`-reference expansion and the per-directory path index. The UI
+never imports command, and the host adapts `Console` onto `*tui.UI`, so headless
+mode and a sub-agent drive the same commands behind a different front end.
+Extensions and MCP register into the same registry as the built-ins, making it
+the single dispatch path for submitted lines, so a built-in `/tools` and a
+third-party `/plan` are the same mechanism.
 
 ## Dispatch
 
@@ -32,16 +29,14 @@ shell), then routed by the host's loop.
 | `!go test ./...` | shell | `go test ./...` (staged onto context) |
 | `!!echo hi` | shell | `echo hi`, excluded from context (`Excluded`) |
 | ` !echo hi` | prompt | `!echo hi` (leading space is the only literal-`!` escape) |
-| multi-line submission opening with `/name args` | prompt (`Multiline`) | verbatim, plus a notice (a paste is never consumed by one command dispatch) |
+| multi-line submission opening with `/name args` | prompt (`Multiline`) | verbatim, plus a notice |
 
 Unknown `/foo` still parses as a command so dispatch can notice it rather than
 prompting the model: a typo should not cost tokens. One exception guards pasted
 content: a submission carrying a newline and opening with `/name args` falls
 back to one verbatim prompt (`Multiline`, surfaced with a notice) whether or not
 the name is known, so a command dispatch never consumes a paste. Multi-line `!`
-is unaffected and stages the whole block as one run. The host's loop then routes
-by kind: shell lines go straight to the `Stager` (non-blocking), while command
-and prompt lines go to a single **prompt pump** goroutine that owns ordering.
+is unaffected and stages the whole block as one run.
 
 ### The prompt pump
 
@@ -50,30 +45,21 @@ and prompt lines go to a single **prompt pump** goroutine that owns ordering.
 - `ParseLine` routes shell lines to `Stager.Run` (non-blocking), while command and prompt
   lines go to the single pump goroutine that owns ordering. The switch lives on one
   `lineRouter`, so a submission source other than the editor takes the same routing
-  unchanged, with only clipboard image tokens gated to editor lines. Recall history
-  records every submitted line whichever surface typed it, so a remote surface's
-  prompts recall exactly like typed ones (`control-design.md`).
+  unchanged, with only clipboard image tokens gated to editor lines.
 - A prompt flushes staged shell results, expands `@` refs, then either queues
   onto the steer queue (rendering as a dimmed row with its echo deferred until it
   lands) or starts the drain directly and echoes immediately.
 - Console state writes (`/model`, `/reasoning`, a compaction-threshold edit)
-  queue while a drain goroutine owns State. The pump lands them at its next
-  dispatch, and a drain exit sends a **wake line** so they apply even when no
-  further input arrives. Writes are pump-goroutine confined, which keeps them
-  ordered against turn starts and each other without locking `State`.
+  flow through the pump, which keeps them ordered against turn starts and each
+  other without locking `State`.
 
 The steer queue turns mid-turn prompts into **steering messages**: they deliver
-as blank-line-joined messages (one per provenance run, see below) at the agent's
-next step boundary via `Options.OnBoundary`, or (if no boundary comes first) as
-the next turn's prompt. The join happens only at flush: queued rows stay
-distinct until then, and a merged run is one user message whose text joins its
-items with an empty line between them, the same shape recall offers, so
-delivery records it in editor history (single items were recorded already at
-submit). Esc/Ctrl+C during a turn recovers every queued item back into the
+at the agent's next step boundary via `Options.OnBoundary`, or (if no boundary
+comes first) as the next turn's prompt, joined per contiguous provenance run.
+A merged run is one user message whose delivery records in editor history
+(single items were recorded already at submit). Esc/Ctrl+C during a turn recovers every queued item back into the
 editor (collapsed with newlines) before interrupting. Alt+Up recalls the newest
-queued message. Staged shell
-output is the stager's until a prompt delivers (see "Delivery timing"), so
-recall and abort never strand it. Image blocks ride along with whatever is
+queued message. Image blocks ride along with whatever is
 queued. Their slots
 were consumed at submit, so recall and abort refile each one under a fresh
 token and the recovered line still names its `[image #N]`. See
@@ -94,9 +80,8 @@ runs after every turn. Both are documented in
 `agent-loop-design.md` and used by `plan-design.md`.
 
 Submissions therefore stay in order, the UI never stalls, and "the turn is held
-until the pending command finishes" falls out of `Flush` blocking the pump. Only
-prompts flush: `!ls` followed by `/model` leaves the stage pending for the next
-real message. The CLI seed (`ajent "explain @pkg/app"`) goes through the pump
+until the pending command finishes" falls out of `Flush` blocking the pump.
+The CLI seed (`ajent "explain @pkg/app"`) goes through the pump
 too, so its references expand like any other prompt. The headless one
 (`ajent -p …`) expands in `runHeadless` instead, once the tool scope has
 settled.
@@ -151,7 +136,9 @@ command survives restart and shows in `/settings` as session-scoped.
 leaving the stored override untouched so intent survives switching back. A
 state mutator typed mid-turn **queues** rather than refusing: the pump holds
 the write while a drain goroutine owns State, lands it in submission order once
-the drain exits, and announces the pending change with a notice. Nothing about
+the drain exits, and announces the pending change with a notice. A drain exit
+sends a **wake line** so queued writes apply even when no further input arrives.
+Nothing about
 a change is recorded until it applies. `/copy` reads through `SettledMessages`,
 the one read seam over that same gate: the live transcript at rest, or the copy
 the last turn end settled while one streams, so a partial turn is never copied.
@@ -161,9 +148,9 @@ config default.
 
 `Reload` is the widest of the mutators and the thinnest command: the handler calls it
 and turns an error into a notice, nothing more. It is refused while a turn runs, since
-the system and tool blocks must stay stable within one; that check is only a snapshot,
-so a drain starting mid-reload finds every state write queued behind itself instead of
-racing State. Every progress notice belongs to
+the system and tool blocks must stay stable within one. That check is only a
+snapshot, so a drain starting mid-reload finds every state write queued behind itself
+instead of racing State. Every progress notice belongs to
 the host, which is the only side that knows which live objects a re-read actually moved.
 `config-design.md`'s Reload section states its two rules: a reload writes nothing and
 never enables nor disables a tool.
@@ -173,7 +160,8 @@ answers one question from the build-embedded user-facing docs (README plus
 `docs/features/*`). It runs outside the turn loop: a slow provider cannot stall the pump,
 and it refuses while a turn streams instead of queueing behind it. The reverse overlap is
 resolved the other way: a submitted prompt aborts an in-flight answer rather than letting
-the two interleave. An answer stays out of the transcript and model context, like `/update`.
+the two interleave. An answer stays out of the transcript and model context,
+like `/update`.
 
 `Dispatched()` is owned by the pump and flips true on this run's first prompt,
 never on a command or a `!`. It stays false on a resumed session until then,
@@ -185,24 +173,22 @@ so `/tools` selection opens free despite existing history.
 |---|---|
 | `/help [question]` | bare: markdown list of commands and keybindings through `Console.Print`. With a question: one docs answer through the same seam, printing nothing itself |
 | `/usage` | render the session's token ledger as markdown (turns, input/output, per-model breakdown, with sub-agent spend called out when nonzero) |
-| `/copy` | copy the last agent response to the clipboard through the shared writer (see `clipboard-copy-feature.md`), including text plus tool call/result JSON verbatim. Mid-turn it copies the last settled response, never a partial stream. No agent messages yet is a notice |
+| `/copy` | copy the last agent response to the clipboard, including text plus tool call/result JSON verbatim. No agent messages yet is a notice |
 | `/model [name]` | resolve by name, or open the picker. `SetModel` announces the change as a notice and records a model-change entry, then the key is saved to the user config so a fresh start keeps it. A no-op when the key is unchanged (so nothing is rewritten), and its picker runs silent so only that one line lands (see `tui-design.md`) |
 | `/reasoning [level]` | report, or set/clear the level for capable models. A model with fewer than two options reports its situation inline and never opens a picker |
-| `/tools` | multi-select, grouped by source. Free selection before this run's first prompt (a resumed session preselects its recorded set), widen-only after |
+| `/tools` | multi-select tool picker, grouped by source |
+| `/compact [instructions]` | shrink context toward the compaction threshold now, with the argument as the summariser's focus. Refused while a turn streams (`session-design.md`) |
+| `/mcp [connect\|disconnect\|logs\|reload] [name]` | bare prints the server table (state, transport, tool count, latency), verbs connect, disconnect, show logs and re-read `mcp.json` live (`mcp-design.md`) |
 | `/session [name]` | report the session's name, or set it. An invalid or conflicting name is a notice (see `session-design.md`) |
 | `/settings [section]` | two-level menu of rows showing value + source layer, each edited in place with save-to-layer (see `config-design.md`). Rows come in three kinds: enum from a fixed set, model picker, and integer with min/max validation for sub-agent settings. A currently impossible choice (Reasoning on a single-option model) renders grayed out with the reason, as does Reset overrides when nothing is overridden |
 | `/reload` | re-read `config.json`, `models.json`, `mcp.json` and `AGENTS.md` and re-apply them to the live session, refused while a turn runs. Newly discovered tools arrive disabled and startup-only keys are reported rather than applied (see `config-design.md`) |
 | `/agents [list\|stop <id>\|all]` | list every running/finished investigation, or cancel one by id (the bare number works) / all. Unknown verbs warn. Esc never cancels jobs, so this is the only stop path |
-| `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice. The result is UI-only, never written to the transcript nor sent to the model (see below) |
+| `/update` | reinstall ajent from the latest release in the background: resolves `@latest`, reinstalls when it differs, and reports updated-from/to, up-to-date or an error as a notice |
 | `/plan [goal]` | start the two-model plan → implement → review workflow: pick a planner, the active model implements (see `plan-design.md`) |
 | `/plan-stop` | end the workflow and restore the model and tool set `/plan` found |
 | `/plan-status` | report the phase, round and both models |
 | `/init` | survey the project and write `AGENTS.md` (see below) |
 | `/exit` | quit |
-
-`/help`, `/model`, `/reasoning`, `/usage`, `/copy`, `/compact`, `/tools`, `/session`,
-`/mcp`, `/reload`, `/agents`, `/settings`, `/update` and `/exit` are the built-ins.
-`/plan*` and `/init` are feature commands the driver adds on top.
 
 Registration goes through one helper in `pkg/app` that always calls
 `RegisterBuiltins` first and then any feature commands. Feature registration
@@ -309,8 +295,7 @@ Picker key handling is specified in `tui-design.md`.
 
 `command.Stager` owns staged runs: constructed over the tool registry and a
 sink, it starts a command immediately (non-blocking), reports whether any run is
-pending, cancels every in-flight run, and flushes, waiting for each included run
-to finish then returning them as one user message each.
+pending, cancels every in-flight run, and flushes.
 
 `Run(cmd, excluded)` resolves `bash` through `Registry.Lookup` (state-independent,
 so disabling `bash` for the agent never blocks the human's own shell). Only a
@@ -339,9 +324,8 @@ Running `!` never interrupts an in-flight turn, and it only becomes visible to t
 model when the user next speaks. It is not free, though, and the context bar
 says so: as each run finishes the stager reports the staged total upward. That
 term behaves like the editor buffer (`composing`): it survives a rebase or a
-model switch, because staged output has not ridden any request yet. Excluded (`!!`)
-runs and still-running ones count zero: the former never reaches context, the
-latter has no result to measure.
+model switch, because staged output has not ridden any request yet. Excluded
+(`!!`) runs and still-running ones count zero: the latter has no result to measure.
 
 **Discarding.** A rewind switches to a different branch point, so anything
 staged against the branch just left must not ride the new one's first prompt.
@@ -388,9 +372,7 @@ while they stream to the sink on their own goroutine.
 
 **Error behaviour.** A non-zero exit code is an ordinary staged result, not a
 turn failure: the model sees the failure (with the exit code) at the next
-message. `!` alone or an empty command produces a notice and runs nothing. A
-literal line beginning with `!` leads with whitespace (` !echo hi`), and a literal
-`!!x` prompt is ` !!!x`.
+message. `!` alone or an empty command produces a notice and runs nothing.
 
 **Cancellation.** Each staged run owns a cancellable context, released the
 moment its result is captured: a finished run must not stay registered as a
@@ -494,8 +476,7 @@ the literal text bash will receive rather than a workspace ref.
 ### Parse (`refs/parse.go`)
 
 `Parse(text)` returns `Ref{Path, Start, End, Note}`. `Note` carries any existing
-size/line measurement absorbed into the token, and that absorption is what makes
-re-expansion idempotent.
+size/line measurement absorbed into the token.
 
 `@` matches only at a word boundary (start of line, or after whitespace, `(`,
 `[`, a backtick or a quote) so `email@example.com` is prose. The path token
@@ -522,7 +503,7 @@ text, an `Est` sizing what the plan will add, notices, and a `Run` closure for
 | missing (retried once without a trailing `.` or `:`, see below) | literal, warning notice naming the written token |
 | directory | `ls` pair planned via `Registry.Lookup` (ignores enabled state), skipped when the tracker's listing is unchanged (`UnchangedDir`) |
 | already read whole and unchanged (`Tracker.Unchanged`) | nothing planned, literal |
-| a path the same message already named | planned once at its first mention, later mentions stay literal |
+| a path the same message already named | later mentions stay literal |
 | text file within `RefInject` and under the running `RefTotal` cap | `read` pair planned, stale annotation stripped |
 | image on a vision model | `read` pair planned like any file, paying its nominal size into the same `RefTotal` cap |
 | over `RefInject`, or a non-injectable kind (image without vision, special, binary) | annotation replaced in place, with a too-large notice only when the file itself is oversized |
@@ -542,8 +523,7 @@ literal-plus-wildcard patterns (`a[1]/*.go`) stay whole-pattern globs:
 per-component resolution would change results for patterns that already match.
 
 The executed plan runs in document order, so injected reads appear in the same
-order as the prose that named them. A repeated path plans at its **first**
-mention and keeps that position.
+order as the prose that named them.
 
 Because planning no longer reads, the tracker cannot dedupe within one expansion
 (nothing has been observed yet), so **the plan dedupes by resolved path itself**
@@ -565,10 +545,10 @@ prompt naming many distinct images.
 
 `Run` is `Input.After`, so the pairs are appended **after** the user message
 that named them. That placement is what makes rewinding onto an `@` message
-drop its reads with it, and it fixes the display: the tools run when the
-message lands, after its echo, so what is on screen is the order replay renders
-(the asymmetry behind both is specified in `agent-loop-design.md`,
-`Input.After`).
+drop its reads with it, and it fixes the display: injected tools run through
+the same sink as the stager when the message lands, after its echo, so what is
+on screen matches the transcript order replay renders (the asymmetry behind
+both is specified in `agent-loop-design.md`, `Input.After`).
 
 That makes re-injection routine, so ids must not repeat. Each `Expand` takes a
 run number and mints a unique reference id for it (naming its tool too, so read
@@ -580,9 +560,6 @@ count as "already in context" and the resubmit would inject nothing. Both hang
 off the one rebuild hook every path that replaces `State.Messages` owes (see
 `session-design.md`). Headless seeds its own expander from the rebuilt state,
 since `--continue` reopens a transcript that already holds ref ids.
-
-Injected tools run through the same sink as the stager, so the display order
-matches the transcript order and therefore matches what replay renders.
 
 ### Idempotence
 
@@ -604,9 +581,7 @@ applies per directory. A `~` or `~/…` query completes within the user's home
 directory instead, offered back with the leading `~` kept in each candidate so
 accepting a home path inserts one that expands. A `./` query keeps its prefix,
 and an absolute `/…` path completes anywhere on the filesystem. All three keep
-their leading form so accepting inserts a usable path. Because a listing may
-still take time on a slow mount, `@` queries run off the key loop (see
-Completion): a Tab never stalls the editor and a stale result is dropped.
+their leading form so accepting inserts a usable path.
 Ranking is (a) already in the conversation (`Tracker.Records()`), (b) recent
 mtime, (c) fuzzy score (reusing `tui.MatchScore` rather than a second
 implementation). Directories complete with a trailing `/` and keep completing.

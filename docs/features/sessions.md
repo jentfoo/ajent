@@ -14,8 +14,7 @@ Sessions are scoped to the workspace they started in. Transcripts sit under
 `~/.ajent/sessions/<workspace>/` as one `<timestamp>-<id>.jsonl` file per
 session, so renaming a project directory never orphans its history and
 resuming from a different directory sees nothing (it starts fresh). The same
-directory holds each workspace's prompt recall file (see the end of this
-page).
+directory holds each workspace's prompt recall file.
 
 Nothing is ever deleted from inside a transcript: rewinds, forks and
 compaction only append. An abandoned branch stays reachable from the rewind
@@ -39,8 +38,7 @@ reports the current name. Naming rules:
   unrelated transcript
 
 A successful `/session <name>` prints the exact command to return with:
-`resume it with ajent --resume <name>`. When a named session ends, the exit
-hint uses the name rather than the id.
+`resume it with ajent --resume <name>`.
 
 ## Resume matching
 
@@ -75,7 +73,7 @@ Resuming restores that branch's messages, its recorded model (the status line
 and `/model` follow it), settings changed through commands (`/settings`,
 `/reasoning`, the tool set) and nothing of the permission mode: every start
 runs at the configured default. On exit every run prints the matching resume
-command for where it left off.
+command for where it left off, using the session's name when it has one.
 
 ## Rewind and fork
 
@@ -85,22 +83,21 @@ branches included, so any earlier point can be picked.
 
 Picking a point rebuilds the conversation from there:
 
-- picking a user prompt starts a new branch before it and pre-fills the editor
+- picking a user prompt starts a new branch before it and re-fills the editor
   with that original text, ready to edit or re-send. Its `@file` reads drop
   with it, so re-sending re-reads fresh content
 - picking an assistant reply rewinds onto it directly (it stays in context)
 - picking a compaction row undoes that compaction, restoring the full
-  pre-compaction context
+  pre-compaction context. This is the only undo there is: there is no
+  `/compact undo` command
 
 The swap is refused while a turn runs (`Esc` first). A rewind discards shell
 output staged for the branch just left and returns queued prompts to the
 editor. Your current model survives the move instead of reverting to whatever
 the earlier point used.
 
-Nothing from the abandoned branch is lost: both histories remain in the file,
-every entry stays reachable from the picker, and a later resume follows the
-branch that was live last. This is also why rewinding is the only "undo":
-there is no `/compact undo`, rewind onto the compaction row instead.
+A later resume follows the branch that was live last, so both histories remain
+reachable.
 
 ## Deleting sessions
 
@@ -120,7 +117,7 @@ leaving siblings untouched.
 
 A fresh session abandoned before its first prompt is deleted automatically on
 exit: it has nothing to resume and would only be a dead picker row, unless it
-is named (`--session` must return to it) or another instance serves it live.
+is named or another instance serves it live.
 
 ## Concurrent processes
 
@@ -132,9 +129,8 @@ workspace or even one session:
 - two creators racing on `--session <name>` settle deterministically: the
   older id keeps the name and the loser renames itself to `name-2`, then
   `name-3` and onward, with a notice
-- live sessions are detected through their control sockets. `--delete` refuses
-  a served session unless forced, and the sweep lists served sessions as
-  skipped, re-checking each at removal time
+- live sessions are detected through their control sockets, and the sweep
+  lists served sessions as skipped, re-checking each at removal time
 
 You never need attach to share a terminal: two `ajent --continue` processes
 on one session work concurrently, their turns interleaving in one tree.
@@ -166,8 +162,7 @@ stays within `compaction.verbatimFraction` of the context. Nothing inside it
 is ever summarized or truncated.
 
 The context bar and `/usage` fill against the same threshold that triggers
-the automatic run, so a full bar means a compact is due. Compaction never
-deletes anything: rewinding onto its row in the picker restores everything.
+the automatic run, so a full bar means a compact is due.
 
 ## Prompt recall
 
@@ -186,7 +181,7 @@ session emits while exactly one controller at a time holds the seat and acts
 with the authority of the keyboard. You reach that surface through `--serve`
 (a session with no terminal at all) or `--attach [name|id|socket]` (a second
 full terminal joining a live session, `--force` taking the seat from another
-holder); both flags are described in `cli.md`, and the attach surface's keys
+holder). Both flags are described in `cli.md`, and the attach surface's keys
 in `tui.md`.
 
 ## See also

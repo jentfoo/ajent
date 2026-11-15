@@ -177,9 +177,7 @@ costs more than one simply given accurate scope.
 ### Guidelines
 
 Two static bullets: conciseness and clear file paths. Nothing is derived from
-the enabled toolset, so the block stays cache-stable across tool changes. The
-rule that guidance never names an absent tool is structural: per-tool guidance
-rides each tool's `Description`, which is sent only while that tool is enabled.
+the enabled toolset.
 
 ### Environment facts
 
@@ -208,7 +206,7 @@ session: that is the cache-stability contract.
   `override` replaces parts 1–2 (opening sentence plus guidelines) but leaves
   environment facts, project instructions and snippets in place.
 - Changing the tool set or adding/removing project instructions changes this
-  block. Per principle 1, a change is announced with a one-line notice.
+  block.
 
 ---
 
@@ -217,8 +215,7 @@ session: that is the cache-stability contract.
 Tools reach the model through the provider's tool-schema channel,
 **not as text in the system block**. Each enabled tool contributes its name, a
 prose `Description()` and JSON Schema parameters (derived from struct tags) to
-the request's `Tools` list. Only tools whose state is Enabled are sent, which is
-how "only advertise what is real" is enforced.
+the request's `Tools` list. Only tools whose state is Enabled are sent.
 
 The description is full sentences, not a one-line snippet. It states plainly
 anything that changes how the model should use the tool:
@@ -235,16 +232,11 @@ anything that changes how the model should use the tool:
   may still resolve through guarded match tiers, which the result names.
 
 The `agent_*` sub-agent tools carry their whole contract in the description
-because a model that learns them by trial burns a round trip each: no session
-context (pass file paths and key facts, not content), read-only (`read`, `grep`,
-`find`, `ls` plus read-only MCP tools), and the final message is the entire
-return value.
+because a model that learns them by trial burns a round trip each.
 
 There is deliberately **no "Available tools" list inside the system prompt**:
 the schema channel already tells the model exactly what it may call, so a second
-text copy would only cost tokens. The same rule holds for a child's block:
-`childContract` carries only constraints and the output contract, never an enum
-of tools (those ride the schema channel like any other request).
+text copy would only cost tokens.
 
 ### Split what the model sees from what the user sees
 
@@ -286,9 +278,7 @@ Prompt implications:
 
 ## Project instruction layering
 
-The user-global `~/.ajent/AGENTS.md` (honouring `AJENT_HOME`) and
-`<cwd>/AGENTS.md`, when they exist, are read once at startup in that order and
-injected into the system block ahead of the first turn. The format mirrors how
+Injected into the system block ahead of the first turn. The format mirrors how
 other agents present project instructions early in context: a provenance-marked
 wrapper so the model can tell project rules from conversation:
 
@@ -360,8 +350,12 @@ sub-agent) and a closing rule set, with only the middle differing between draft
 and correct. The rules:
 
 - Every claim must trace to something in the survey, never invent commands,
-  conventions or code-style rules
-- Keep wording concise because this file is read on every turn
+  conventions or code-style rules. The structure may echo ajent's own
+  `AGENTS.md` (overview → commands → architecture), but its code-style sections
+  are project-specific and must never be copied into another repository's file,
+  which tests assert
+- Keep wording concise because this file is read on every turn: a long one is a
+  tax paid forever, the principle 7 surface the user writes themselves
 - Write AGENTS.md with the write tool then stop
 
 A fresh draft asks for `## Project Overview` (one paragraph), `## Commands`
@@ -374,13 +368,6 @@ structure and wording where they are still right (a correction pass not a
 rewrite). That choice gates on the stage-1 read result, never the stat alone:
 an existing file whose read failed fails the survey rather than instructing
 corrections over content no one saw.
-
-Two rules are load-bearing and asserted verbatim. **Brevity**: the file is read
-on every turn, so a long one is a tax paid forever (principle 7 applied to the
-one prompt surface the user writes). **Nothing invented**: the structure may
-echo ajent's own `AGENTS.md` (overview → commands → architecture), but its
-code-style sections are project-specific and must never be copied into another
-repository's file, and tests assert their absence.
 
 The write is the model's own `write` call, so the permission barrier gates it
 like any other write rather than `/init` inventing a private path to disk.
@@ -420,10 +407,6 @@ The spec closes with fidelity rules:
 - Preserve file paths, function names, error messages and command lines exactly
 - Give assistant-produced content (code, prose, plans, answers) a 2-3 sentence
   synopsis of its substance rather than just a title or name
-
-This is the heart of resumption:
-**Goal / Constraints / Progress / Decisions / Next Steps / Critical Context**,
-with a hard rule to keep file paths and line numbers verbatim.
 
 ### Incremental update
 
@@ -488,9 +471,7 @@ reader can already see.
 
 The compacted history is placed back in context with explicit provenance so the
 model knows what it lost: an intro line naming that the history before this
-point was compacted, wrapped around the summary as a `<summary>` block. Tag
-literals inside are escaped the same way at replay, so a stored summary cannot
-end its own provenance frame and let its tail read as live user text.
+point was compacted, wrapped around the summary as a `<summary>` block.
 
 A branch return uses similar framing ("a summary of a branch this conversation
 came back from"). Nothing is ever deleted, and recovery is a rewind onto the
@@ -554,9 +535,7 @@ verbatim), and review keeps files inspected, issues found and conclusions reache
 
 All three prompts live in **`pkg/permit`** (`ClassifierSystem`,
 `MCPClassifierSystem`, `WorkspaceClassifierSystem`), the package that owns
-classification and its verdict cache. The shell prompt keeps its strict
-unconditional bar (running arbitrary software is always a write), while the MCP
-variant states the no-observable-change and network-exfiltration rules. A call
+classification and its verdict cache. A call
 is classified with one fresh-context request to the session's current model
 (never the session history), and the verdict never enters the session. All three
 ask the same question (may this run unattended?) for the same one-word answer:
@@ -641,7 +620,9 @@ by what it declares rather than guessed at.
 
 Every investigation child gets a fresh system block built by the same
 `buildSystem` with one extra snippet appended after project instructions:
-`childContract`. It carries three parts, pinned by golden tests. The intro
+`childContract`. It carries three parts, pinned by golden tests, and only
+constraints plus the output contract, never an enum of tools (those ride the
+schema channel like any other request). The intro
 names the agent as an isolated research sub-agent of a coding agent. The
 constraints section limits it to read-only tool calls (`read`, `grep`, `find`,
 `ls` and any MCP tool marked read-only) issued as typed tool calls rather than

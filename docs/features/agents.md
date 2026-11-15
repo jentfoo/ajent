@@ -2,10 +2,7 @@
 
 The surfaces that extend one session beyond a single model with a single tool
 set: sub-agents that offload read-only research and the `/plan` workflow that
-splits a conversation across two models. MCP servers are a surface of their
-own in `mcp.md`. Permission modes live in `permissions.md`, the `subagent`
-config keys and their `AJENT_*` bindings in `config.md`, every other slash
-command in `commands.md`.
+splits a conversation across two models.
 
 ## Sub-agents
 
@@ -49,9 +46,8 @@ runtime otherwise, frozen when it ends. Ids, activity rows and `/agents` all
 read in submission order, however the parallel starts raced.
 
 Concurrency caps parallel jobs with the rest queued behind them in order, and
-a child's turn is bounded by a step limit; a child that hits the cap gets one
-wrap-up turn to summarise what it found. Both limits are configurable
-(`config.md`).
+a child's turn is bounded by a step limit. A child that hits the cap gets one
+wrap-up turn to summarise what it found.
 
 When a job finishes while nobody is polling, a keyed notice lands and the
 summary reaches the model as context at the next turn boundary, never starting
@@ -60,7 +56,7 @@ presented as a completed investigation.
 
 ### Configuration and cost
 
-The child model, concurrency cap, poll wait and step limit are configurable;
+The child model, concurrency cap, poll wait and step limit are configurable.
 `config.md` defines the keys, defaults and startup-read rules. A `/settings`
 edit of the child model reaches the next job at spawn. `/usage` reports what
 delegation cost separately from session spend: child tokens roll into the
@@ -95,7 +91,7 @@ use at `/plan` is the implementor.
 |---|---|---|
 | planning | planner | chat on the current branch, inheriting everything before `/plan`. Calls `dev_implement` with the finished plan |
 | plan gate | the user | the plan lands in the editor to read, edit, rewrite or abandon. The next typed submission starts implementation and is the plan of record |
-| implementing | implementor | a fresh context containing only the approved plan (plus revision instructions on later rounds), building with the tool set saved at `/plan` |
+| implementing | implementor | a fresh context containing only the approved plan (plus revision instructions on later rounds) |
 | reviewing | planner | verifies the implementation against the plan and the git state, then calls `dev_complete` (accept) or `dev_revise` (another round) |
 
 The plan gate is the point of the workflow: `dev_implement` hands off to
@@ -140,8 +136,7 @@ just the ordinary turn interrupt: an aborted turn does not advance the phase,
 and an implementation turn cut that way is retried like any other failure.
 
 Workflow state persists across restarts: resume puts the workflow back in its
-phase, and a crash while parked at the gate puts the draft plan back in the
-editor so the next arbitrary prompt cannot silently become the plan of record.
+phase, and a crash while parked at the gate restores the draft into the editor.
 
 ### Status display
 

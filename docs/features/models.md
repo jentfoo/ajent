@@ -17,8 +17,8 @@ places, both under the provider they belong to:
 - **discovery** - asking the provider for its model list (see below)
 
 The merge rule: when a provider declares models, that declaration is the
-whole list for that provider. Discovery fills fields an entry left unset (a
-real context window, modalities) and never removes entries. It adds models to
+whole list for that provider. Discovery fills fields an entry left unset and
+never removes entries. It adds models to
 a declared list only through `discoverAdd` (below). A provider that declares
 nothing gets whatever discovery reports. A model that left the catalogue keeps
 serving until you switch away.
@@ -59,9 +59,8 @@ The loader is deliberately lenient:
 }
 ```
 
-`defaultModel` is optional and resolves like any model name. config.json's
-`model` key overrides it when set (`config.md`), and the `-m` flag overrides
-both. A configured default that resolves to nothing warns and falls back.
+`defaultModel` is optional: a fresh session picks it when neither a config
+`model` nor an `-m` flag names anything (the full resolution order is below).
 
 ## Providers
 
@@ -82,7 +81,7 @@ Per provider you can set:
 | `timeouts` | connect / TLS / header / idle / total bounds as durations. An explicit `"0s"` disables a bound, which is how you wait out a just-in-time model load (lmstudio's defaults already release header and idle, llamacpp its idle) |
 | `retry` | transport retry policy: `attempts`, `base`, `max`, `jitter`. Honors a server's `Retry-After` but caps the wait, so an agent never sleeps silently instead of failing |
 | `discover` | whether this provider's models are fetched from the server. On by default for every flavor with a known model list (below), and any other OpenAI-compatible endpoint opts in with `"discover": true`, which asks its `/v1/models` |
-| `discoverAdd` | what discovery may add to a declared list: `"loaded"` adds only entries the endpoint reports resident right now, and `"all"` adds everything it listed. Unset keeps your declaration as the whole list. Aimed at lazy-loading proxies like llama-swap, where an unloaded entry still serves a turn |
+| `discoverAdd` | what discovery may add to a declared list: `"loaded"` adds only entries the endpoint reports resident right now, and `"all"` adds everything it listed. Aimed at lazy-loading proxies like llama-swap, where an unloaded entry still serves a turn |
 | `routing` | openrouter only: upstream provider preference (`order`, `allowFallbacks`, `dataCollection`, `only`, `ignore`, `sort`, `max_price`, ...). Both ajent's camelCase and OpenRouter's own snake_case spellings load unchanged |
 | `compat` | quirk defaults applied to every model under the provider. Same fields as a model's own compat block (below) |
 | `models` | your declared list for this provider, see Model declarations |
@@ -110,11 +109,7 @@ catalogue flavors each carry their real endpoint and conventional env var, so
 regional variants (`-cn`, token-plan regions) are reachable in models.json even
 though the first-run wizard does not list them (`cli.md`).
 
-Discovery is on by default for every flavor with a known model list:
-`anthropic`, `openai`, the z.ai pair, `openrouter`, `deepseek`, `together`,
-`xai`, `groq`, `mistral`, both moonshot flavors, `google`, `cerebras`,
-`nvidia`, `huggingface`, `baseten`, `ant-ling`, the token-plan flavors and both
-local servers. The anthropic-protocol flavors (`kimi`, `minimax`, `fireworks`)
+The anthropic-protocol flavors (`kimi`, `minimax`, `fireworks`)
 offer no model list, so their wizard row asks for one id instead.
 
 ## Model declarations

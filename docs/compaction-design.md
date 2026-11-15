@@ -9,10 +9,6 @@ transcript (`pkg/session`), and its summaries use the prompts in
 
 ## What it is
 
-Left alone, a tool-heavy session grows until the next request exceeds the window
-and the provider refuses it. Compaction keeps the most recent work exactly as it
-is and replaces everything older with one structured checkpoint:
-
 ```
 the verbatim band   the newest steps, byte-exact, never reduced
 the summary         everything before it, folded into a checkpoint
@@ -24,9 +20,6 @@ transcript the summariser reads. Superseded reads, repeated output and failed
 results become self-describing markers so the checkpoint is built from what is
 worth reading rather than from raw bytes. None of that reaches the rebuilt
 context, because the cut already removed everything it touches.
-
-The point at which an automatic compaction fires is the per-model
-`compactThreshold`. See "Triggers".
 
 Every before/after measure includes the fixed request overhead (system block +
 AGENTS.md + tool schemas), supplied as `Options.Base`. A message-only measure
@@ -56,8 +49,8 @@ The reduction plan records, per tool result to replace or elide by call id, a
 elides it to that many bytes, with exactly one of the two set. The plan as a
 whole carries those stubs, the message entry ids dropped outright, whether
 thinking is stripped from the kept region, and the message count for the notice.
-New entries carry none of the first three (see "The recorded plan is inert"),
-and replay still honours them for older transcripts. Schema details live in
+New entries record none of the first three, and replay still honours them for
+older transcripts. Schema details live in
 `session-design.md`.
 
 A stub's limit rather than an inlined replacement string keeps the JSONL small:
@@ -65,8 +58,22 @@ assembly re-elides from the original bytes with `tools.Elide`.
 
 Only the **newest** compaction is applied. `pkg/compact` therefore recomputes
 every stage over the whole branch on each run, so the newest plan is always
-cumulative. Reduction-replay is a session invariant, covered in "Compaction reductions
+cumulative: each run seeds its result from the prior plan and recomputes over
+the region actually in context. A summary-only prior is first resolved to an
+explicit `FirstKeptEntryID`, because carrying it into a newer entry would re-cut
+at the new entry's own position and drop everything between the two.
+Reduction-replay is a session invariant, covered in "Compaction reductions
 replay" in `session-design.md`.
+
+### The recorded plan is inert
+
+Everything before the cut is replaced by the summary and everything after it is
+verbatim, so no stub could apply to anything that survives. A compaction entry
+therefore records an empty reduction carrying only the count of messages folded.
+This makes replay trivially correct: there is no plan to re-derive, no marker
+that can outlive the content it referred to, and nothing for a later rebuild to
+reason about beyond the cut itself. Stale markers outliving their content is
+exactly how the duplicate-stub bug happened.
 
 ## The one assembly function
 
@@ -95,6 +102,7 @@ Two things it fixes by construction:
   checkpoint at all, keeping every recorded message: damage must leave the
   session holding what it would hold without that entry, never less, exactly as
   an undecodable payload already does.
+
 ## The reduction pass (free)
 
 `spanStubs` runs over the region still in context and returns replacements for
@@ -162,7 +170,8 @@ Opening the band on an assistant message keeps it well formed by construction.
 The one shape a provider rejects is a `tool_result` with no matching `tool_use`,
 and that cannot occur at a step boundary. The opposite direction, a `tool_use`
 whose results were cut away, is repaired by `repairTurns`, which fills each
-unanswered call with a placeholder result.
+unanswered call with a placeholder result. Fuzz-tested over random tool
+interleavings.
 
 Where a previous compaction exists, the band never reaches earlier than *its*
 cut, and the summarised span starts there rather than at the root, so messages
@@ -175,15 +184,6 @@ Every trigger produces the same band. A manual `/compact` is a request to reduce
 than an automatic run would, and the plan is identical whether a compaction was
 asked for, crossed the threshold, or followed an overflow. The only thing a
 trigger decides is whether compaction runs at all.
-
-### The recorded plan is inert
-
-Everything before the cut is replaced by the summary and everything after it is
-verbatim, so no stub could apply to anything that survives. The compaction entry
-therefore records an empty reduction carrying only the count of messages folded.
-This is what makes replay trivially correct: there is no plan to re-derive, no
-marker that can outlive the content it referred to, and nothing for a later
-rebuild to reason about beyond the cut itself.
 
 ### Summarisation
 
@@ -330,42 +330,11 @@ that keeps almost everything and adds a summary on top can otherwise *grow* the
 context while reporting success.
 
 **1. Reductions are replayed, not rewritten.** The plan lives on the compaction
-entry and `ContextMessages` applies it on every rebuild. Rewriting only the
-in-memory list would vanish on resume.
+entry and `ContextMessages` applies it on every rebuild.
 
-**2. A measured saving is the saving the next request gets.** Every stage
-measures through the same `ContextMessages` the rebuild uses and the same
-`Prepare` pass the wire uses, never a separate estimate.
-
-**3. A cut never orphans a `tool_result`.** The band opens on an assistant
-message, or on the real user prompt immediately before one, so a tool call and
-its result always travel together. Fuzz-tested over random tool interleavings.
-The opposite direction is repaired on the wire by `repairTurns`.
-
-**4. The summary reaches the model.** Emitted as `RoleUser`, because adapters
-drop `RoleSystem` messages, which also makes a mid-turn cut legal (see "The one
-assembly function").
-
-**4a. The verbatim band is never reduced.** Nothing inside it is stubbed,
-elided, dropped or thinning-stripped, in any path. It is what the agent
-continues from, so a marker there would point at content it can no longer read.
-
-**4b. A recorded plan is inert.** The cut removes everything a stub could touch,
-so the entry carries no stubs, no drops and no thinking strip. A plan that
-recorded them would be dead weight that a later rebuild has to reason about, and
-stale markers outliving their content is exactly how the duplicate-stub bug
-happened.
-
-**5. Only the newest compaction applies, so it must carry the prior one forward.**
-Assembly reads a single compaction entry, so a new plan that recorded no summary
-and no cut would resurrect every message the prior one folded away. Each run
-seeds its result from the prior plan and recomputes the stages over the region
-that is actually in context. A summary-only prior is first resolved to an
-explicit `FirstKeptEntryID`, or carrying it into a newer entry would re-cut at
-the new entry's own position and drop everything between the two.
-
-**5a. Before and after describe the real request.** Both are measured through
-the same assembly the rebuild uses with the newest checkpoint applied, never
+**2. A measured saving is the saving the next request gets, before and after
+alike.** Every stage measures through the same assembly the rebuild uses with
+the newest checkpoint applied and the same `Prepare` pass the wire uses, never
 against an independent estimate. A damaged checkpoint makes that assembly fall
 back to the unreduced branch, so every measure falls back with it: measuring
 anything else made invariant 0 unenforceable, since a plan that reopened folded
@@ -373,6 +342,20 @@ history still compared favourably to a context the session had not sent in a
 long time. The degradation is reported, and because a decline records nothing
 that could carry the warning, a damaged pass left with nothing to record fails
 instead of hiding behind "nothing to compact".
+
+**3. A cut never orphans a `tool_result`.**
+
+**4. The summary reaches the model as a user message**, because adapters drop
+`RoleSystem` messages outright.
+
+**4a. The verbatim band is never reduced.** Nothing inside it is stubbed,
+elided, dropped or thinning-stripped, in any path. It is what the agent
+continues from, so a marker there would point at content it can no longer read.
+
+**4b. A recorded plan is inert.**
+
+**5. Only the newest compaction applies, so each run carries the prior one
+forward.**
 
 **6. On rebuild, context and spend come from different places.** A compaction
 rewrites what the branch sends, so the prompt sizes recorded against its
@@ -420,25 +403,17 @@ threshold auto-compaction fire on it instead of waiting for an overflow.
 **9. At most one overflow retry per turn.** A second overflow fails the turn
 rather than compacting in a loop.
 
-**10. A truncated summary is never recorded.** The driver's drain turns a
-`max_tokens` stop reason into an error before any text is returned, because a checkpoint
-cut mid-section silently drops history nothing else preserves, so the run fails
-loudly and the transcript is left untouched. Detection relies on the provider
-reporting the stop reason.
+**10. A truncated summary is never recorded.**
 
-**11. Data never closes its own frame.** Tool output and stored summaries ride
-inside `<conversation>`, `<previous-summary>` and `<summary>` blocks, and a
-literal close tag in them would let text after it read as top-level user
-authority on every later turn. Close-tag literals are escaped at render time and
-unescaped only when a reply is canonicalised for recording. The escape must stay
-idempotent because an old summary becomes part of the next merge prompt.
+**11. Data never closes its own frame.**
 
 ## Conventions
 
 The house style in `AGENTS.md` applies (see also the package-specific notes
 under `session-design.md` "Conventions"). The distinctive test here is the
 frozen-corpus case that proves a plan replayed through the same
-`ContextMessages` measures to its recorded size (see "The frozen corpus" below).
+`ContextMessages` measures to its recorded size (the frozen corpus in
+`session-design.md`).
 
 ## Extending
 

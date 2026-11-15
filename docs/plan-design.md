@@ -51,10 +51,9 @@ projection transform would leave every one of them reporting the wrong list.
    `agent.ToolResult.EndTurn` on their success path only, and a rejected call is an
    `IsError` result the model corrects inside the same turn. The loop enforces
    this too, so a tool cannot silence a model by erroring.
-3. **Every exit path restores scope.** Completion, `/plan-stop`, `Esc` and the
-   revision cap all reach one `stopLocked`, which forks back to the live branch
-   with the saved model, restores the saved tool set, unregisters the control
-   tools and writes a terminal state entry.
+3. **Every exit path restores scope.** All of them reach one `stopLocked`, which
+   forks back to the live branch with the saved model, restores the saved tool
+   set, unregisters the control tools and writes a terminal state entry.
 4. **The reviewer reviews the plan the user approved**, not the one the planner
    drafted. The approved text is the submission that started implementation.
 5. **Transition ordering is fixed**: capture the tip, `Fork`, apply the tool
@@ -83,7 +82,7 @@ user sees. An empty head starts a new root.
 | Planning | `dev_implement(plan)` | AwaitingPlan | record the plan tip, put the plan in the editor, **start no turn** |
 | AwaitingPlan | the user submits | Implementing | the submitted text is the plan of record. New root, implementor scope |
 | Implementing | the turn ends, `dev_review` or not | Reviewing | fork the review tip (else the plan tip), planner scope, git state |
-| Implementing | the turn errored or hit a token/step limit | Implementing | retry a few times, then pause in place |
+| Implementing | the turn errored or hit a token/step limit | Implementing | retry, pause in place |
 | Reviewing | `dev_revise(instructions)` | Implementing | record the review tip, new root seeded with plan + instructions |
 | Reviewing | `dev_complete()` | Done | restore scope |
 | Reviewing | stopped with no verdict | — | ask the user: revise / accept / keep reviewing |
@@ -94,7 +93,12 @@ hands off to nobody. The plan lands in the editor to read, edit, rewrite or
 abandon, and the next submitted prompt is what the implementor receives. Only a
 non-injected (typed) submission clears the gate, and injected context is never
 captured as approval, whether a staged `!` flush, a permission-barrier note or
-a sub-agent completion steer. This mirrors the Planning phase guard.
+a sub-agent completion steer. This mirrors the Planning phase guard. While
+parked, queued and injected inputs hold rather than run on: they join the queue
+until a typed submission starts the implementor's turn behind its kickoff
+(injection rules: `prompt-design.md`). Without this bound a queued prompt would
+start an ungated planner turn at the gate, and an approval submitted during it
+would surface as ordinary steering instead of being captured.
 
 The captured submission is stripped to its text: staged `!shell` results never
 reach a gated submit, pasted images are dropped rather than pinned ahead of a
@@ -108,15 +112,8 @@ inputs are therefore already prepared for the host's user-input seam
 (`agent-loop-design.md`, steering and follow-up), which would otherwise rewrite
 that text and pin reads into a fresh root.
 
-While parked, queued and injected inputs must hold rather than run on, the same
-rule that bounds approval: they join the queue until a typed submission starts
-the implementor's turn behind its kickoff (injection rules:
-`prompt-design.md`). Without this bound a queued prompt would start an ungated
-planner turn at the gate, and an approval submitted during it would surface as
-ordinary steering instead of being captured.
-
-**The implementor's report always reaches the reviewer.** The reviewer sees none
-of the implementation branch, so `dev_review`'s `summary` is required. An empty
+**The implementor's report always reaches the reviewer**, so `dev_review`'s
+`summary` is required. An empty
 one is rejected like any other bad control call, in-turn. A round that ends
 *without* calling `dev_review` at all still has to be reported, so the
 implementor's closing assistant message stands in as the summary
@@ -124,13 +121,12 @@ implementor's closing assistant message stands in as the summary
 fallback a stopped implementor reaches review as silence, and the reviewer has
 only `git status` to go on.
 
-Both the revision and the retry counts are bounded by small constants.
-
 An implementation turn that ends in a provider error **or** in `StopMaxTokens`
 (the step limit, or an output cut short) has stopped before the work was done,
 so it is retried rather than reviewed. Reviewing it would judge an
 implementation that never finished. Only a clean stop advances to review.
-The retry budget belongs to one implementation attempt: a typed submission
+Both the revision and the retry counts are bounded by small constants. The
+retry budget belongs to one implementation attempt: a typed submission
 while Implementing restarts it, so pausing and resuming by hand gives fresh
 attempts instead of re-pausing on the first error. Auto-retries are injected
 continuations that bypass that reset and only spend the budget.
@@ -169,17 +165,18 @@ A phase scope narrows the enabled set, which `/tools` refuses to do once the
 run has dispatched a prompt. That rule is a command-layer policy protecting the
 user from a model-visible tool set shrinking under them. A plan scope is
 explicit, user-initiated and restored on every exit path, so it calls
-`Registry.SetEnabled` directly. Restoring a mid-workflow session re-applies
-its phase scope first, so the resume's free `/tools` window opens inside it.
+`Registry.SetEnabled` directly.
 
 ## Display
 
 Phase transitions surface phase, model and round to the user (divider, keyed
-notice, `plan` status segment), but they never redraw or replay the screen,
-because what changed is what the *model* sees. The kickoff message itself is
+notice, `plan` status segment), but they never redraw or replay the screen.
+The kickoff message itself is
 **not** echoed live: the user just read the plan in the editor, and the review
-kickoff's `git status` reads better in the reviewer's own output. It is recorded
-in the transcript, so replay shows it after a resume. That is a deliberate
+kickoff's `git status` reads better in the reviewer's own output. Kickoffs are
+injected messages carrying the replay mark, so each one replays as its own
+block above the turn it fed rather than as a typed prompt (replay and
+provenance rules: `prompt-design.md`). That is a deliberate
 asymmetry.
 
 Prompts the user types while a workflow turn runs still steer that turn. User
@@ -195,7 +192,8 @@ whether a message follows the entry it found. `PhaseDone`/`PhaseIdle` is
 terminal, so a later resume never resurrects a finished run, and a model that
 no longer resolves abandons the restore with a notice. Tool sets are
 runtime-only, so a resume re-applies the phase scope rather than reconstructing
-it from `setting_change` entries.
+it from `setting_change` entries, and that re-application happens before the
+resume's free `/tools` window opens.
 
 The entry also persists the awaiting draft (`draftPlan`) at the gate and the
 implementation summary (`execSummary`) a reviewing resume's repair kickoff
@@ -213,10 +211,6 @@ its own append lands a custom entry at the tail and would fire the repair on
 every resume. Rewinding to a point before a delivery legitimately re-arms it
 there. The check reads the transcript rather than the rebuilt context, so
 compaction cannot make a delivered kickoff read as missing.
-
-Phase kickoffs are injected messages carrying the replay mark, so replay shows
-each one as its own block above the turn it fed rather than echoing it as a
-typed prompt (replay and provenance rules: `prompt-design.md`).
 
 Ending a workflow leaves HEAD at the review tip while the file tail is an
 implementation entry. Resume follows the live head over the tail, the same

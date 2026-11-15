@@ -146,8 +146,11 @@ dialect ignores them without its capability flag. The producer surface is the
 tool's own `Schema()` (registry and sub-agent toolsets pass `Deferred`/`Grammar`
 through) and `ToolResult.AddedToolNames`, which the loop copies onto the
 transcript block, and no built-in tool declares either today. Kimi mode adds a
-chat-completions serialization: tools a result loaded leave the top level list
-and a bare system message re-offers their schemas at each load point.
+chat-completions serialization: tools a result loaded leave the top level list,
+a bare system message re-offers their schemas at each load point on its own
+`tools` field rather than the request's top-level key (which stays the immediate,
+never-loaded set), and an empty list stays present when everything was loaded,
+because some endpoints require the key once tool calls exist in history.
 
 `Prepare` never writes through its input: clean stages return the caller's list
 untouched and only a real edit materializes copies, with the origin stamp cloning
@@ -610,12 +613,13 @@ overflow checks decide the verdict, so a mid-stream `overloaded_error`
 retries like the pre-stream 529 it mirrors. Only the server-directed wait
 is unavailable mid-stream. A frame whose code resolves to nothing stays
 unrecoverable, and known non-retryables (overflow, auth) keep their
-verdicts, because the status table decides rather than the frame.
+verdicts, because the status table decides rather than the frame. A verdict of
+their own is what would let one failure turn retryable before first byte and
+permanent mid-stream.
 
 Every provider signals "too many input tokens" differently, so each flavor has a
 phrase table in `classify.go` and maps its form to `ErrContextOverflow`, which
-callers catch with `errors.Is`. Note llama.cpp reports it as a **500**, not a
-client error. Matching vendor prose is fragile by nature, so treat the table as
+callers catch with `errors.Is`. Matching vendor prose is fragile by nature, so treat the table as
 something that will need additions.
 
 Timeouts are five separate bounds (connect, TLS, header, idle and total),
@@ -656,7 +660,9 @@ reasoning on turns without tool calls.
 - System is a top-level field, not a message.
 - Tool results ride on **user** messages, never a tool role, and consecutive
   same-role messages must be merged.
-- Temperature must be dropped when thinking is enabled, or the request 400s.
+- Temperature must be dropped when thinking is enabled: silently, never an
+  error, because erroring would make a `/settings` temperature change fail
+  confusingly on exactly the models people reason with.
 - Usage is split across events: input and cache numbers arrive at
   `message_start`, final totals with `output_tokens_details.thinking_tokens`
   only on the terminal `message_delta` (see invariant 12).
@@ -697,9 +703,7 @@ reasoning on turns without tool calls.
   `additional_tools` item, or a client-executed
   `tool_search_call`/`tool_search_output` pair with `defer_loading` tools when
   search is capable. Dedup is per request build, so a name loaded earlier in the
-  same request is not re-emitted. Load-on-demand tools stay out of the top-level
-  `tools` list (only immediate ones are offered there), and only deferred names are
-  injected, so a tool never appears twice.
+  same request is not re-emitted.
 
 ### openrouter
 
@@ -750,8 +754,7 @@ compaction summary), so cancellation is Close-not-drain everywhere.
 **4. Thinking blocks keep every provider's replay token, and unreplayable ones are dropped.**
 See "The content model" and "Reasoning".
 
-**5. Retention edits the request, never the transcript.** Everything is still on
-disk, and only what is sent shrinks.
+**5. Retention edits the request, never the transcript.**
 
 **6. A tool call completes at a structural boundary, not when its JSON parses.**
 Partial arguments parse successfully far more often than not (`{"a":1}` is valid
@@ -765,8 +768,7 @@ running it. Local models produce broken argument JSON routinely, and losing the
 whole turn each time is unusable. No repair heuristics: an argument that
 "repairs" into a valid-but-wrong call is worse than a visible failure.
 
-**8. A declared model is always visible.** Discovery fills its gaps and never
-removes it, adding entries only through the provider's `discoverAdd` opt-in.
+**8. A declared model is always visible.**
 
 **9. Discovery never blocks startup and never fails the run.**
 
@@ -864,29 +866,8 @@ payloads line up would leak one test's needs into unrelated tests.
   stays identical across a session (a moving budget invalidates the cached
   prefix). The compat `thinking_token_budget` follows the same rule. `display`
   is deliberately never sent.
-- **Do not reuse the `tools` key for kimi load points.** The re-offered schemas
-  ride a bare system message's own `tools` field, while a chat-completions request
-  keeps `tools` as the immediate (never-loaded) set, and an empty list stays
-  present when everything was loaded, because some endpoints require the key
-  once tool calls exist in history.
-- **Do not give mid-stream error frames their own retry verdict.** Resolve
-  the frame's code to a status and let the shared `ShouldRetryStatus` table
-  decide, or one failure turns retryable before first byte and permanent
-  mid-stream. A code that resolves to nothing must stay unrecoverable.
-- **Do not overwrite an anthropic stream's accumulated usage with a single wire report.**
-  Only `Usage.Merge` is correct there (invariant 12), and only there: the other
-  dialects' input total is derived, so merging can inflate it.
-- **Do not cache a provider adapter by vendor name.** `api` and `baseUrl` are
-  per model, so two models on one provider entry can need two adapters. Keying
-  is on provider, dialect and base URL together.
-- **A `Compat` bool must stay a pointer** and a `Timeouts` duration must stay a
-  pointer. Both need the unset/explicit distinction (a plain zero cannot say
-  "disabled").
 - **Enums encode as text, not JSON.** The thinking level map is keyed by
   `Level`, so implementing only `UnmarshalJSON` compiles and fails at runtime.
-- **Anthropic rejects a temperature alongside thinking.** It is dropped silently
-  rather than erroring, because erroring would make a `/settings` temperature
-  change fail confusingly on exactly the models people reason with.
 - **Compat block indexes come from one shared counter.** Thinking/text regions
   and tool calls both claim from it, in either order: reasoning interleaved
   after `tool_calls` deltas began is routine for the compat vendors, and fixing

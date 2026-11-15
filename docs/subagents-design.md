@@ -28,11 +28,8 @@ It imports only `agent`, `llm`, `strutil` and `tokens`.
 
 - The parent tool registry arrives as a narrow interface (`ToolSource`) declared
   here, so the package never imports `pkg/tools`. `Options` fields are supplied by
-  `pkg/app`, exactly like `permit.Barrier`. Headless runs supply no steer queue,
-  so the delivery hook drives that case instead (see below).
-- There is **no permission guard on a child**: nothing to permit. That is why
-  the read-only tool filtering must be structural (see `toolset.go`) rather than
-  a matter of trust or instruction.
+  `pkg/app`, exactly like `permit.Barrier`.
+- There is **no permission guard on a child**: nothing to permit.
 
 A sub-agent never spawns a sub-agent: `agent_*` is barred structurally, applied
 last in the filter so no configuration can reach past it.
@@ -88,10 +85,8 @@ bound before clearing activity rows and the status segment, so a job stuck on a
 slow provider cannot block exit forever. A straggler past that bound still
 finishes its own bookkeeping. Every activity row, status segment and notice
 publish after the clears is barred, child sink rows included, so Close has the
-final word on the UI. An interrupted turn is cheaper:
-`agent_poll` selects over `j.done`, its timeout timer and the caller's context,
-so cancelling the tool call releases the poll immediately while the job itself
-keeps running.
+final word on the UI. An interrupted turn releases its poll immediately while
+the job keeps running.
 
 ### One job (`job.go`)
 
@@ -130,13 +125,10 @@ Each job builds a fresh agent:
   resolved through the registry when set (at spawn, so `/settings` applies to the
   next job), else inherited from the session, and reasoning is likewise inherited
   verbatim, because a user who dialled it down meant it. Tokens is a fresh child
-  ledger (`Accounting.Child()`) whose usage rolls into the parent as **child spend**
-  (see accounting below), and the parent's context bar never moves for it.
+  ledger (`Accounting.Child()`).
 - **Tools**: `&toolSet{tools: childTools(src, inRepo)}` over the wiring-time
-  source. The options carry project instructions resolved per job from the shared
-  store, so a `/reload` reaches jobs started after it, plus
-  `SystemSnippets: []string{childContract(inRepo)}`, and the session has no recorder
-  and no resume.
+  source. The options add `SystemSnippets: []string{childContract(inRepo)}`, and
+  the session has no recorder and no resume.
 The prompt is `agent.Input{Text: taskPrompt(task, instructions)}`. After it
 returns, the summary is read off the **last assistant message** in
 `State.Messages`, joining only its non-empty `llm.TextBlock` content. Thinking
@@ -210,9 +202,8 @@ committed history:
   sibling still running.
 
 Rows are single lines published through `tui.SetActivityRanked`, each with the
-job number as its rank, so the list reads in job-number order however the
-parallel `agent_start` calls raced to publish, and overflow always hides the
-newest rather than an arbitrary one. Elision, the row cap and the dim
+job number as its rank, and overflow always hides the newest rather than an
+arbitrary one. Elision, the row cap and the dim
 `Theme.Activity` look belong to the paint layer (`tui-design.md`).
 
 The completion steer carries both `Input.Injected` and `Input.Echo`: it
@@ -284,8 +275,7 @@ Two details keep that suppression from swallowing a result:
 `/init` (see `command-design.md`) drives `agent_start` and `agent_poll` itself
 rather than letting a model call them. Two consequences a caller must respect:
 
-- **Register every poll before any child can finish.** Suppression of both the
-  completion notice and the context steer keys off the live poller count, not a mode. The window
+- **Register every poll before any child can finish.** The window
   between the last `Start` and the first `Poll` is a narrow race, not a contract, and a
   host that polls too late relies on delivery instead.
 - **Poll until terminal.** A timeout is an ordinary outcome, so the caller loops
@@ -380,10 +370,9 @@ The only wiring layer. The manager is built in `driver` after the tool registry
 and barrier exist, with adapters:
 
 - `Activity` → the UI activity row
-- `Notice` → a keyed UI notice (so consecutive notices collapse in place)
+- `Notice` → a keyed UI notice
 - `Status` → the UI status segment
-- `Tally` → structured job counts captured beside each Status publish and carried
-  on the segment for control surfaces
+- `Tally` → structured job counts carried on the segment for control surfaces
 - `Deliver` → the `Running()`-guarded `ag.Steer`, per above
 - `Boundary` → chained ahead of the steer queue's `q.pull` in
   `Options.OnBoundary`, so completion steers and queued user prompts land at the
@@ -391,8 +380,7 @@ and barrier exist, with adapters:
 - A tiny sink (`NopSink`) appended to `opts.Sinks` overrides `TurnStart` to call
   `mgr.Flush()` and `TurnEnd` to release in-flight marks when the turn was
   aborted, so every abort path clears them through one seam instead of each
-  calling the manager directly. A clean stop leaves the marks alone so a queued
-  completion steer can still land on the next turn's boundary via `Delivered`.
+  calling the manager directly. A clean stop leaves them for `Delivered`.
 
 Headless mode (`oneshot.go`) has no steer queue, so `Options.OnBoundary` is
 `mgr.Boundary` directly and the `Deliver` hook drives the idle case.
@@ -428,29 +416,11 @@ The suite runs table-driven against `llm.ScriptedProvider`, so no network and no
   `MaxConcurrent` jobs run at once (eight starts against a cap of four, all
   completing). `agent_start` calls in one message number sub-1/sub-2/sub-3 in
   submission order.
+
 The load-bearing contracts are asserted directly rather than left to prose: the
 structural tool filter (a child resolves no `bash`/`write`/`edit`, still gets
 disabled-in-parent `find`/`grep`/`ls`, and never sees `agent_start` even when
 reported read-only), the poll timeout payload, delivery confirmation with
-re-offer on interrupt, and child spend (visible in totals, never moving the
-parent's context bar). The empty-summary recovery is pinned: nudge -> summary,
-with an empty nudge falling back to sizable thinking as the summary, else
-`StatusError` (`errNoSummary`). Mid-investigation tool-turn reasoning is excluded
-by the tool-call boundary. Truncation is pinned too: a partial text with
-`StopMaxTokens` is nudged (not reported done), and a retry that hits the cap
-again fails with `errTruncated`.
-
-## Invariants
-
-1. A child has only read-only tools, so `agent_*` (and so grandchildren) are
-   impossible by construction, not instruction.
-2. The final assistant message is the entire return value: a completion never
-   names an id twice, and one dropped by an interrupt is re-offered rather than
-  eaten.
-3. Delivery is confirmed, not assumed, and `Input.Delivered` fires only when the
-  steer lands in context.
-4. A completion never starts a turn on an idle parent, and `OnSettled` is unused for
-   this.
-5. Child spend rolls up into the parent's totals but never moves its context
-   bar.
-6. `Close` cancels everything and returns promptly even if a provider stalls.
+re-offer on interrupt, and child spend. The empty-summary and truncation
+recovery chains (nudge → thinking fallback → `errNoSummary`/`errTruncated`) are
+pinned end to end.

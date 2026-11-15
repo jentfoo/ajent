@@ -2,9 +2,7 @@
 
 What one submitted line can be: prompts, slash commands, shell runs and
 `@path` references, plus every slash command with its arguments and behavior.
-Keybindings live in `tui.md`, what each permission mode auto-runs in
-`permissions.md`, the surfaces behind `/plan`, `/agents` and `/mcp` in
-`agents.md`. A headless one-shot never dispatches any of this (`cli.md`),
+A headless one-shot never dispatches any of this (`cli.md`),
 it answers a single prompt and exits.
 
 ## Input-line grammar
@@ -16,7 +14,7 @@ Every submitted line is classified once, at submit:
 | `text` | a prompt for the model |
 | `/name args` | a slash command |
 | `!cmd` | a shell run whose output joins your context (below) |
-| `!!cmd` | a shell run shown only to you, never reaching model context or transcript |
+| `!!cmd` | a shell run shown only to you |
 
 Three escapes force a literal prompt:
 
@@ -45,7 +43,7 @@ their own: `/compact` and `/init` ask you to stop the turn first while
 everything else applies at once. A handler fault degrades to an error notice,
 so a broken command never ends the session.
 
-MCP servers connect in the background while you type; opening `/tools` or
+MCP servers connect in the background while you type. Opening `/tools` or
 `/mcp`, or sending your first prompt, waits for that to finish so tool schemas
 exist before anything reads the tool set (`mcp.md`).
 
@@ -66,7 +64,7 @@ output, staged ahead of your next prompt:
 
 `!!cmd` is the same run for your eyes only: full display like any tool call,
 but its output never reaches model context, the transcript or the staged
-token count. It also never delays a prompt.
+token count, and it never delays a prompt.
 
 An empty command (or a session where bash never registered) is a warning
 notice and nothing else.
@@ -102,8 +100,9 @@ Rules worth knowing:
 - defaults: one reference up to 500 lines / 128kb, 128kb total per message.
   Above either bound the reference annotates. `tools.limits.refInject` and
   `tools.limits.refTotal` re-tune both (`config.md`)
-- references run through the read/ls tools without approval regardless of
-  what `/tools` has enabled. They are your instruction, not the model's
+One invariant spans both user-initiated forms: `!` runs and `@` references go
+through the read/bash tools without approval regardless of what `/tools` has
+enabled, because they are your instruction, not the model's.
 
 ## Completion
 
@@ -130,7 +129,7 @@ of repeating it.
 | `/reasoning` | `[level]` | set the reasoning level for the active model. Bare shows a picker of what this model supports (or reports when there is no choice). A named level the model cannot send clamps to the nearest supported one with a notice. Saved as a session override that resumes (`models.md`) |
 | `/usage` | none | print the token ledger: context fill against the compaction threshold, the response reserve, turns with input/output totals, sub-agent spend when there is any, and a per-model table when more than one model ran |
 | `/copy` | none | copy the last agent response to the clipboard as text plus every tool call and result verbatim. During streaming it copies the last settled response, never a partial turn |
-| `/compact` | `[instructions]` | shrink context toward the compaction threshold now, with the argument as the summariser's focus. Refused while a turn streams (`sessions.md`) |
+| `/compact` | `[instructions]` | shrink context toward the compaction threshold now, with the argument as the summariser's focus |
 | `/tools` | none | open the tool picker for this session (rules below) |
 | `/session` | `[name]` | bare reports the current name or says the session is unnamed. With a name, name it so `ajent --resume <name>` finds it later. A malformed or already-taken name is a warning notice (`sessions.md`) |
 | `/mcp` | `[connect\|disconnect\|logs\|reload] [name]` | bare prints the server table (state, transport, tool count, latency). The verbs connect, disconnect, show logs and re-read `mcp.json` live (`mcp.md`) |
@@ -168,8 +167,7 @@ The keys behind them, their layers and `AJENT_*` bindings are in `config.md`.
 
 Runs a read-only project survey in the background (it may delegate to
 sub-agents), then submits the result as an ordinary turn that writes
-`AGENTS.md`. One survey at a time, refused while a turn streams ("press Esc
-first"), and cancellable.
+`AGENTS.md`. One survey at a time, and cancellable.
 
 ### Project instructions
 

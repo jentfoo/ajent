@@ -44,7 +44,7 @@ The dependency edges are load-bearing.
   speak. Nothing internal may appear here, since every shape in it is what an external
   controller compiles against.
 - **`pkg/client ↛ pkg/app`, `pkg/tui`, `pkg/agent`.** It imports only `ctl`, `paths` and
-  `session`, so a controller gets dial, discovery (liveness filtered from records alone),
+  `session`, so a controller gets dial, discovery,
   typed calls over every wire method, the event stream, transcript backfill and
   cross-workspace saved-session listing with no protocol knowledge of its own. A refusal
   surfaces as a coded wire error rather than a transport failure.
@@ -79,25 +79,26 @@ keep that single path honest under concurrent controllers.
   itself. That is what closes the swap-then-SetHead window: a prompt dispatched
   before a rewind lands before it or ages out, never onto the branch the rewind
   forked away from, and a compaction checkpoint can never record against a head
-  a rewind moved mid-rebuild. A rewind refuses while a drain owns the loop (a
-  running turn, or the between-turns window over queued prompts), and interrupt
-  covers that same window: Esc stops the drain, releasing the staged-command
-  wait it sits in and recovering its queued prompts, exactly as it stops a
-  running turn. Pump lines carry the lane's dispatch generation, which a rewind
-  bumps. Aged locally typed lines return to the editor with a notice naming what
-  happened. Remote submits resolve their pending row instead, so foreign text
-  never lands in the host draft. Either way a buffered prompt is decided once and
-  never lands by accident.
-- **Rewind is one transaction.** Swapping agent state, moving the writer head and
-  publishing the branch change form one ordered operation shared by double-Esc and the
-  wire, so live state and the writer head cannot diverge and the last rewind wins no
-  matter which surface sent it. Queued prompts clear with a recorded notice naming them,
-  and their drop publishes inside the queue's own critical section beside the emptied
-  rows, so pending rows resolve instead of vanishing and a prompt re-offered after the
-  rewind keeps its fresh row. The clear and the staged-output discard run ahead of any
-  post-swap step that can refuse, so a model restore hitting a running turn never leaves
-  prompts queued for the abandoned branch. A rewind never waits on a dialog or picker
-  holding, which closes with a transient notice once the head really moves.
+  a rewind moved mid-rebuild. Swapping agent state, moving the writer head and
+  publishing the branch change form one ordered operation shared by double-Esc
+  and the wire, so live state and the writer head cannot diverge and the last
+  rewind wins no matter which surface sent it. A rewind refuses while a drain
+  owns the loop (a running turn, or the between-turns window over queued
+  prompts), and interrupt covers that same window: Esc stops the drain,
+  releasing the staged-command wait it sits in and recovering its queued
+  prompts, exactly as it stops a running turn. Queued prompts clear with a
+  recorded notice naming them, their drop publishing inside the queue's own
+  critical section beside the emptied rows, so pending rows resolve instead of
+  vanishing and a prompt re-offered after the rewind keeps its fresh row. The
+  clear and the staged-output discard run ahead of any post-swap step that can
+  refuse, so a model restore hitting a running turn never leaves prompts queued
+  for the abandoned branch. A rewind never waits on a dialog or picker holding,
+  which closes with a transient notice once the head really moves. Pump lines
+  carry the lane's dispatch generation, which a rewind bumps. Aged locally typed
+  lines return to the editor with a notice naming what happened. Remote submits
+  resolve their pending row instead, so foreign text never lands in the host
+  draft. Either way a buffered prompt is decided once and never lands by
+  accident.
 - **Dialog answers stay off the lane.** The broker's first-resolution rule already
   linearizes them, and answer latency matters more than ordering against other verbs. A
   controller that dies mid-dialog leaves the dialog open for whoever answers next, exactly
@@ -198,8 +199,7 @@ silently (per-turn usage rides turn.end), so totals are read by resnapshotting, 
 the one documented read-after-unlock. The contract for a new snapshot field is to either publish
 a change event or join this named list, and the hub test holds the inventory to that, so
 a rendering surface can always tell which facts events carry and which only a snapshot
-reads. Seat release by disconnect follows the same rule: it rewrites the discovery
-record and never spends an event number.
+reads. Seat release by disconnect follows the same rule for its discovery record.
 
 **Reconnect is always a resnapshot.** There is no retained-window replay on the wire. A
 reconnecting controller snapshots again and renders only the difference against what it has
@@ -207,10 +207,7 @@ already rendered, which removes the whole class of gaps a bounded replay buffer 
 The difference cuts both ways: the snapshot's applier also clears what the new state no
 longer lists (segments, activity rows and queue rows removed while the terminal was away,
 and a spinner whose turn ended without its end event surviving the drop), so stale chrome
-cannot outlive the resnapshot. The snapshot's open dialogs are part of that difference,
-so a dialog spanning a drop re-races for the seat holder instead of stranding the run on
-a dialog nobody attached can see. A viewer re-reports it as held, since the seat refuses
-its answers.
+cannot outlive the resnapshot.
 
 Delivery is fail-open and bounded. Each connection stages outbound lines behind its own
 queue, and a peer that stops reading loses its connection instead of stalling the turn
@@ -275,31 +272,26 @@ the attached terminal can do, a script can do too. Decisions worth keeping:
   keeps its list until the episode ends, so a recalled prompt never jumps under the
   user's thumbs.
 - **The seat degrades honestly.** Attach claims the seat, or attaches as a named read-only
-  viewer when another controller holds it. Every change it can see names itself: the
-  attach-time notice, refusals naming the holder (or nobody) on any write attempt, the
-  forced-takeover announcement, and a reconnect that hands a refused or taken seat back,
-  so no terminal flips into control against its last seat message. Only a holder opens
+  viewer when another controller holds it, with every change it can see naming itself so no
+  terminal flips into control against its last seat message. Only a holder opens
   answer-capable local dialogs: a viewer's picker would always error on answer, so an open
   dialog surfaces to it as a notice naming what holds input, and a forced takeover closes
-  the displaced holder's open pickers into the same notices. Detaching frees the seat by
-  disconnection and never ends the served run, while `/exit` submitted from either side does.
+  the displaced holder's open pickers into the same notices. Detaching never ends the
+  served run, while `/exit` submitted from either side does.
 - **Reconnect is a state machine, not an exit.** A drop without an end event keeps
   scrollback and the local draft, shows a reconnecting banner and retries with backoff on
-  every path, rediscovering by session id over live records only: record-only liveness
-  filters the dead before any dial. It prefers the instance it was on, follows a sole
+  every path, rediscovering by session id over live records only. It prefers the instance it was on,
+  follows a sole
   surviving instance openly, and picks among several rather than silently switching onto a
   sibling's head. Following a different instance drops the terminal's pre-snapshot event
   buffer and settles its tracked dialogs, since the new hub restarts its seqs and dialog
   ids at 1. The same instance keeps both, bridging events between connect and snapshot.
-  A holder's racer that cannot send its answer (socket down mid-dialog, a failed resolve)
-  yields its entry the same way, so the resnapshot re-races the dialog it still lists.
   Submits while reconnecting fail legibly with the
   editor text preserved. Past a give-up window the terminal exits as a failed turn, so a
   script can tell a lost session from a clean end, and only a clean end shows the
   `--resume <name>` hint.
 - **One goroutine owns the view.** Backfill, live events, redraws and reconnect transitions
-  are messages on one queue, so rendering cannot race the reader that feeds it and rendered
-  ids reconcile by entry id alone.
+  are messages on one queue, so rendering cannot race the reader that feeds it.
 
 ## Serve mode
 
@@ -315,8 +307,7 @@ With no terminal the session hub is the only front end, which fixes three defaul
 
 The run ends as it would at a keyboard: `/exit` over the wire, a signal, or local EOF. The
 socket never keeps a run alive, and teardown quiesces the turn, emits exit before EOF, then
-removes only this instance's own socket and record. Every connection sees the end, and no
-instance can remove another's files.
+removes only this instance's own socket and record. Every connection sees the end.
 
 ## Security model
 
@@ -332,7 +323,7 @@ instead of widening the model silently.
 Two corollaries are enforced because they are cheap. Secret values never appear on the live
 surfaces (events, drafts, queue rows, recalled texts, dialog outcomes), and a recall of
 a secret-prefixed prompt refuses rather than leak. Transport lifecycle stays out of the
-event stream since it is not session state and would consume event numbers. One exposure
+event stream because it is not session state. One exposure
 is stated honestly: controllers receive the transcript path, whose entries contain such
 prompts verbatim, so redaction covers the live surfaces only.
 

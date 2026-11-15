@@ -83,23 +83,20 @@ configuration live, so a half-written `config.json` never takes effect.
 
 Two rules bound what `/reload` (command-design.md) does with the merged result:
 
-- **It writes nothing**: no session overrides, no config files. Adopting a model the
-  files name goes through the host's `applyModel`, which rebases state, ledger and status
-  line without the persistence `SetModel` adds.
+- **It writes nothing**: adopting a model the files name goes through the host's
+  `applyModel`, which rebases state, ledger and status line without the
+  persistence `SetModel` adds.
 - **It never enables a tool, nor disables a live one.** `tools.enabled` is not
   re-applied. An MCP server this edit adds or widens keeps its live enabled set across
   re-registration (mcp-design.md), and nothing already running is turned off. A server
   dropped from the file still narrows the set.
 
 One asymmetry: config.json's `model` is adopted mid-session, but models.json's
-`defaultModel` is not; an edited file default waits for a restart.
+`defaultModel` is not. An edited file default waits for a restart.
 
-Startup-only keys (see The schema) cannot be re-applied: they were copied by value into
-objects built before the console exists, spanning agent loop bounds, sub-agent manager
-fields, UI and keymap setup, the tool registry's advertised commands and diff echo, the
-barrier's safe/denied lists and the control socket. `/reload` compares them against the
-last reported values and names what moved, reporting an edit once instead of on every
-later reload.
+Startup-only keys cannot be re-applied: `/reload` compares them against the
+last reported values and names what moved, reporting an edit once instead of on
+every later reload.
 
 ## Secrets
 
@@ -121,8 +118,10 @@ package parsing its own.
 
 A key copied once into objects built during startup is **startup-only**: no session
 override reaches the live object, so `/reload` reports an edit instead of applying it.
-Most such keys take no `/settings` row; `subagent.maxConcurrent` and `maxSteps` keep
-theirs because an override still persists to a later run. Each key's section below
+Most such keys take no `/settings` row. A key deliberately absent from the
+defaults layer makes `Explain` report `(default)` for it. `subagent.maxConcurrent`
+and `maxSteps` keep theirs because an override still persists to a later run.
+Each key's section below
 gives its reason, and pkg/app's `startupKeys` snapshot is the full list.
 
 Retain defaults per model rather than per layer: the global layers pin no
@@ -144,9 +143,9 @@ an `-m` flag still outranks it, and a resumed session replays its own
 
 ### Permissions
 
-The permission block has a compiled-in default mode, so `Explain` on it resolves
-and reports `(default)`. The mode name is one of the barrier's modes (see
-`permit`), and `AJENT_PERMISSIONS_MODE` binds for free through EnvLayer. It seeds a
+The permission block has a compiled-in default mode. The mode name is one of
+the barrier's modes (see
+`permit`). It seeds a
 session's live barrier at startup from the resolved config default, and a
 `Shift+Tab` or `Shift+←/→` cycle, or `/settings`, applies to that live barrier.
 The configured mode is authoritative on every start: a session resumes with its
@@ -220,41 +219,39 @@ has no `AJENT_*` binding.
 ### Subagent
 
 The `subagent` block ships compiled-in `maxConcurrent`, `maxSteps` and
-`maxPollWait` defaults, and `model` is deliberately left out so `Explain` on it reports
-`(default)` and an empty value means inherit the session model. All four bind for free
-through EnvLayer's reflection (`AJENT_SUBAGENT_MODEL`, `AJENT_SUBAGENT_MAXCONCURRENT`,
-`AJENT_SUBAGENT_MAXSTEPS`, `AJENT_SUBAGENT_MAXPOLLWAIT`). The first three are
-startup-only (see above). `maxPollWait` is a Go duration string (`"20m"`, `"90s"`); an
-unparseable or negative value warns at startup and falls back to the compiled-in
-default, which twins pkg/subagent's own.
-
-Per `## The rule` below, `subagent.model` is a plain
-string key, resolved against the model registry by the caller, never an llm
-import here.
+`maxPollWait` defaults, and `model` is deliberately left out of the block: an
+empty value inherits the session model. Env bindings are `AJENT_SUBAGENT_MODEL`,
+`AJENT_SUBAGENT_MAXCONCURRENT`, `AJENT_SUBAGENT_MAXSTEPS`,
+`AJENT_SUBAGENT_MAXPOLLWAIT`. The first three are startup-only.
+`maxPollWait` is a Go duration string (`"20m"`,
+`"90s"`). An unparseable or negative value warns at startup and falls back to
+the compiled-in default, which twins pkg/subagent's own.
 
 ### Agent
 
 The agent block holds `maxSteps`, an **optional** cap on one turn's tool-calling
 iterations, and `turnRetries`, how often a failed model call is re-requested
 within a step (a permanent failure never retries, and `0` keeps the default rather
-than disabling). Both are deliberately absent from the defaults
-layer, so `Explain` reports `(default)`, and `AJENT_AGENT_MAXSTEPS` and
-`AJENT_AGENT_TURNRETRIES` bind for free through EnvLayer. They are startup-only: pkg/app copies them into `agent.Options`
+than disabling). Both are deliberately absent from the defaults layer. Env
+bindings are `AJENT_AGENT_MAXSTEPS` and
+`AJENT_AGENT_TURNRETRIES`. They are startup-only: pkg/app copies them into `agent.Options`
 once at process start.
 
 The block also holds `systemPrompt`: when set it replaces ajent's default prose
 guidance (the opening sentence and guideline bullets) in the system prompt. It is
-startup-only like its siblings, copied into `agent.Options.SystemPrompt`, and
-`AJENT_AGENT_SYSTEM_PROMPT` binds for free through EnvLayer, with the command-line flag
+startup-only like its siblings, copied into `agent.Options.SystemPrompt`, with
+env binding `AJENT_AGENT_SYSTEM_PROMPT` and the command-line flag
 `--system` outranking both via the flag layer.
 
 ### UI
 
-`ui.render` is a `tui.Mode` name defaulting to `"auto"`, read once before
-`tui.New`: no override could reach the live renderer after that.
+The four keys below are all read once before `tui.New`: no override could reach
+the live renderer after that.
 
-`ui.color` is a `tui.ColorProfile` name defaulting to `"auto"`, read once beside
-`ui.render` and, like it, absent from `/settings`: the theme is built before
+`ui.render` is a `tui.Mode` name defaulting to `"auto"`.
+
+`ui.color` is a `tui.ColorProfile` name defaulting to `"auto"`, absent from
+`/settings`: the theme is built before
 `tui.New` returns. `auto` detects from `TERM` and `COLORTERM`. Any other value
 names the depth outright, which is the escape hatch for a terminal we classify
 badly in either direction. `AJENT_UI_COLOR=none` is the per-invocation form. An
@@ -263,8 +260,8 @@ colour name is not worth a failed startup (`ui.render` still exits, because
 there is no safe paint mode to guess). `NO_COLOR` is still honoured beneath it
 but deliberately undocumented. See tui-design.md, "Semantic styling".
 
-`ui.theme` is a `tui.Palette` name defaulting to `"dark"`. `AJENT_UI_THEME`
-binds for free through EnvLayer. The default is what makes the first-run picker
+`ui.theme` is a `tui.Palette` name defaulting to `"dark"`, with env binding
+`AJENT_UI_THEME`. The default is what makes the first-run picker
 possible: `command.ThemeSetup` opens only while `Source("ui.theme")` still
 reports `default`, so a value in any layer (env, project or a previous
 answer saved to user) suppresses it. Picking (or dismissing) writes the name to
@@ -277,7 +274,7 @@ providers-design.md, "First-run setup").
 
 `ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
 defaults to detection, forcing the capability the way `ui.color` forces depth.
-Like `ui.render` it is read once before `tui.New`, and an unknown name falls back
+An unknown name falls back
 to detection (see tui-design.md, "Terminal images").
 
 `ui.keymap` names the keys that submit a prompt (`submit`) and those that insert
@@ -285,8 +282,7 @@ a newline (`newline`). The lists are overrides over hard-coded defaults
 (`enter` submits, `ctrl+j` and `alt+enter` insert a newline), so an unlisted key
 keeps its default. The editor resolves each line-ending key against the map,
 which shapes the prompt field and a question's free-text answer while confirm
-and option-select surfaces keep physical `enter`. Like `ui.render` it is read once
-before `tui.New`. An unknown name, one key bound to
+and option-select surfaces keep physical `enter`. An unknown name, one key bound to
 both actions or an override that leaves nothing to submit warns and falls back
 to the defaults at startup (see tui-design.md, "Keys").
 

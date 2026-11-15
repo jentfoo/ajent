@@ -85,11 +85,24 @@ Everything else picks a front end:
 | terminal stdin and stdout | interactive TUI, positional arguments seeding the first prompt |
 | `-p/--prompt <text>` | headless one-shot: one turn, print, exit |
 | piped or redirected stdin (or stdout) with no `-p` | headless one-shot, prompt read from the pipe or from positional arguments |
-| `--serve` | no terminal at all. The control socket is the only front end and prompts arrive over it |
-| `--attach [name\|id\|socket]` | mirror a live session on this terminal, opening no local transcript |
+| `--serve` | no terminal at all |
+| `--attach [name\|id\|socket]` | mirror a live session on this terminal |
 
-Note that `ajent "some prompt"` typed at a real terminal opens the TUI with
-that first prompt, it does not run headless. Scripts must use `-p` or a pipe.
+The first source that yields a prompt wins, covering interactive and headless
+runs alike:
+
+1. `-p/--prompt <text>`, which outranks everything: piped bytes beside it are
+   never read
+2. a terminal pair (stdin and stdout both TTYs) opens the interactive TUI,
+   positional arguments seeding its first prompt. `ajent "some prompt"` typed at
+   a real terminal is this case, it does not run headless. Scripts must use
+   `-p` or a pipe
+3. positional arguments, joined with spaces, when either stream is not a TTY
+4. piped stdin, trimmed (`echo "question" | ajent`)
+
+Two misuses are usage errors (exit 1): typed input with redirected stdout has
+nothing to run and nowhere interactive to go, and an emptied pipe leaves no
+prompt.
 
 ## Command-line flags
 
@@ -118,7 +131,7 @@ Matching rules (id, unique prefix, name) and naming are covered in
 
 All default off, which leaves the configured mode alone (interactive:
 `permissions.mode`, one-shot: `permissions.headlessMode`, else auto+write).
-Mutually exclusive with each other. What each mode auto-runs is described in
+What each mode auto-runs is described in
 `permissions.md`.
 
 | Flag | Description |
@@ -140,7 +153,7 @@ cannot set them (see Scripting recipes for the workaround).
 | `--no-tools` | off | withhold the whole tool set, built-ins and MCP alike. Guarantees the model answers from its prompt alone, and no MCP server is even spawned. Overrides `--allow-tools`/`--deny-tools`, which then error as meaningless |
 | `--allow-tools <names...>` | none | pre-granted session allows: a registered tool name (writers included) runs that tool, `bash` grants any nameable shell call, and any other single word is granted as a bash command head (`--allow-tools python3`). Grants hold across the mode changes that clear earned approvals. A multi-word entry warns and names nothing |
 | `--deny-tools <names...>` | none | withhold named tools from the offered set entirely |
-| `--stats` | off | print a tool and token summary when the run ends: prose block on stderr with `-o text`, one `summary` event line with `-o json` |
+| `--stats` | off | print a tool and token summary when the run ends |
 
 ### Serve, attach, delete
 
@@ -148,8 +161,11 @@ cannot set them (see Scripting recipes for the workaround).
 |---|---|
 | `--serve` | run with no terminal, the control socket as the only front end (implies `"control": {"enabled": true}` whatever config says). Prompts and dialogs hold until a controller answers. Ends when a controller ends the session or on signal, exiting 0 with the resume hint on stderr |
 | `--attach [name\|id\|socket]` | attach this terminal to a running session and mirror it live, interacting from either side. Bare `--attach` opens a picker of live sessions. Claims the control seat (`--force` takes it from its holder). Needs no models file and opens no transcript. Every flag configuring a local run (`-m`, `--system`, permission scope flags, all one-shot flags) is refused |
-| `--delete <id\|name>` | delete that saved session, then exit. A live session refuses unless `--force` is given |
-| `--delete-old [days]` | delete every *unnamed* session in the workspace unused for 28 days (or the given count), listing them and asking to confirm first. Live sessions are skipped, never forced. Mutually exclusive with `--delete` |
+| `--delete <id\|name>` | delete that saved session in the current workspace, then exit. The target resolves like `--resume`. A live session refuses unless `--force` is given |
+| `--delete-old [days]` | delete every *unnamed* session in the workspace unused for 28 days (or the given count), listing them and asking to confirm on stdin first. Live sessions are skipped, never forced. Mutually exclusive with `--delete` |
+
+What gets deleted, live-session detection and concurrency rules are
+`sessions.md`'s.
 
 ### Validation
 
@@ -164,10 +180,10 @@ anything runs. The enforced rules:
 - the delete actions accept nothing else: no session selection, prompt,
   serve/attach flags, or positional arguments
 - `-p/--prompt` cannot combine with positional arguments (the flag takes the
-  whole prompt), and refuses a blank value. Bare `--resume` alongside `-p`
-  errors because the picker needs a terminal
+  whole prompt) or bare `--resume`, whose picker needs a terminal, and refuses
+  a blank value
 - `--serve` takes no prompt of any kind
-- one-shot-only flags require `-p`. An unknown `-o` shape is rejected here
+- an unknown `-o` shape is rejected here
 
 ## Headless one-shots
 
@@ -177,19 +193,11 @@ permission barrier settles an ask without a dialog is `permissions.md`'s.
 
 ### Prompt sources
 
-The first source that yields a prompt wins:
-
-1. `-p/--prompt <text>`, which outranks everything: piped bytes beside it are
-   never read
-2. a terminal pair (stdin and stdout both TTYs) opens the interactive TUI
-   instead, positional arguments seeding its first prompt
-3. positional arguments, joined with spaces, when either stream is not a TTY
-4. piped stdin, trimmed (`echo "question" | ajent`)
-
-Two misuses are usage errors (exit 1): typed input with redirected stdout has
-nothing to run and nowhere interactive to go, and an emptied pipe leaves no
-prompt. `@path` references in the prompt expand exactly as they would for a
-typed line (`commands.md`), including image references on vision models.
+The headless prompt follows the precedence listed under Choosing a front end
+(above): `-p/--prompt` first, then positional arguments, then piped stdin, with
+the same two usage-error misuses. `@path` references in the prompt expand
+exactly as they would for a typed line (`commands.md`), including image
+references on vision models.
 
 ### Recording
 
@@ -293,21 +301,6 @@ Text mode streams prose to stdout as it arrives (tool progress and notices go
 to stderr) and appends one hint line after the answer:
 `Run \`ajent --resume <id|name>\` to resume this session.` Scripts that need a
 clean answer should strip that line or prefer `-o json`, which never prints it.
-
-## Deleting sessions from the shell
-
-Both delete actions act on the current workspace only and exit without
-starting a session (exit 0 on success, 1 on failure):
-
-- `ajent --delete <id|name>` resolves its target like `--resume` does, then
-  removes the transcript. A session another ajent instance holds live refuses,
-  naming it. Add `--force` to remove it anyway.
-- `ajent --delete-old [days]` lists every unnamed session unused past the
-  window (28 days by default) and asks for confirmation on stdin before
-  removing anything. Named sessions are never touched.
-
-Rules for what gets deleted, live-session detection and concurrency are in
-`sessions.md`.
 
 ## See also
 

@@ -8,16 +8,16 @@ takes effect live or needs a restart.
 
 ## Files and layers
 
-Configuration resolves lowest to highest, one key at a time:
+Configuration resolves lowest to highest:
 
 | Layer | Source | Who writes it |
 |---|---|---|
 | default | compiled in (reported as `(default)`) | never |
-| user | `~/.ajent/config.json` | `/settings` saves, `/model`, the theme picker |
-| project | `<workspace>/.ajent/config.json` | `/settings` save to project. Commit at the team's discretion |
+| user | `~/.ajent/config.json` | `/settings`, `/model`, the theme picker |
+| project | `<workspace>/.ajent/config.json` | project-scope `/settings` saves. Commit at the team's discretion |
 | env | one `AJENT_*` variable per scalar key | your shell |
 | flag | `-m/--model`, `--render <mode>`, `--system <text>` | ajent, at startup |
-| session | `/settings` edits and mode cycles | the running session, survives resume |
+| session | `/settings` edits | the running session, survives resume |
 
 Files set any subset of the keys. A file that omits a key leaves lower layers
 in charge. Merge is per-key: objects fold deeply, arrays and scalars replace
@@ -94,7 +94,7 @@ disabling retries.
 (the opening sentence and guideline bullets) when set. Environment facts,
 project instructions (`AGENTS.md`) and extension snippets still follow, since
 tools depend on them. A trailing newline is trimmed. The `--system <text>` flag
-sets it for one run and outranks every file layer.
+sets it for one run.
 
 ## Tools
 
@@ -132,9 +132,6 @@ unbounded. Keys are `tools.limits.<tool>.lines` and `.bytes`:
 | `tools.limits.refInject` | 500 lines / 131072 bytes, per `@path` reference | `AJENT_TOOLS_LIMITS_REFINJECT_*` |
 | `tools.limits.refTotal` | unbounded lines / 131072 bytes across all `@path` content | `AJENT_TOOLS_LIMITS_REFTOTAL_*` |
 
-All nine bind mechanically, so `refInject.bytes` is
-`AJENT_TOOLS_LIMITS_REFINJECT_BYTES`.
-
 ## Permissions
 
 | Key | Default | Env binding |
@@ -152,7 +149,7 @@ All nine bind mechanically, so `refInject.bytes` is
 `mode` because unattended sessions gate so differently. Interactive runs never
 read it, and a scope flag beats both it and the default (see `cli.md`).
 
-`safeCommands` lists extra auto-run entries; `deniedCommands` refuses its
+`safeCommands` lists extra auto-run entries. `deniedCommands` refuses its
 entries without prompting in every mode, allow-all included, and may name core
 writers as a safety gate. What an entry can be (a tool name, an MCP server
 namespace, a bash command line) and how matching behaves are described in
@@ -191,9 +188,6 @@ like any other. `maxConcurrent` caps parallel jobs with the rest queued in
 order, `maxPollWait` is how long one `agent_poll` blocks before reporting the
 job still running (like `"20m"` or `"90s"`), and `maxSteps`
 bounds one child's turn so a runaway investigation cannot burn tokens forever.
-
-The last three are read once at startup: an edit reaches a later run, never the
-live manager. A `/settings` override of them still persists for that later run.
 Behavior and job lifecycle live in `agents.md`.
 
 ## UI
@@ -207,7 +201,7 @@ Behavior and job lifecycle live in `agents.md`.
 | `ui.keymap.submit` | `["enter"]` | none (slice) |
 | `ui.keymap.newline` | `["ctrl+j", "alt+enter"]` | none (slice) |
 
-`render` is the paint mode: `auto`, `inline`, `alt` or `plain`; what each
+`render` is the paint mode: `auto`, `inline`, `alt` or `plain`. What each
 paints and how detection resolves are in `tui.md`. An unknown value fails
 startup, since there is no safe paint mode to guess.
 
@@ -239,17 +233,19 @@ the defaults at startup.
 | Key | Default | Env binding |
 |---|---|---|
 | `images.block` | `false` | `AJENT_IMAGES_BLOCK` |
-| `control.enabled` | `false` | `AJENT_CONTROL_ENABLED` |
 
 `block`, when true, prevents any image block from reaching the model: pastes,
 `@file.png` references and tool images all become an
-`Image reading is disabled.` text note. Off by default, and `/settings → Block
+`Image reading is disabled.` text note, and `/settings → Block
 images` flips it live for the session.
+
+| Key | Default | Env binding |
+|---|---|---|
+| `control.enabled` | `false` | `AJENT_CONTROL_ENABLED` |
 
 `enabled` exposes the running session on a same-user unix socket so other
 programs or terminals can join it, and allows `--serve`, which implies it
-whatever config says. It is a deliberate act, off by default, and restart to
-change it. Enabling it and joining a served session are described in
+whatever config says. Enabling it and joining a served session are described in
 `sessions.md`.
 
 ## Update check
@@ -259,7 +255,7 @@ change it. Enabling it and joining a served session are described in
 | `disableUpdateCheck` | `false` | `AJENT_DISABLEUPDATECHECK` |
 
 Turns off the startup update-available notice (its caching rules live in
-`cli.md`). Read once at startup, so an edit needs a restart.
+`cli.md`).
 
 ## Editing settings
 

@@ -62,12 +62,9 @@ satisfies `agent.ToolSet` so the loop reads tools straight off it.
   control surfaces track reshapes from any mutation site (MCP connect, plan
   scopes, config reapply) without per-site wiring.
 
-### Sub-agent tool set and preview seams
+### Preview seams
 
-The child agent's structural filter (which tools a sub-agent may call) is owned
-by the registry but specified in `subagents-design.md`, and it lives in
-`pkg/subagent/toolset.go`. The optional-tool seams the guard chain relies on are
-methods on `Registry`:
+The optional-tool seams the guard chain relies on are methods on `Registry`:
 - `DryRun(call agent.ToolCall) error` — dispatches to the tool's optional
   `DryRunner` implementation (`editTool.DryRun`) so a doomed call can be
   detected
@@ -79,8 +76,7 @@ methods on `Registry`:
 ### Guards (`guard.go`, `asker.go`)
 
 A guard decides a call (allow, deny or ask) and an installed asker turns any
-`Ask` verdict into a final allow/deny. A user's own staged shell line
-is marked on the context so it stays exempt from every permission mode.
+`Ask` verdict into a final allow/deny.
 The gate installs as one unit (`InstallGate`: guards plus their asker), so a
 guard never exists without something to resolve its asks.
 
@@ -113,6 +109,8 @@ Invariants:
   having succeeded before execution.
 
 Cost: write/edit read the target file twice per call (preview, then execute).
+
+### Permission classification
 
 The permission layer registers both: one guard from `permit.Barrier` runs static
 classification, and its asker resolves prompts into allow/deny with session
@@ -184,9 +182,8 @@ A line whose targets all resolve stays nameable for session memory and the
 approval dialog: `go test ./... > /tmp/t.log` grants `go test`. Grants narrow to
 a subcommand for subcommand-verb heads, so `git fetch` for session never covers
 `git push`, an older head grant or `--allow-tools` entry covers every narrowed
-key under it, and a grant never blesses a write the barrier cannot place: a
-redirect line matches one only when the mode allows writes and every target
-resolves inside the roots from every possible `cd` baseline.
+key under it, and a grant never blesses a write the barrier cannot place in
+scope.
 
 ### Headless: the tool set is the gate
 
@@ -207,10 +204,9 @@ continues.
 
 The scope decides the built-in names outright, ignoring `tools.enabled`, because
 the config default omits `grep`/`ls`/`find`. It does **not** re-enable a tool
-its source registered disabled, so an MCP server switched off in `mcp.json`
-stays off unless `--allow-tools` names it.
+its source registered disabled.
 
-### Headless auto scopes: the verdict is the gate
+#### Auto scopes: the verdict is the gate
 
 `--allow-auto` and `--allow-autowrite` put a one-shot run into the `auto` or
 `auto+write` mode instead of allow-all (`--read-only` also runs `auto`, and its
@@ -289,9 +285,8 @@ gate are covered in *Git inspection tools* below.
 
 Line-numbered (`cat -n` style) output so `edit` and the model agree on
 positions. Output is bounded by lines, bytes (each at whole lines) and a
-per-line rune cap. read never spills: the source file is its recovery, so the
-footer pages with `offset`. A range wider than the line limit is refused. Binary
-files are refused. Every successful read is recorded in the tracker.
+per-line rune cap. Binary files are refused. Every successful read is recorded
+in the tracker.
 
 An image file reads as an image block plus its sizing note on a vision model.
 On a text-only model the read is refused with a note naming that, so the model
@@ -303,10 +298,9 @@ push. A sub-agent on a different `subagent.model` shares the parent's gate and
 can therefore be refused where it could see images: single-sourced on purpose,
 and the harmless direction.
 
-The model always sees the full line-numbered content (`Content`), and `Display` is
-that same block, which the TUI elides to a head plus a collapse count via the
-shared output-head rule in `tui-design.md`. The path already rides on the tool
-header that `ToolStart` commits, so no bespoke summary string is produced here.
+The model always sees the full line-numbered content (`Content`). The path
+already rides on the tool header that `ToolStart` commits, so no bespoke summary
+string is produced here.
 
 ### write (`write.go`)
 
@@ -428,8 +422,7 @@ array field heals into a one-element array, and leaf values are never reinterpre
 Decode errors surface via `DecodeArgs` in model-facing shape (field plus
 expected/actual JSON kind), never leaking Go type names.
 
-Feedback returns a unified diff via `go-udiff` directly (`pkg/tools` never
-imports `pkg/tui`), bounded by `Elide`. The added side is the model's own text
+Feedback returns a unified diff via `go-udiff`, bounded by `Elide`. The added side is the model's own text
 and the removed side names what the file actually held, so it makes a non-exact
 match explain itself. It rides only when there is reason to check the result: a
 match tier fired, one edit landed on several sites, or the apply duplicated text
@@ -454,13 +447,7 @@ default:
   before side to show.
 
 The gate covers only the response echo. Notes and error results ride in every
-mode, and the preview rendered through `Output.Diff` before the guard chain is
-a display decision, so no mode touches it.
-
-Line endings follow one package-wide convention: model-visible output is always
-LF, while a write copies untouched regions verbatim and gives each replacement
-its neighbouring lines' ending. `write` overwrites with the existing file's
-majority ending, and a new file gets LF.
+mode.
 
 ### bash (`bash.go`)
 
@@ -470,11 +457,8 @@ is no persistent shell, so `cd` and state cannot confuse later calls. Streams
 stdout and stderr interleaved to the UI while teeing a bounded copy for the
 model. Every kept line is capped, and output past the limit (or carrying one
 overlong line) spills **the complete stream** (head + overflow) to a file under
-`os.TempDir()/ajent-<session>` and the model gets a pointer to it. Because that
-spill is an ordinary readable text file, the model can open it with `read` and
-page through it, exactly as it does for grep's spilled results. Bash differs
-from read only in that its output has no pre-existing source file to re-read, so
-the footer names a written one instead of a next offset. ANSI escapes are
+`os.TempDir()/ajent-<session>` and the model gets a pointer to it. The footer
+names a written file instead of read's next offset. ANSI escapes are
 stripped from captured output,
 **with the strip position carried between chunks**: `os/exec` splits at pipe
 reads, so one sequence can straddle two writes and stdout and stderr share one
@@ -511,9 +495,8 @@ The run keeps its own process group, and its lifetime is owned by a dedicated
 **background root context** on the tool, never the calling turn's context, so an
 interrupt or timeout cannot kill it. A stopped run, whether by natural exit,
 `kill` or shutdown, appends a stopped note naming the status to both log files so
-a later tail sees the end. `Close` sits on `agent.Tool` itself, and the
-registry's `Close` fans out to every tool, so agent shutdown cancels the root
-and every background group is killed. The temp log files are deliberately left
+a later tail sees the end. Shutdown cancels the background root, so every
+background group is killed. The temp log files are deliberately left
 behind: they are small and they are the record.
 
 Live runs are counted per process on the tool: one up at start, one down when
@@ -522,7 +505,7 @@ the `Wait` goroutine reaps an exit whatever the cause. The count is
 session starts at zero and nothing replays them from the transcript.
 
 An optional observer (`tools.Options.Backgrounds`) receives that count on every
-change; zero clears. Publishing a bare number keeps `pkg/tools` free of
+change. Zero clears. Publishing a bare number keeps `pkg/tools` free of
 front-end dependencies: the app renders one aggregated status segment (no age
 note, as nothing repaints between events). That segment outlives turns and only
 an exit event or `Close` empties it, since Esc never kills a background run. A
@@ -555,8 +538,7 @@ Off-by-default extras for no-shell agents.
   even when an earlier match's context reached it first, cap notes counting
   matches rather than output lines), so results read identically whichever
   engine ran.
-- Both spill their complete result when the bound cuts it, so the model can page
-  the rest recoverably rather than losing it.
+- Both spill their complete result when the bound cuts it.
 - `ls`: one directory's entries (or the files a wildcard pattern matches via
   `filepath.Glob`), sorted alphabetically with `/` suffix on directories. A path
   that exists on disk wins over glob expansion even when it carries glob
@@ -564,16 +546,6 @@ Off-by-default extras for no-shell agents.
   contents, and an existing file errors exactly as a plain filename does. Only
   a missing path expands as a pattern, and a glob with no matches is an error so
   it is never mistaken for an empty listing.
-
-Like `read`, each sets `ToolResult.Display` to the same text as its
-model-visible `Content`, so history renders it through the shared output-head
-rule instead of a tool header with no body.
-
-These off-by-default extras are exactly what a read-only sub-agent needs: they
-are always available to a child regardless of parent enable state, so a
-delegated investigation can `find`/`grep`/`ls` without ever reaching for shell.
-The plan workflow's planning and review scopes enable them explicitly for the
-same reason.
 
 ### Git inspection tools (`git.go`, `status.go`, `log.go`, `show.go`, `diff.go`)
 
@@ -614,10 +586,10 @@ checkout, and several read-only-looking plumbing paths turn that into execution:
   can pull in environment or subprocesses.
 
 The permission barrier would normally catch this (a git invocation goes through
-the shell analyser and VCS metadata is excluded from roots), but a **sub-agent has
-no barrier**. Its tool set *is* the gate. Executing system `git` there turns an
-attacker's repository into arbitrary local code execution with no approval step.
-That defeats structural read-only filtering entirely.
+the shell analyser, and VCS metadata is excluded from roots), but a **sub-agent
+has no barrier**: its tool set *is* the gate, so executing system `git` there
+turns an attacker's repository into arbitrary code execution with no approval
+step.
 
 The two viable engines:
 
@@ -683,11 +655,11 @@ the git readers follows content alone the way git's does, so one block carries
 both the rename pair and any mode change.
 
 **Why not both, switchable.** A runtime fallback from go-git to system `git`
-sounds pragmatic ("go-git in a sub-agent, git otherwise") but is rejected: the
-engine that runs *inside* a child is the one with the safety requirement. A config
-flag letting an operator flip a child's tool onto system `git` would reintroduce
-exactly the RCE surface this design removes and split behaviour between two code
-paths for no user-visible gain. The tools are go-git only. Operators who want full
+sounds pragmatic ("go-git in a sub-agent, git otherwise") but is rejected: a
+config flag letting an operator flip a child's tool onto system `git`
+would reintroduce the execution surface this design removes and split behaviour
+between two code paths for no user-visible gain. The tools are go-git only.
+Operators who want full
 git power already have `bash` in the parent.
 
 #### Pathspecs and bounded output
@@ -733,11 +705,6 @@ log.go        # git_log
 show.go       # git_show
 diff.go       # git_diff
 ```
-
-Every tool sets `ToolResult.Display` to the same text as model-visible `Content`,
-so history renders it through the shared output-head rule (`tui-design.md`) instead
-of a bare header. Model-facing output is LF-only (the package-wide convention) and
-bounded by `GitResultLimit()`.
 
 New bound in `pkg/tools/limits.go`: one output limit covers all four
 readers (like find/grep/ls) and also caps the `git_log` default walk, while an
@@ -836,7 +803,7 @@ must name what it came from. There is no new prompt block, just tools like any o
 
 Also off by default. `ask_user(question, options?)` puts a decision back to the
 user and waits: a closed choice when `options` are given, free text otherwise.
-`pkg/tools` must not import `pkg/tui`, so it takes an injected `Options.Ask`.
+It takes an injected `Options.Ask`.
 `pkg/app` supplies an adapter over `(*tui.UI).Ask`, which already queues behind
 permission dialogs, reports Esc as declined, and reports `ErrNoUI` in plain
 mode.
@@ -968,6 +935,13 @@ Recovery is one shared path with a single exception:
 `Elide`, rune-capped head and tail with a marker, survives for compaction's
 structural reduction and edit feedback only.
 
+### Line endings
+
+Model-visible output is always LF, the package-wide convention, while a write
+copies untouched regions verbatim and gives each replacement its neighbouring
+lines' ending. `write` overwrites with the existing file's majority ending, and
+a new file gets LF.
+
 ### Images
 
 Image decode, resize and re-encode lives in `pkg/img` behind a bytes-in,
@@ -995,11 +969,7 @@ blocks-out seam: the only package that touches an imaging codec. The rules:
   `ToolSource` adapter in `pkg/app` wraps each one with the same rewrite
   (`NormalizeImages`). A child's history is short-lived but it is still history.
 - **One gate.** The block-images setting replaces every image with a text note
-  at that same seam, so mid-session changes take effect without restarts. The
-  gate's note is not content: a read it reduced to the note is tracked as
-  note-only, and once images are enabled again that observation stops vouching
-  so the next `@img` re-injects the picture rather than deduping against the
-  note it can no longer see.
+  at that same seam, so mid-session changes take effect without restarts.
 - **Classification before bytes.** The text/binary/image sniffer trusts image
   headers over the NUL scan, because most image headers contain NULs and would
   otherwise read as binary.

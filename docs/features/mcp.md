@@ -56,7 +56,7 @@ or `sse` the url).
 | `enabled` | `false` configures the server without connecting. `true` or absent connects on startup |
 | `tools.allow`, `tools.deny` | glob filters applied before registration. Deny wins over a matching allow, and an empty allow list admits everything not denied or excluded |
 | `excludeTools` | exact tool names omitted from registration entirely |
-| `readOnly` | tools to mark read-only: `true` for every tool of the server, or one glob / a list of globs (see below) |
+| `readOnly` | mark this server's tools read-only, all or some of them (below) |
 | `timeout` | per-call cap as an ms number (`15000`) or a duration like `"90s"`. Defaults to 60 seconds and clamps at 10 minutes |
 
 Globs match each tool's bare name, the one the server publishes, without the
@@ -76,7 +76,8 @@ The read-only mark says "this tool never changes anything" and buys three
 things: it auto-runs without approval in the read-oriented permission modes
 (`permissions.md`), joins sub-agent tool sets (`agents.md`), and may run in
 parallel with other read-only calls instead of serially. An unmarked MCP tool
-defaults to not read-only, no matter how harmless its description sounds.
+defaults to not read-only, no matter how harmless its description sounds, so it
+always asks first.
 
 The mark comes from two sources:
 
@@ -100,8 +101,7 @@ The mark comes from two sources:
 ```
 
 Config marks are additive: your globs can mark a tool the server does not hint
-at, but they never clear a declared read-only. A tool with neither source is
-not read-only and always asks first.
+at, but they never clear a declared read-only.
 
 For one-off auto-allows by exact name instead of effect class,
 `permissions.safeCommands` accepts an entry that names a single `server__tool`
@@ -142,8 +142,8 @@ suggests the verbs, then server names for connect, disconnect and logs.
 
 ### /mcp reload
 
-Reload re-reads both files while the session keeps running: removed servers
-are disconnected, new ones connected. Filter fields (`tools.allow/deny`,
+Removed servers are disconnected and new ones connected while the session
+keeps running. Filter fields (`tools.allow/deny`,
 `excludeTools`, `readOnly`, `enabled`) apply immediately by re-registering the
 server's tools with its live toggles preserved, while connection fields
 (`command`, `args`, `env`, `url`, `headers`, `transport`) take effect on the
@@ -158,16 +158,14 @@ carrying tool count and connection state, like
 Config-disabled servers still appear so you can enable them for the session,
 and they are the exception to commands.md's widen-only rule: a server added by
 `/mcp reload`, or one enabled with `"enabled": false` in config, offers its
-tools for turning on even after this run's first prompt, because the model has
-not seen that tool block yet. The general picker rules (free selection before
-the first prompt, widen-only after, session-saved selections) are described in
-`commands.md`.
+tools for turning on even after this run's first prompt. The general picker
+rules (free selection before the first prompt, widen-only after, session-saved
+selections) are described in `commands.md`.
 
 ## Calling MCP tools
 
 A bridged tool is named `server__tool` in the registry, the transcript and the
-model's view, with the bare tool name shown as its label. Read-only tools run
-parallel with other reads, everything else serially.
+model's view, with the bare tool name shown as its label.
 
 A call that exceeds its timeout or fails on transport becomes an error result
 the model adapts to, never a hung turn, and the failure is recorded to that

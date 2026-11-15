@@ -56,8 +56,7 @@ the dynamic content needs.
   (name, target, bytes so far). At most four text rows, then one dim `+N more`
   line.
 - **Queued prompts**: steering messages sent mid-turn wait as dim rows above
-  the input until the turn boundary. Alt+↑ pulls the newest back for editing.
-  On a short terminal these yield first.
+  the input until the turn boundary. On a short terminal these yield first.
 
 ## Scrollback and copying
 
@@ -72,9 +71,8 @@ Copying content out is why the layout stays bare:
   was printed.
 - Mouse reporting is deliberately off, which keeps the terminal's own text
   selection working for the whole session.
-- `/copy` puts the last agent reply on your clipboard and `ctrl+x` copies the
-  highlighted message in the rewind picker (`commands.md`). Both work through
-  OS backends and fall back to OSC 52 over SSH, naming what to install when
+- `/copy` puts the last agent reply on your clipboard. Both work through OS
+  backends and fall back to OSC 52 over SSH, naming what to install when
   nothing applies.
 - A rewind or resume never erases scrollback: a solid divider band marks where
   restored context begins and the branch replays below it, so scrolling up
@@ -168,9 +166,9 @@ explicit `ui.images` (`kitty`, `iterm2`, `none`) overrides detection outright.
 - An image submitted with a prompt keeps an `[image #N]` token in the editor,
   so recalling that line restores the reference. A token whose slot is gone
   drops at submit with a notice rather than vanishing silently.
-- Ctrl+V probes the clipboard and attaches a found image (see key table).
-  `images.block: true` stops any image reaching the model, replacing each with
-  an "Image reading is disabled." note (`config.md`).
+- Ctrl+V probes the clipboard and attaches a found image. `images.block: true`
+  stops any image reaching the model, replacing each with an "Image reading is
+  disabled." note (`config.md`).
 
 ## Keys at the prompt
 
@@ -191,7 +189,7 @@ explicit `ui.images` (`kitty`, `iterm2`, `none`) overrides detection outright.
 | Ctrl+W or Alt+Backspace | delete the word before the caret |
 | Ctrl+Y | restore what the last clear or kill removed, one level deep. Any later edit drops it |
 | Esc with text | clears the whole draft (Ctrl+Y restores) |
-| Esc on an empty editor | interrupts a running turn, and only while idle arms the rewind gesture (below). A lone press still counts as interrupt once the window passes |
+| Esc on an empty editor | interrupts a running turn, or opens the rewind picker while idle (below) |
 | Ctrl+C | with text: clear the draft. With nothing to stop: `ctrl+c again to quit` appears and a second press inside ten seconds quits |
 | Ctrl+Z | suspend ajent, repaint on return |
 | Ctrl+L | redraw the screen (the dynamic block only, committed output untouched) |
@@ -200,8 +198,8 @@ explicit `ui.images` (`kitty`, `iterm2`, `none`) overrides detection outright.
 | Tab | completion (below) |
 | Shift+Tab / Shift+→ | cycle the permission mode forward. Out-of-band: works even while a dialog owns the keyboard, and re-evaluates any open approval dialog under the new mode (`permissions.md`) |
 | Shift+← | same cycle one mode back |
-| Ctrl+V | probe the clipboard and attach an image as `[image #N]` (kitty's own paste binding wins where mapped in `kitty.conf`, pasting text only) |
-| Ctrl+X | while a picker is open: copy the highlighted message to the clipboard. Inert everywhere else, so it never reaches the editor |
+| Ctrl+V | probe the clipboard and attach an image as `[image #N]`. Kitty's own paste binding wins where mapped in `kitty.conf`, pasting text only |
+| Ctrl+X | while a picker is open: copy the highlighted message verbatim (independent of its collapsed on-screen label). Inert everywhere else, so it never reaches the editor |
 
 Ctrl+P / Ctrl+N behave as ↑/↓ on every surface that lists arrow keys below (dialogs,
 pickers, menus, search, rewind, attach), not just at the prompt.
@@ -309,11 +307,9 @@ gesture says so. Rewinding is what `sessions.md` describes. On screen:
   faint with dim bodies (with color off, a `*` gutter marks the active chain).
 - The list opens at the current head, so reopening after a rewind lands where
   you were.
-- `ctrl+x` copies the highlighted message verbatim from the transcript,
-  independent of the collapsed label on screen.
 - On large trees (300+ rows) alt mode defers repainting committed history
   while you navigate, so arrowing stays instant.
-- Choosing replays that branch below a divider band. Esc cancels.
+- Choosing replays that branch. Esc cancels.
 
 ## Attach
 
@@ -341,15 +337,15 @@ made from the other terminal closes your stale copy of it.
 
 Every key here has its layer and `AJENT_*` binding in `config.md`.
 
-- `ui.render` / `--render`: paint mode (`auto`, `inline`, `alt`, `plain`).
-- `ui.color`: force the detected color depth when a terminal classifies badly;
-  `256` is what turns syntax highlighting on where detection stayed
+- `ui.render` / `--render`: paint mode.
+- `ui.color`: force the detected color depth when a terminal classifies badly.
+  A value of `256` turns syntax highlighting on where detection stayed
   conservative (`config.md`).
 - `ui.theme`: palette, chosen by the first-run picker (`cli.md`) and
   switchable later from `/settings → Theme`. Restyling is forward-only:
   history already on screen keeps the colors it was written with.
-- `ui.images`: force an image protocol (`auto`, `kitty`, `iterm2`, `none`).
-- `ui.keymap`: which keys submit and which insert a newline (above).
+- `ui.images`: force an image protocol or `none`.
+- `ui.keymap`: which keys submit and which insert a newline.
 
 ## See also
 

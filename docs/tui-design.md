@@ -31,7 +31,7 @@ The originating brief, and what satisfies each item.
 | Text field accepting further user replies | `editor.go` + `input.go`, submitted over `UI.Messages()` |
 | Edit actions show the whole file and highlight the changes | `UI.Diff` -> `RenderDiff`, shaded per line and intraline |
 | Thinking visually distinct from reply output | semantic styles in `style.go` |
-| As minimal as possible, maximum room for output | 2 reserved rows, no borders or rules |
+| As minimal as possible, maximum room for output | 2 reserved rows plus the divider rule, no borders |
 | Let the CLI wrap the text where possible | text lines are emitted unwrapped in inline mode |
 
 The last one is a preference rather than an absolute, and inline honours it for
@@ -159,11 +159,6 @@ markdown and diff rendering, width-aware text/wrap/ansi primitives, the editor
 buffer, key decoding, palettes, status and activity rows, and dialogs, is
 behaviour this document specifies rather than a layout to memorise.
 
-The demo driving this is not part of this package: `ajent-demo` (the root module
-built with the `demo` tag) spawns a standalone OpenAI-compatible model server in
-`demo/`, so it renders real turns, tool calls and diffs flowing through the
-whole agent loop rather than canned text.
-
 ## Render modes
 
 The central design tension: native scrollback is owned by the terminal, which
@@ -220,10 +215,8 @@ from the relative park. History is bottom aligned into `viewHeight` = height −
 live rows, which is **zero** when the block fills the screen (`repaint`'s final
 clamp produces exactly that): a live row addressed past the last screen row is
 clamped onto it by the terminal and silently overwrites its neighbour, so the
-block takes every row and history simply yields. And `size()` re-reads the
-terminal like inline does, so a frame composed mid-burst lays out at the width
-it paints at. `clearHistory` repaints immediately rather than leaving the
-dropped rows on screen until the next commit.
+block takes every row and history simply yields. `clearHistory` repaints
+immediately rather than leaving the dropped rows on screen until the next commit.
 
 ## Invariants
 
@@ -238,9 +231,8 @@ particular inline mode does **not** re-render committed history on resize: after
 an emulator reflow we cannot know how many physical rows our content occupies
 (widening pulls scrolled-off rows back onto screen while tables and rules stay
 put, and narrowing re-wraps every text line), so rewriting it (absolutely or by a
-relative climb) lands on rows that are not where we expect. Three designs tried
-to repaint the visible screen from retained history and each surfaced new
-corruption on real terminals, so the live block, whose top is the parked cursor, is
+relative climb) lands on rows that are not where we expect. The live block,
+whose top is the parked cursor, is
 always redrawn at the current width instead.
 
 **2. Row accounting is exact, never predicted.** We emit N rows and the cursor
@@ -272,8 +264,7 @@ rather than pre-wrapping it. The prompt is echoed at **submission time** (the
 driver's select loop, before any session-store write), not when a turn starts,
 so the typed line lands above the input instantly instead of waiting on MCP
 loading, ref expansion or turn admission. Only prompts echo, while `/commands` and
-`!shell` lines do not. Structural fidelity on resize is alt mode's job: it owns
-a viewport and re-lays everything from retained lines.
+`!shell` lines do not.
 
 The live preview must be refreshed **before** those blocks are committed: a
 completed block still sitting in `r.live` would otherwise be redrawn by
@@ -328,11 +319,9 @@ else commits, `commitHist` flushes the notice into history first and it stops
 being collapsible. This is the only form of collapse that is safe here, and it
 is enough for a progress notice that updates in place.
 
-Because flushing moves content out of the live block into history, it follows
-the same repaint-before-commit rule as streaming text (invariant 3):
+Because flushing moves content out of the live block into history,
 `flushNotice` drops the notice row from `r.live` (`repaint()`) ahead of the
-`commit` that lands it in history. Otherwise the renderer recomposes the stale
-row below the new content and a ghost copy scrolls committed output away.
+`commit` that lands it in history (invariant 3).
 
 ## Interactions
 
@@ -424,8 +413,10 @@ the caller registers its intent under the lock, requests a repaint, releases,
 then waits on a result channel, and the input goroutine checks for an active
 interaction before the editor sees a key. `Select` and `Pick` commit a one-line
 summary of the chosen row, while approval dialogs (`OpenDecision`) and answered
-questions (`Ask`) echo nothing, because permit's barrier logs its own
-descriptive outcome notice. Echoing the prompt plus label would duplicate it.
+questions (`Ask`) echo nothing: the caller (`permit.Barrier`) commits the
+descriptive outcome notice instead, naming the scope of the grant (this call,
+this session, or auto), so one source of truth records what happened and echoing
+the prompt plus label would only duplicate it.
 The same rule lets a `Pick` opt out via `Silent`, which `/model` sets so the
 picker does not commit its own summary. Interactions **queue in arrival order**
 rather than being refused, because parallel tool calls will each want to ask
@@ -511,11 +502,6 @@ copy of it: both settle a Tab through one shared `applyTab` (fill, listing,
 spend), so fill-or-list behavior cannot drift. An open listing still closes on
 the first Esc.
 
-An **approval dialog** resolution reports nothing to history by itself, and the
-caller (`permit.Barrier`) commits a descriptive notice instead, naming the scope
-of the grant (this call, this session, or auto). That keeps one source of truth
-for what happened and avoids duplicating the dialog's prompt-and-label echo.
-
 A lone `Esc` is indistinguishable from the start of a longer escape sequence
 until more bytes arrive or enough time passes, so it is held for a short timeout
 before being reported. Without that there is no cancel key at all. The timer is
@@ -575,8 +561,6 @@ were laid out at until they scroll away (drawn one column short of the edge, the
 same deferred-wrap precaution as live rows). A layout that cannot fit its width,
 be it more columns than the border overhead allows or a glyph wider than its
 column, clips to that width instead: an overflowing row would wrap and garble.
-Alt mode keeps the hanging indents because it re-lays everything itself on every
-resize.
 
 A streaming preview must be wrapped by us, since a live row is exactly one
 terminal row, so it wraps by the rule its commit will use or the block visibly
@@ -614,9 +598,7 @@ output and a finished tool's `Display`, so both render identically instead of
 one flooding scrollback while the other shows nothing. An `outputHead` commits
 only the first few whole lines (the head), and everything past it is counted, not
 shown, and collapses into one dim indented summary row naming the elided line
-count and byte size at call end. Sizes go through `strutil.HumanSize`, never
-`strutil.FormatTokens`, for the same reason the activity rows do: a size on a
-collapse row must not read as a token count. The head uses a `lineBuffer`, so
+count and byte size at call end. Sizes go through `strutil.HumanSize`. The head uses a `lineBuffer`, so
 an escape sequence or partial line is never split across the boundary.
 
 - **Streaming** (`UI.Output`) feeds the head incrementally, and while more than the
@@ -739,14 +721,15 @@ Fenced code is syntax highlighted. See "Syntax highlighting".
 `highlight.go` lexes a fenced block with `chroma` and formats it with chroma's
 TTY formatter, so the colours arrive as SGR inside `histLine.text` exactly like
 every other role. No renderer knows this happened: highlighted code follows the
-same "history keeps the bytes it was written with" rule as the rest, including
-the forward-only restyle limit.
+same "history keeps the bytes it was written with" rule as the rest.
 
 Which style is used is the palette's choice (`Theme.CodeStyle`), so highlighting
 tracks the theme rather than fighting it. The rules that must hold:
 
 - **`Theme.Code` is the fallback, and it must stay reachable.** Highlighting is
-  skipped for an empty `CodeStyle` (so below `Color256`), an unlabelled or
+  skipped for an empty `CodeStyle` (so below `Color256`: chroma snaps every token
+  onto the 8 ANSI hues there, which reads worse than the one hue the palette
+  picked for `Theme.Code`), an unlabelled or
   indented block, a language chroma does not know, a lexer that colours nothing
   (`text`, `plain`), and a block whose highlighted row count does not match its
   source line count. Every one of those renders exactly as it did before
@@ -859,11 +842,8 @@ test keeps it that way, so an existing user sees no change. Each role resolves a
 light palettes can drop basic cyan, which is unreadable on white. Attributes
 (bold, dim, italic, reverse) are identical in every palette and live in
 `NewTheme`. A palette also names the chroma style its fenced code is highlighted
-with (`Theme.CodeStyle`), resolved by `highlight.go`. It is
-**empty below `Color256`**, which is the single rule disabling highlighting for
-`ui.color=none`, `TERM=dumb` and 16-colour terminals alike: chroma snaps every
-token onto the 8 ANSI hues there, which reads worse than the one hue the palette
-picked for `Theme.Code`.
+with (`Theme.CodeStyle`), resolved by `highlight.go` and empty below
+`Color256`.
 
 Adding a role means a field on the hue table, a value in each palette and a
 line in `NewTheme`. An invariant test walks that table by reflection and fails
@@ -946,15 +926,10 @@ agent (or demo) -> UI.Text("...delta")
 The live block is rebuilt separately by repaint, which composes `notice? +
 thinking* + streaming* + search? + completion? + activity* + queued*
 + (input | interaction) + status rows`. Anything that changes the input, status,
-tool or activity state calls repaint. Queued pending-prompt rows render after
-activity and yield like them on a short terminal. They are driver-owned, so
-reset deliberately leaves them for the steer queue to re-render.
+tool or activity state calls repaint.
 
-The ordering constraint worth recording: **repaint before commit.** When a block
-completes mid-stream it must leave the preview *before* the commit runs
-(invariant 3). Otherwise the inline renderer's commit pass redraws it as a stale
-ghost below the new history, and when the screen is full that oversized ghost
-scrolls just-committed lines away before they are read. A tail still buffered
+The ordering constraint worth recording: **repaint before commit** (invariant
+3). A tail still buffered
 repaints again afterwards so its preview reserves the separator the commit made
 necessary.
 
@@ -965,9 +940,9 @@ keeps only tail rows. `TurnEnd` flushes unterminated thinking and reply text: an
 interrupt delivers no block-end events, and an unflushed tail would linger in
 the preview and merge into the next turn's first delta.
 
-Activity (and queued pending-prompt rows) render into whatever height remains
-after the status block and one line of editor, so on a short terminal they yield
-first. Status is computed before those budgets so row accounting stays exact.
+Activity renders into whatever height remains after the status block and one
+line of editor, so on a short terminal it yields first. Status is computed
+before those budgets so row accounting stays exact.
 
 ### Finding the live block again after a resize
 
@@ -1101,9 +1076,8 @@ The following rules keep that true:
 
 ### Why inline does not re-render committed history on resize
 
-The relative erase keeps every rule above true: on a settled size change,
-`resize()` just picks up the new size and the next ordinary frame erases from
-the parked cursor. It deliberately does **not** re-lay committed history (code,
+The relative erase keeps every rule above true. It deliberately does **not**
+re-lay committed history (code,
 lists, quotes, diffs, tables, rules) at the new width. Three designs were
 tried and each corrupted a real terminal: a full viewport redraw destroyed
 whatever was above the session. An absolute repaint of visible rows worked at screen
@@ -1118,10 +1092,9 @@ The lesson is load-bearing:
 live block's top (the parked cursor) is ground truth, so inline leaves every
 committed line exactly as it landed and never rewrites one. The way structural
 content still gets full-form fidelity by handing wrapping to the emulator: every
-text line goes out as a single logical line, so it reflows like `cat` output,
+text line goes out as a single logical line,
 while genuinely two-dimensional content (tables, rules)
-keeps its hard layout and committed width until it scrolls away. Alt mode exists
-for full resize fidelity: it owns a viewport and re-lays everything.
+keeps its hard layout and committed width until it scrolls away.
 
 ### Rewind and resume replay the branch, not erase scrollback
 
@@ -1216,8 +1189,7 @@ while it is F3 elsewhere. There is no F-key type, so the parameterless branch
 stays ignored.
 
 Mouse reporting is deliberately not enabled: it would buy wheel events at the
-cost of the terminal's own text selection for the whole session, so PgUp/PgDn
-scroll in alt mode (and page the multi-line buffer in inline).
+cost of the terminal's own text selection for the whole session.
 
 `editor.go` is the buffer. Positions are grapheme-cluster indexes, not bytes or
 runes, so the cursor moves over emoji and combining marks as a unit. Text enters
@@ -1238,8 +1210,7 @@ and arrows.
 Wrapping is purely visual and leaves `Value()` untouched, so submitted input
 never gains newlines.
 Movement and editing keys respect those same visual rows: Home/End bound the
-current wrapped row rather than the logical line, matching ↑/↓. Ctrl+K kills
-only to that row's end, Ctrl+U from the row's start to the caret. Clear and the
+current wrapped row rather than the logical line, matching ↑/↓. Clear and the
 kills keep a one-level snapshot that Ctrl+Y restores (Esc and Ctrl+C clear
 through the same `Clear`). Any other buffer change (typing, backspace,
 a programmatic fill or submit) drops the snapshot rather than letting a later
@@ -1252,12 +1223,12 @@ The key table:
 |---|---|
 | Enter | submit (accepts an open menu or search selection) |
 | Alt+Enter, Ctrl+J | insert a newline |
-| `↑`/`↓` | move the caret through visual rows. Only at the prompt's very start (↑) or end (↓) do they recall history. A search overlay or a command menu takes them first, path completion never does |
+| `↑`/`↓` | move the caret through visual rows; recall history only at the buffer's edges. A search overlay or a command menu takes them first, path completion never does |
 | Tab | accept the highlighted command in a menu. For a path, fill in the candidates' longest common prefix, or list what is left (`complete.go`) |
 | Ctrl+C | clear a non-empty buffer, interrupt when active, quit when empty |
 | Ctrl+D | EOF on an empty editor (quits) |
 | Ctrl+V | paste an image from the clipboard as an `[image #N]` token (`ControlClipboardImage`). Readers are `xclip`/`wl-paste` (Linux), `pngpaste` (macOS), PowerShell (Windows). Kitty's own paste binding takes the key first when `ctrl+v` is mapped in `kitty.conf`, and kitty pastes text only |
-| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`). Inert everywhere else, so it never reaches the editor or steals a keystroke from a dialog. The payload is the verbatim transcript content, not the row's display label (see `clipboard-copy-feature.md`) |
+| Ctrl+X | copy the highlighted context-tree row while the rewind picker is open (`ControlCopySelection`). Inert everywhere else, so it never reaches the editor or steals a keystroke from a dialog |
 | Alt+↑ | recall the newest queued message into the editor, emitted as `ControlRecallQueued` |
 | Ctrl+K | clear to the end of the current visual row, caret unmoved (content after it joins at the cursor). An empty row is removed like Delete (see above) |
 | Ctrl+U | remove from the start of the current line to the caret |
@@ -1468,9 +1439,7 @@ Things that look fine and are not:
   they are sanitized where they are built (`buildTable`), which covers every
   renderer that lays them out later.
 - **Do not add an unbudgeted row to the live block.** Anything that grows with
-  content rather than with the terminal must yield to the rows below it. A block
-  taller than the screen scrolls as it is drawn, and scrolled rows are committed
-  content that no erase can take back.
+  content rather than with the terminal must yield to the rows below it.
 - **Do not leave the terminal cursor on the caret.** It is parked on the live
   block's first row so the erase needs no arithmetic, and the caret is drawn with
   `paintCaret`. Re-showing the cursor mid-session, or moving it to the caret,
@@ -1481,10 +1450,7 @@ Things that look fine and are not:
   marker (it sits at the start of the logical line), but in inline mode their
   continuations wrap flush-left: only alt mode, which owns the breaks, repeats
   the indent.
-- **Inline never re-renders committed history.** Any attempt to rewrite rows we
-  no longer know how to locate (an absolute `cursorTo` into them, or even a
-  relative climb counted from our own layout) corrupts on real terminals
-  (scrolled up, or widened so the emulator pulls scrollback back). The whole
+- **Inline never re-renders committed history.** The whole
   erase path drives exactly one way of redrawing, the relative live-block
   redraw, and keep it that way.
 

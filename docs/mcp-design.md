@@ -17,9 +17,9 @@ consumes as plain facts:
   `<workspace>/.ajent/mcp.json`.
 - **Tools** — remote tools appear in the ordinary registry, namespaced to avoid
   collisions and subject to per-server filtering, enable state and read-only
-  marking. Re-discovery happens on `tools/list_changed`, and disconnect/reload go through `/mcp`.
-- **Lifecycle** — one supervisor per configured server handles preload,
-  first-message load, reconnect and `/mcp` reload/disconnect.
+  marking.
+- **Lifecycle** — one supervisor per configured server owns connect,
+  reconnect and reload.
 ## Boundary rules
 
 The dependency edge is load-bearing. The protocol layer (transports, JSON-RPC,
@@ -102,10 +102,9 @@ entry's `inputSchema` into a `json.RawMessage`, preserving the server's schema
 guard, which the raw seam bypasses) instead of re-requesting one page until the
 caller's timeout. Names are validated as composed: server key, bare tool name and
 the composed `server__tool` string all fit the tightest provider tool-name
-charset and cap. A bad server key is skipped with
-a warning at config load, so one non-conforming entry never disables the
-other servers.
-A tool without a usable name or whose schema is structurally invalid is
+charset and cap. A bad server key is skipped with a warning at config load, so
+one non-conforming entry never disables the other servers. A tool without a
+usable name or whose schema is structurally invalid is
 dropped with one warning naming it rather than failing the whole list, a
 server listing one tool twice yields a single registration, and a repeated
 warning for the same defect on reconnect or `list_changed` stays in `/mcp`
@@ -145,7 +144,8 @@ needs per-request `_meta` and mirrored `Mcp-*` headers (added by `applyEra`,
 with legacy connections staying unstamped to match the pre-1.0 wire), and `Ping`
 no-ops there since the RPC was removed. The version probe rides this seam
 too, before any negotiation, stamping LATEST explicitly since nothing is
-negotiated yet.
+negotiated yet. `Client.OnNotification` dispatches notification handlers off
+mcp-go's reader goroutine.
 
 Raw request ids are seeded at `rawSeqBase` rather than from one: both the raw
 seam and mcp-go's typed calls share the transport's single response map keyed by
@@ -174,9 +174,8 @@ permissions, token accounting and the sub-agent treat it like any built-in.
 - **Mode** — serial unless read-only, which may run parallel with other reads.
 - **Timeout** — per-call cap from config, clamped to a max. A call that exceeds
   it (or fails on transport) becomes an error result so the turn continues and
-  the model adapts. The failure is also recorded to the owning server's
-  `/mcp logs` ring via a diagnostic sink, never surfaced as a user-facing
-  notice. An error result carries the same one-line `Display` a
+  the model adapts. The failure is recorded through that diagnostic sink.
+  An error result carries the same one-line `Display` a
   success does, so history never renders an errored MCP call as a blank row.
 - **Output** — remote progress maps onto the same output writer as a built-in,
   so a bridged call's incremental output streams where its caller renders it, and
@@ -196,60 +195,57 @@ package stays free of `pkg/tools`.
 - **Background preload (`Preload`) + first-message wait
   (`LoadOnFirstMessage`)** — `pkg/app` calls `Preload()` at startup, so every
   server spawns and discovers capabilities in the background while the user
-  types. Registration happens during that connect, and resume ordering holds because
-  `Options.Restore` carries the already-decided enabled set into the constructor.
+  types. Registration happens during that connect.
   `LoadOnFirstMessage` blocks on any still-dialing preload, then returns with
   every server registered (config-disabled ones as StateDisabled), so tool
   descriptions are complete before the first prompt. Discovery is bounded by
   `discoverTimeout`, and dials run on the manager's own context.
-- **Resume ordering.** Registration honors restore because `Options.Restore`
-  carries the persisted enabled set into the constructor. The registry's own
-  enable state is applied before MCP connects, so eager registration never drops
-  a restored subset. Re-registration carries over deliberate `/tools` toggles,
-  while untouched names follow the config default in force at each registration.
-  A `/tools` reshape refreshes `Options.Restore`, so a registration arriving
-  later (a late connect) follows the run's latest selection rather than the
-  resume-time snapshot.
+- **Enable state survives re-registration and resume.** Registration honors
+  restore because `Options.Restore` carries the persisted enabled set into the
+  constructor, and the registry's own enable state is applied before MCP
+  connects, so eager registration never drops a restored subset. Re-registration
+  layers deliberate `/tools` toggles over current defaults while untouched names
+  follow the config default in force at each registration; a `/tools` reshape
+  refreshes `Options.Restore`, so a registration arriving later (a late connect)
+  follows the run's latest selection rather than the resume-time snapshot. A
+  captured split mixes old defaults with deliberate toggles, which the registry
+  alone cannot tell apart, so the server remembers the config that produced its
+  current registration and every capture classifies the split against that era,
+  keeping only names whose state departed from what that era implied. A reload
+  can flip the config while the older registration still stands, so a capture
+  reading the live config would misread old defaults as deliberate toggles. The
+  payoff runs both ways: an `enabled` flip in mcp.json reaches a connected
+  server instead of being pinned by pre-flip defaults, while deliberate
+  `/tools` toggles survive every refresh.
 - **`tools/list_changed`** triggers re-discovery: unregister source, register
-  fresh, preserving deliberate enable state. It runs through `rediscan`, which
+  fresh. It runs through `rediscan`, which
   serializes per server and bounds each pass with its own timeout so an
   unresponsive server surfaces an error rather than leaking a goroutine or
   hanging. Each pass adopts dial's post-check-and-revert: a disconnect, server
   death or Close sweep landing mid-pass still wins, tearing the fresh
   registration back out instead of leaving tools bound to a closed client.
-  A pass broken by the user's own disconnect keeps that fallout in `/mcp`
-  logs rather than warning history. Discovery covers tools only, and
+  A pass broken by the user's own disconnect keeps its fallout out of warning
+  history. Discovery covers tools only, and
   resources/prompts are not exposed. Notifications arrive asynchronously from
-  the client (see *Notifications never block mcp-go's reader*).
+  the client.
 - **Disconnect / Reload.** `/mcp disconnect` closes and unregisters without
   removing the config. `Reload` re-reads `mcp.json`, disconnects removed servers
   and connects new ones, leaving the process running. A server a reload adds
-  registers its tools disabled; only `/tools` turns them on. Filter fields
+  registers its tools disabled. Only `/tools` turns them on. Filter fields
   (`tools.allow/deny`, `excludeTools`, `readOnly`, `enabled`) apply immediately by
-  re-registering the source with its live enabled set preserved. Connection fields
+  re-registering the source. Connection fields
   (`command`, `args`, `env`, `url`, `headers`, `transport`) take effect only on
   the server's **next connect**. A reconnect also re-reads stored config, so a death
   silently adopts the new endpoint whichever comes first: `/mcp disconnect` +
   reload or an automatic reconnect.
-- **Keep-state is reconciled against its era, never copied.** A captured
-  enabled/disabled split mixes old defaults with deliberate `/tools` toggles,
-  which the registry alone cannot tell apart. So the server remembers the
-  config that produced its current registration, and every capture classifies
-  the split against that era rather than the live config, keeping only names
-  whose state departed from what that era implied. A reload can flip the config
-  while the older registration still stands, so a capture reading the live
-  config would misread old defaults as deliberate toggles. Registration layers
-  the kept names over current defaults, so an `enabled` flip reaches a
-  connected server instead of being pinned by pre-flip defaults while genuine
-  toggles survive every refresh.
 
 **Lock ownership.** Each server guards its own mutable state (client,
 failure counters, discovered defs, config) under a per-server lock. The
-manager's lock covers only the server map and the first-load flag. The notice sink is
-immutable: built with the server rather than installed on connect, so it needs
-no lock. An unreachable server is expected (offline or not yet started), so a
-dial failure stays in `/mcp logs` only rather than surfacing as a notice, and the
-status ratio still reflects it.
+manager's lock covers only the server map and the first-load flag. Diagnostics
+go to `/mcp logs`, never user-facing notices: an unreachable server is expected
+(offline or not yet started), so a dial failure stays in the log ring via the
+notice sink (immutable, built with the server rather than installed on connect,
+so it needs no lock) and the status ratio still reflects it.
 
 **Single-flight connect.** A server's connection is coalesced: at most one dial
 runs for a server at a time, and any path that wants it while another is in
@@ -269,10 +265,11 @@ than proactively.
 ### Reconnection
 
 A server that dies mid-session must produce a clear error result on any call
-into it, never a hang, and be reconnected with capped backoff after repeated
-failures, at which point its tools are unregistered so the model does not call
-into nothing. A failure counter tracks consecutive connect failures for the
-status path.
+into it, never a hang, and be reconnected with capped backoff
+(`maxReconnectWait`) after repeated failures, at which point its tools are
+unregistered so the model does not call into nothing and its pre-death
+enable/disable split is restored on the next successful connect. A failure
+counter tracks consecutive connect failures for the status path.
 
 A stdio child's stderr is streamed to `/mcp logs` one line per entry
 (`bufio.Reader`, no fixed cap), so a long or newline-less line is never dropped.
@@ -303,8 +300,7 @@ MCP mutates the registry from notification goroutines while the loop reads it,
 so every method takes a lock. The single enabled bool became two states:
 known-but-disabled (`StateDisabled`, present in `/tools` but not in the prompt
 and not callable) and `StateEnabled` (in the prompt and callable). There is no
-deferred state: every configured server is connected in full on first-message
-load, so each bridged tool registers as one of these two.
+deferred state, so each bridged tool registers as one of these two.
 
 - `Schemas()` includes only `StateEnabled`, while `Names()` stays enabled-only (it
   feeds state + transcript) and `Get()` answers Enabled tools only. `/tools` calls
@@ -321,18 +317,6 @@ load, so each bridged tool registers as one of these two.
   them with the manager.
 - `/tools` groups MCP tools under a per-server header carrying tool count and
   connection state.
-## Status
 
-Config, client, bridge and manager lifecycle (first-message load of every
-server, disconnect/reload), `/mcp` and read-only marking are implemented and
-tested against mcp-go. Deferred loading (`_search`/`_load`), the lazy tool-list
-cache and all startup modes have been removed: every configured server is
-connected in full on `LoadOnFirstMessage`, so there is no placeholder
-registration, schema-drift path, prompt-bloat trade-off or eager/manual
-distinction to maintain. Stdio notification handling is deadlock-safe:
-`Client.OnNotification` dispatches handlers off mcp-go's reader goroutine and
-`list_changed` re-discovery runs serialized with a bounded context (see
-*Notifications never block mcp-go's reader*). Reconnection is complete: a stdio
-child that exits has its tools unregistered while down, then is reconnected with
-capped exponential backoff (`maxReconnectWait`) and its pre-death enable/disable
-split restored on the next successful connect.
+Config, client, bridge and manager lifecycle are implemented and tested
+against mcp-go.

@@ -22,9 +22,6 @@ approval dialog, or fails closed when nobody can answer.
 | `block-all` | `block` | nothing without approval, reads included |
 
 The classification layers stack: every mode inherits the modes above it.
-`deny-list matching → allow-all → write scope → read-only verification →
-safe list → session grants → classifier → dialog` is the decision order a call
-walks.
 
 ### Cycling
 
@@ -35,9 +32,8 @@ walks.
   shows a `permissions` segment whenever the live mode is not the default
 
 The mode is session-only state: nothing is written to config or transcript, so a
-resume always starts from the configured mode. Changing it clears approvals
-earned this session (see Session memory), reapplies CLI pre-grants, and
-re-evaluates any open dialog. A pending call the new mode permits resolves as
+resume always starts from the configured mode. Changing it re-evaluates any
+open dialog. A pending call the new mode permits resolves as
 allowed without a keystroke, and a verdict the old mode's classifier was still
 producing is discarded, since it no longer speaks for the gate.
 
@@ -52,9 +48,9 @@ Checks run in order, first match wins:
    allow-all.
 3. **`allow-all`** permits everything left.
 4. **auto+write's write scope** permits writes confined to the workspace roots.
-5. **Static verification**: a call proven read-only runs. A hard refusal (`sed
-   -i`) denies with guidance no list can override. Anything else becomes an ask,
-   which `permissions.safeCommands` converts back into an auto-run.
+5. **Static verification**: a call proven read-only runs. Anything else
+   becomes an ask, which `permissions.safeCommands` converts back into an
+   auto-run.
 6. **`block-all`** turns every remaining call into an approval ask, reads
    included.
 7. **The model classifier** (auto modes only) judges what static analysis could
@@ -123,11 +119,6 @@ An allow auto-approves with a `Tool auto allowed` notice. A deny or an unsure
 (a garbled reply, a provider error) keeps the dialog open for a person. A reply
 that reads as refusal counts as one: "can't allow" never approves anything.
 
-In unattended runs (one-shots, `--block-autodenied`) plain auto only lets
-nameable, redirect-free lines reach the classifier at all: anything analysis
-cannot parse refuses instead of trusting a model verdict that promises read-only.
-auto+write has less to promise, so its workspace rules judge every parsable line.
-
 ## The approval dialog
 
 Opens whenever nothing above decided a call and someone can be asked:
@@ -164,11 +155,6 @@ Dialog behavior worth knowing:
   mid-keystroke: an allow runs without the dialog ever appearing
 - with a dialog already open, a classifier allow resolves it and a keystroke
   still beats the model to it. First resolver wins
-- with no dialog possible (plain render mode, or a UI that went away) every ask
-  settles fail-closed exactly as an unattended run's would
-- `--block-autodenied` makes interactive runs behave that way always: nothing
-  short of a classifier allow is ever asked, anything else fails closed with a
-  `Tool auto denied` notice
 
 A controller holding the control seat can answer dialogs remotely, and
 observers see them announced (`sessions.md`).
@@ -185,10 +171,9 @@ observers see them announced (`sessions.md`).
   their second word naming a file rather than a capability. Read-only segments
   never govern, and a repeated grant key collapses: `rm build && ls` remembers
   just `rm`
-- the remembered key matches with any arguments (`go test` covers `go test
-  ./...`) and launcher prefixes resolve to it (`time go test ./...` keys as
-  `go test`). A bare-head grant, such as from `--allow-tools go`, covers every
-  verb line under it
+- the remembered key matches with any arguments, and launcher prefixes resolve
+to it (`time go test ./...` keys as `go test`). A bare-head grant, such as from
+`--allow-tools go`, covers every verb line under it
 - the bare name `bash` (from `--allow-tools bash`) stands in for any nameable
   shell line
 
@@ -223,16 +208,16 @@ because an entry is a promise the analyser could not prove:
   verifiably read-only: `make build && rm -rf /` fails as a whole even with
   `make build` listed
 - output redirects must resolve inside the write scope from every `cd`
-  baseline, which under modes without one means no match at all
+  baseline, so modes without a write scope never match a redirected line at all
 - substitution (`$(...)`, backticks) and unparseable shapes never match
 - `write` and `edit` can never be listed, so no config entry overrides a known
-  writer, and a hard refusal like `sed -i` stays refused above any list
+  writer
 
 ### permissions.deniedCommands
 
-Refuses in every mode before allow-all and everything else except a line you
-typed yourself. The model sees "denied by configuration, ask user to run if
-necessary", so it knows to hand the command to you instead of retrying.
+Refuses in every mode, before allow-all and everything else except a line you
+typed yourself. The model sees "denied by configuration, ask user to run it
+if needed", so it knows to hand the command to you instead of retrying.
 
 Matching resolves deeper than the safe list because a refusal may over-match on
 purpose:
@@ -253,7 +238,7 @@ advertises to the model.
 
 The four keys (`permissions.mode`, `permissions.headlessMode`,
 `permissions.safeCommands`, `permissions.deniedCommands`) layer like any other
-config key; defaults and `AJENT_*` env bindings are in `config.md`. Both mode
+config key. Defaults and `AJENT_*` env bindings are in `config.md`. Both mode
 values accept the five names above plus legacy `auto+mcp`, which reads as
 `auto`: an unrecognized `mode` falls back to allow-read, an unrecognized
 `headlessMode` warns and uses auto+write. The two lists configure in files
@@ -264,8 +249,7 @@ Precedence for a run's starting mode:
 - interactive: permission scope flag > `permissions.mode` > default allow-read
 - one-shot: scope flag > `permissions.headlessMode` > auto+write
 
-A scope flag holds for that invocation only. `/settings permissions.mode`
-changes the live barrier mid-session and is likewise never restored on resume.
+A scope flag holds for that invocation only.
 
 Shaping the lists to your own risk tolerance, an example:
 
@@ -294,28 +278,34 @@ Shaping the lists to your own risk tolerance, an example:
 
 The two lists are where you encode a threat model:
 
-- `permissions.safeCommands` accepts risks the analyser cannot prove away. The
-  read-only verifier deliberately distrusts network access, so `curl`, `wget`
-  and `dig` always prompt until listed. Listing them trusts the tool but also
-  accepts exfiltration: the same curl that fetches docs can POST source or
-  secrets anywhere. That is a comfortable trade on a disposable container or an
-  offline codebase, and one to think through elsewhere.
-- `permissions.deniedCommands` draws lines nothing may cross: privilege
-  escalation and remote login (`sudo`, `su`, `ssh`), system services and mounts,
-  package managers that install executables, and destructive git history work.
-  Because deny matching sees through wrappers and nested interpreters, these
-  hold even when the model wraps them, and the classifier's own verdicts cannot
-  overrule them.
+`permissions.safeCommands` accepts risks the analyser cannot prove away. The
+read-only verifier deliberately distrusts network access, so `curl`, `wget`
+and `dig` always prompt until listed. Listing them trusts the tool but also
+accepts exfiltration: the same curl that fetches docs can POST source or
+secrets anywhere. That is a comfortable trade on a disposable container or an
+offline codebase, and one to think through elsewhere.
+
+`permissions.deniedCommands` draws lines nothing may cross: privilege
+escalation and remote login (`sudo`, `su`, `ssh`), system services and mounts,
+package managers that install executables, and destructive git history work.
+Deny matching sees through wrappers and nested interpreters, so these hold
+where a wrapper hides the head.
 
 ## Headless one-shots
 
-A one-shot (`-p` or piped) has no dialog, so every ask settles fail-closed: the
-auto modes take the classifier verdict as final (bounded by the unattended-run
-rules above), `permissions.headlessMode` or a scope flag sets the gate, and
-`ask_user` is never offered because there is nobody to answer. Every refusal
-(denied review, unapproved call, unparseable line) reads exactly
-`permission not given`, so scripts match one string and never hang on a prompt.
-Exit codes and the JSON shape of a run are in `cli.md`.
+A one-shot (`-p` or piped) has no dialog, so every ask settles fail-closed.
+In the plain auto mode only nameable, redirect-free lines reach the classifier
+at all: anything analysis cannot parse refuses rather than trusting a model
+verdict that promises read-only. auto+write has less to promise, so its
+workspace rules judge every parsable line. With no dialog possible at all
+(plain render mode, or a UI that went away) every ask settles the same way,
+and `--block-autodenied` makes interactive runs behave that way always:
+nothing short of a classifier allow is ever asked, anything else fails closed
+with a `Tool auto denied` notice. `permissions.headlessMode` or a scope flag
+sets the gate, and `ask_user` is never offered because there is nobody to
+answer. Every refusal (denied review, unapproved call, unparseable line) reads
+exactly `permission not given`, so scripts match one string and never hang on
+a prompt. Exit codes and the JSON shape of a run are in `cli.md`.
 
 ## See also
 
