@@ -52,6 +52,7 @@ type Capabilities struct {
 	RequiresThinkingAsText           bool
 	RequiresToolResultName           bool
 	RequiresAssistantAfterToolResult bool
+	RequiresUserOpener               bool // first request message must be a user turn
 	EagerToolInputStreaming          bool
 	CacheControlOnTools              bool
 	ToolReferences                   bool

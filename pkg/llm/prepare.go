@@ -25,11 +25,16 @@ const noResult = "No result provided"
 // require between a tool-result turn and the next user message.
 const processedTools = "I have processed the tool results."
 
+// userOpener is the synthetic first user turn template-rendering servers need to
+// see on an assistant-first history.
+const userOpener = "Continue."
+
 // Prepare returns req with its messages normalized for the target model: images
 // downgraded, leaked inline reasoning split back into thinking blocks, foreign
 // reasoning degraded to text or dropped, retention applied, tool-call ids made
 // legal and reused ones disambiguated, unanswered calls answered, malformed
-// tool-call inputs replaced with {}. Every request path passes through it so the
+// tool-call inputs replaced with {}, assistant-first histories led by a user
+// opener when the target requires one. Every request path passes through it so the
 // estimator and the wire never disagree about what is sent. It is idempotent, so
 // calling it twice yields an identical message list.
 //
@@ -45,6 +50,7 @@ func Prepare(req Request) Request {
 	msgs = splitToolResultImages(msgs, caps) // B4: compat carries tool images separately
 	msgs = repairToolInputs(msgs)            // invalid args ride as {}, never raw
 	msgs = repairTurns(msgs, caps)
+	msgs = repairUserOpener(msgs, caps) // template servers raise on assistant-first histories
 
 	// stamp the resolved origin so a later Prepare pass sees same-model messages.
 	// Writes clone first: msgs may share the caller's backing array by now, and an
@@ -597,6 +603,20 @@ func trHasText(content BlockList) bool {
 		t, ok := b.(TextBlock)
 		return ok && strings.TrimSpace(t.Text) != ""
 	})
+}
+
+// repairUserOpener leads an assistant-first history with one synthetic user
+// turn when the target requires it, since qwen-class chat templates scan for a
+// user query and raise when none precedes the first assistant message. Only the
+// head matters: transcripts never hold system messages, and the compat builders
+// emit theirs as the first wire message themselves.
+func repairUserOpener(msgs []Message, caps Capabilities) []Message {
+	if !caps.RequiresUserOpener || len(msgs) == 0 || msgs[0].Role == RoleUser {
+		return msgs
+	}
+	out := make([]Message, 0, len(msgs)+1)
+	out = append(out, Text(RoleUser, userOpener))
+	return append(out, msgs...)
 }
 
 // repairTurns enforces request well-formedness: errored assistant turns are

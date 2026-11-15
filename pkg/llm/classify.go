@@ -22,6 +22,19 @@ var overflowPhrases = map[Flavor][]string{
 	FlavorGeneric:    {"context length", "context_length_exceeded"},
 }
 
+// engineFailurePhrases are the substrings LM Studio reports for an upstream
+// engine failure served as a 4xx body (lmstudio-bug-tracker #2257).
+var engineFailurePhrases = []string{"engine protocol", "fetch failed"}
+
+// matchesEngineFailure reports whether text carries LM Studio's upstream engine
+// failure signature rather than a genuine validation error.
+func matchesEngineFailure(text string) bool {
+	lower := strings.ToLower(text)
+	return slices.ContainsFunc(engineFailurePhrases, func(phrase string) bool {
+		return strings.Contains(lower, phrase)
+	})
+}
+
 // compatClassifier returns the error classifier for a chat-completions flavor.
 func compatClassifier(provider string, flavor Flavor) func(int, []byte) error {
 	return func(status int, body []byte) error {
@@ -45,6 +58,10 @@ func compatClassifier(provider string, flavor Flavor) func(int, []byte) error {
 		}
 		if isOverflowStatus(status, flavor) && matchesOverflow(msg+" "+code, flavor) {
 			return err.Overflow()
+		}
+		// an upstream engine failure answers as a 400 but rides the retry ladder
+		if status == http.StatusBadRequest && flavor == FlavorLMStudio && matchesEngineFailure(msg) {
+			err.Retryable = true
 		}
 		return err
 	}

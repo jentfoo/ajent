@@ -133,6 +133,13 @@ sent:
   anthropic rejects them at body marshal and the compat dialects would send them
   silently inside their `arguments` string. The paired error result quotes the
   clipped original, which is where replay still sees what the model emitted.
+- **User opener** for template-rendering servers: some render history through
+  the model's chat template, and qwen-class templates raise when history opens
+  on an assistant message, exactly what an assistant-first request (the
+  `/init` survey) produces. A `RequiresUserOpener` pass after `repairTurns`
+  leads such a request with one constant synthetic user turn. Head-of-list is
+  the whole condition: transcripts never hold system messages, and the compat
+  builders emit theirs as the first wire message themselves.
 
 A placeholder ladder gives empty or image-only tool results something to say
 (or, when an image survives, a pointer to it). Some chat-completions providers
@@ -588,7 +595,11 @@ whether the call retries and how long to back off, so a classified 409 with a
 wait. Overflow is the single exception: it always wins over the status table,
 which matters because llama.cpp reports overflow as a 500 that would otherwise
 transient-retry. Classifiers only parse vendor error shapes and set no retry
-verdict of their own.
+verdict of their own, with one upgrade on record: an lm-studio 400 quoting its
+host's upstream engine failure (a Node fetch error) marks itself retryable,
+because the condition is transient and the status table would otherwise burn
+the turn. Classification upgrades a fatal verdict but never downgrades a
+transient one, and overflow still wins over both.
 
 Retry covers transient failures (rate limiting, request timeouts, server
 errors, Anthropic's 529 overload status and connection errors) plus a
@@ -725,6 +736,10 @@ reasoning on turns without tool calls.
 
 - Header and idle bounds default to disabled for JIT loads.
 - Tool support varies per loaded model, so it is a capability.
+- Upstream engine failures answer as 400 bodies quoting a fetch error,
+  classified retryable (see Errors, retry and overflow).
+- History opening on an assistant message leads with one synthetic user turn
+  (`requiresUserOpener`, see Normalization).
 
 ## Invariants
 

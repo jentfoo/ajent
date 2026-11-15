@@ -126,6 +126,13 @@ func TestResolveCaps(t *testing.T) {
 		assert.True(t, got.ReplayReasoning)
 	})
 
+	t.Run("requires_user_opener_overrides", func(t *testing.T) {
+		on := resolveCaps(flavorDefaults[FlavorGeneric].caps, nil, &Compat{RequiresUserOpener: ptr(true)})
+		assert.True(t, on.RequiresUserOpener)
+		off := resolveCaps(base, nil, &Compat{RequiresUserOpener: ptr(false)})
+		assert.False(t, off.RequiresUserOpener) // explicit false clears the flavor default
+	})
+
 	t.Run("stream_usage_alias_precedence", func(t *testing.T) {
 		tests := []struct {
 			name      string
@@ -386,6 +393,14 @@ func TestFlavorDefaults(t *testing.T) {
 		})
 		assert.False(t, caps.EagerToolInputStreaming)
 		assert.False(t, caps.CacheControlOnTools)
+	})
+
+	t.Run("local_flavors_require_a_user_opener", func(t *testing.T) {
+		// qwen-class chat templates raise on an assistant-first history, so both
+		// local template-rendering servers lead requests with a user turn
+		for _, f := range []Flavor{FlavorLMStudio, FlavorLlamaCpp} {
+			assert.True(t, flavorDefaults[f].caps.RequiresUserOpener, f.String())
+		}
 	})
 
 	t.Run("llamacpp_starts_without_stream_usage", func(t *testing.T) {

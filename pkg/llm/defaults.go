@@ -367,6 +367,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			ToolChoice:     true,
 			// keeps reasoning so replay matches the engine's KV cache
 			RetainDefault: RetainAll,
+			// qwen-class chat templates raise on an assistant-first history, which
+			// /init's survey produces; a synthetic user turn leads every request
+			RequiresUserOpener: true,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,
@@ -390,6 +393,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			SystemAsRole:   true,
 			// keeps reasoning so replay matches the engine's KV cache
 			RetainDefault: RetainAll,
+			// renders model-embedded templates like lmstudio, so the same opener
+			// rule applies whether or not a given template raises
+			RequiresUserOpener: true,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			// older builds reject the unknown stream_options key, discovery
@@ -547,6 +553,7 @@ func applyCompat(c Capabilities, o *Compat) Capabilities {
 	c.RequiresThinkingAsText = orBool(c.RequiresThinkingAsText, o.RequiresThinkingAsText)
 	c.RequiresToolResultName = orBool(c.RequiresToolResultName, o.RequiresToolResultName)
 	c.RequiresAssistantAfterToolResult = orBool(c.RequiresAssistantAfterToolResult, o.RequiresAssistantAfterToolResult)
+	c.RequiresUserOpener = orBool(c.RequiresUserOpener, o.RequiresUserOpener)
 	c.EagerToolInputStreaming = orBool(c.EagerToolInputStreaming, o.EagerToolInputStreaming)
 	c.CacheControlOnTools = orBool(c.CacheControlOnTools, o.SupportsCacheControlOnTools)
 	c.ToolReferences = orBool(c.ToolReferences, o.SupportsToolReferences)

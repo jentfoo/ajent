@@ -1059,6 +1059,101 @@ func TestRepairTurns(t *testing.T) {
 	})
 }
 
+func TestPrepareUserOpener(t *testing.T) {
+	t.Parallel()
+
+	m := Model{Provider: "p", ID: "m", Caps: Capabilities{
+		Dialect: DialectOpenAICompletions, RequiresUserOpener: true,
+	}}
+
+	t.Run("assistant_head_gets_one_opener", func(t *testing.T) {
+		in := []Message{Text(RoleAssistant, "hi"), Text(RoleUser, "q")}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 3)
+		assert.Equal(t, RoleUser, out[0].Role)
+		assert.Equal(t, BlockList{TextBlock{Text: userOpener}}, out[0].Content)
+		assert.Equal(t, RoleAssistant, out[1].Role)
+		assert.Equal(t, RoleUser, out[2].Role)
+	})
+
+	t.Run("user_head_untouched", func(t *testing.T) {
+		in := []Message{Text(RoleUser, "q")}
+		out := repairUserOpener(in, m.Caps)
+		assert.Same(t, &in[0], &out[0]) // clean lists share the caller's slice
+	})
+
+	t.Run("empty_list_untouched", func(t *testing.T) {
+		out := Prepare(Request{Model: m}).Messages
+		assert.Empty(t, out)
+	})
+
+	t.Run("opener_idempotent", func(t *testing.T) {
+		req := Request{Model: m, Messages: []Message{Text(RoleAssistant, "hi")}}
+		once := Prepare(req)
+		twice := Prepare(Prepare(req))
+		assert.Equal(t, once.Messages, twice.Messages)
+	})
+
+	t.Run("input_not_mutated", func(t *testing.T) {
+		in := []Message{Text(RoleAssistant, "hi")}
+		Prepare(Request{Model: m, Messages: in})
+		assert.Equal(t, []Message{Text(RoleAssistant, "hi")}, restoreOriginNil(in))
+	})
+
+	t.Run("errored_head_drops_first", func(t *testing.T) {
+		// the opener runs after repairTurns, so a history that repairs to nothing
+		// sends nothing rather than a lone Continue
+		in := []Message{{Role: RoleAssistant, Stop: StopError,
+			Content: BlockList{TextBlock{Text: "lost"}}}}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		assert.Empty(t, out)
+	})
+
+	t.Run("opener_leads_surviving_turns", func(t *testing.T) {
+		in := []Message{
+			{Role: RoleAssistant, Stop: StopError,
+				Content: BlockList{TextBlock{Text: "lost"}}},
+			Text(RoleAssistant, "kept"),
+		}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 2)
+		assert.Equal(t, userOpener, out[0].Content[0].(TextBlock).Text)
+		assert.Equal(t, RoleAssistant, out[1].Role)
+	})
+
+	t.Run("emptied_assistant_head_reads_first", func(t *testing.T) {
+		// retention drops the thinking-only assistant turn, so the list opens on a
+		// real user message and the opener never fires
+		in := sameOrigin(m, []Message{
+			{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "thought"}}},
+			Text(RoleUser, "q"),
+		})
+		out := Prepare(Request{Model: m, Messages: in,
+			Reasoning: ReasoningConfig{Retain: RetainNone}}).Messages
+		require.Len(t, out, 1)
+		assert.Equal(t, RoleUser, out[0].Role)
+	})
+
+	t.Run("opener_precedes_orphan_result", func(t *testing.T) {
+		in := []Message{{Role: RoleAssistant, Content: BlockList{
+			ToolCallBlock{ID: "c1", Name: "read"},
+		}}}
+		out := Prepare(Request{Model: m, Messages: in}).Messages
+		require.Len(t, out, 3)
+		assert.Equal(t, userOpener, out[0].Content[0].(TextBlock).Text)
+		assert.Equal(t, RoleAssistant, out[1].Role)
+		assert.Equal(t, RoleUser, out[2].Role) // the synthetic error result still follows
+	})
+
+	t.Run("off_by_default", func(t *testing.T) {
+		plain := Model{Provider: "p", ID: "m"}
+		in := []Message{Text(RoleAssistant, "hi")}
+		out := Prepare(Request{Model: plain, Messages: in}).Messages
+		require.Len(t, out, 1)
+		assert.Equal(t, RoleAssistant, out[0].Role)
+	})
+}
+
 func TestToolResultPlaceholderLadder(t *testing.T) {
 	t.Parallel()
 

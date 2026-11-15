@@ -62,6 +62,15 @@ func TestHTTPClientAPIError(t *testing.T) {
 		assert.True(t, IsOverflow(e))
 	})
 
+	t.Run("classifier_retry_upgrade_survives", func(t *testing.T) {
+		// a classifier may upgrade a fatal status; only overflow clears the flag
+		classify := func(status int, _ []byte) error {
+			return &APIError{Provider: "testprov", Status: status, Retryable: true}
+		}
+		e := c.apiError(http.StatusBadRequest, nil, 0, classify)
+		assert.True(t, e.Retryable)
+	})
+
 	t.Run("plain_classifier_error_is_wrapped", func(t *testing.T) {
 		classify := func(int, []byte) error { return errors.New("boom") }
 		e := c.apiError(http.StatusBadRequest, []byte("body"), 0, classify)

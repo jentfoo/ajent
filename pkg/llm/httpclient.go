@@ -137,12 +137,13 @@ func (c *httpClient) apiError(status int, body []byte, retryAfter time.Duration,
 
 // finalizeClassified applies the transport's status verdict and server-directed
 // wait to a classified error. Overflow wins over the status table: llama.cpp
-// reports it as a 500, which would otherwise look transient.
+// reports it as a 500, which would otherwise look transient. Classification can
+// upgrade a fatal status to retryable but never downgrades a transient one.
 func finalizeClassified(e *APIError, status int, retryAfter time.Duration) *APIError {
 	if IsOverflow(e) {
 		return e // overflow already cleared Retryable
 	}
-	e.Retryable = httputil.ShouldRetryStatus(status, retryAfter > 0)
+	e.Retryable = e.Retryable || httputil.ShouldRetryStatus(status, retryAfter > 0)
 	e.RetryAfter = retryAfter
 	return e
 }

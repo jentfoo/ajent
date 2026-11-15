@@ -324,6 +324,7 @@ type Compat struct {
 	SupportsFinishReason             *bool `json:"supportsFinishReason,omitempty" dialect:"openai-completions"`
 	RequiresToolResultName           *bool `json:"requiresToolResultName,omitempty" dialect:"openai-completions"`
 	RequiresAssistantAfterToolResult *bool `json:"requiresAssistantAfterToolResult,omitempty" dialect:"openai-completions"`
+	RequiresUserOpener               *bool `json:"requiresUserOpener,omitempty" dialect:"openai-completions"`
 	SupportsStrictMode               *bool `json:"supportsStrictMode,omitempty" dialect:"openai-completions,openai-responses"`
 	RequiresThinkingAsText           *bool `json:"requiresThinkingAsText,omitempty" dialect:"openai-completions"`
 	SupportsOpenAIGrammarTools       *bool `json:"supportsOpenAIGrammarTools,omitempty" dialect:"openai-completions,openai-responses"`
