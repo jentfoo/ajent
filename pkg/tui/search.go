@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -123,41 +124,36 @@ func (s *searchOverlay) matchOffset(text string) int {
 	return -1
 }
 
-// rows renders the overlay above the editor: a query-echo header followed by
-// every line of the current match with matched spans emphasized. Lines beyond
-// maxRows collapse to an overflow marker.
-func (s *searchOverlay) rows(t Theme, width, maxRows int) []string {
+// rows renders the overlay as one echo row above the editor: the query echo
+// followed inline by the current match, emphasized where the query hits, with
+// the detail trailing. The fixed height keeps the live block from reflowing —
+// and the transcript from sliding — while typing or stepping between matches.
+func (s *searchOverlay) rows(t Theme, width int) []string {
 	header := t.Accent.Wrap("(reverse-i-search)`" + s.query + "':")
-	out := make([]string, 0, max(2, min(maxRows+1, len(s.matches)+1)))
-
 	switch {
 	case s.pending:
-		return append(out, header, t.Dim.Wrap(selectIndent+"searching…"))
+		return []string{header + t.Dim.Wrap(selectIndent+"searching…")}
 	case s.query == "":
 		// nothing typed yet: keep the field blank rather than implying a result
-		out = append(out, header)
-		return out
+		return []string{header}
 	case len(s.matches) == 0:
-		return append(out, header, t.Dim.Wrap(selectIndent+"no match"))
+		return []string{header + t.Dim.Wrap(selectIndent+"no match")}
 	}
 
 	it := s.matches[s.cursor]
-	if it.Detail != "" {
-		header += t.Dim.Wrap("  " + it.Detail)
-	}
-	out = append(out, header)
-
 	lines := strings.Split(it.Text, "\n")
-	for i, ln := range lines {
-		if maxRows <= 0 {
-			out = append(out, t.Dim.Wrap(selectIndent+moreLabel(len(lines)-i)))
-			break
-		}
-		maxRows--
-		out = append(out, truncateDisplay(" "+highlightLine(t, ln, s.query), width))
+	row := header + " " + highlightLine(t, lines[0], s.query)
+	if len(lines) > 1 {
+		row += t.Dim.Wrap(" " + moreLinesLabel(len(lines)-1))
 	}
-	return out
+	if it.Detail != "" {
+		row += t.Dim.Wrap("  " + it.Detail)
+	}
+	return []string{truncateDisplay(row, width)}
 }
+
+// moreLinesLabel names the lines hidden when only a match's first line shows.
+func moreLinesLabel(n int) string { return "+" + strconv.Itoa(n) + " lines" }
 
 // highlightLine emphasizes every query occurrence in one text line. A no-op on plain.
 func highlightLine(t Theme, text, q string) string {

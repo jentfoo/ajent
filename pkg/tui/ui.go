@@ -1131,9 +1131,9 @@ func (u *UI) repaint() {
 	// an active history search rides above the editor like completion. The two are
 	// mutually exclusive by construction (opening one clears the other).
 	if u.search != nil {
-		// a history search needs more room than completion so the full prompt reads,
-		// and the input keeps its own share below.
-		searchRows := u.search.rows(u.theme, w, max(4, (h-1)*2/3))
+		// one echo row: a height that never changes with the match, so stepping
+		// results cannot reflow the block and slide the transcript
+		searchRows := u.search.rows(u.theme, w)
 		rows = append(rows, searchRows...)
 		offset += len(searchRows)
 	}
