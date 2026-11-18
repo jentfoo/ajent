@@ -284,6 +284,17 @@ separate rule: whichever layer speaks last wins regardless of which synonym it
 used, so a declared or override opt-out stays an opt-out in either spelling.
 Detection and discovery write canonical spellings only.
 
+Usage reporting is asked for rather than configured. Every chat-completions
+request carries `stream_options.include_usage` by default, because an exact
+context bar and spend ledger are worth one extra key on the wire and an exact
+answer cannot be asked after the fact. A server that rejects the key downgrades
+the capability at runtime: the adapter matches the refusal by status plus the
+key's own name in the body, latches the downgrade for the adapter's lifetime,
+and retries the request once without it, so an old engine costs one rejected
+call instead of every turn. An error naming no usage key keeps surfacing, since
+eating an unrelated 400 would hide real breakage. Anthropic and Responses
+report usage unconditionally, so no flag exists on those dialects.
+
 `Timeouts` fields are `*Duration` for the same reason: nil takes the dialect
 default, an explicit `"0s"` disables the bound. A plain zero cannot say
 "disabled", which is precisely what an lm-studio endpoint needs.
@@ -725,11 +736,10 @@ reasoning on turns without tool calls.
 
 ### llama.cpp
 
-- Older builds reject an unknown `stream_options`, so stream usage starts off
-  and discovery turns it on: `/props` reports `build_info`, and at or past
-  upstream b6508 (when `include_usage` began to be honoured) discovery adds a
-  `supportsUsageInStreaming` compat that declared entries and overrides can
-  still turn back off.
+- Stream usage is asked for like every completions endpoint, with no `/props`
+  probing: builds before upstream b6508 ignore the key and report usage on the
+  final chunk anyway, and b6508 (which made reporting conditional) honours it.
+  A build that rejects the key takes the shared runtime downgrade.
 - `/tokenize` is exact, local and cheap, so it is the one tokenizer used freely.
 
 ### lm-studio

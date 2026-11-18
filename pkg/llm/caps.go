@@ -35,9 +35,11 @@ type Capabilities struct {
 	Temperature    bool
 	ToolChoice     bool
 	ParallelTools  bool
-	StreamUsage    bool
-	Store          bool
-	Images         bool
+	// StreamUsage asks for stream_options.include_usage; a refusing endpoint is
+	// downgraded at runtime, so only an explicit opt-out keeps the key off
+	StreamUsage bool
+	Store       bool
+	Images      bool
 
 	ExtraBody map[string]json.RawMessage // verbatim additions to the request body
 

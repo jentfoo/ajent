@@ -403,8 +403,14 @@ func TestFlavorDefaults(t *testing.T) {
 		}
 	})
 
-	t.Run("llamacpp_starts_without_stream_usage", func(t *testing.T) {
-		assert.False(t, flavorDefaults[FlavorLlamaCpp].caps.StreamUsage)
+	t.Run("completions_flavors_ask_for_stream_usage", func(t *testing.T) {
+		// usage is asked for rather than configured, and a refusing endpoint
+		// downgrades at runtime
+		for f, def := range flavorDefaults {
+			if def.dialect == DialectOpenAICompletions {
+				assert.True(t, def.caps.StreamUsage, f.String())
+			}
+		}
 	})
 
 	t.Run("hosted_flavors_carry_a_key_variable", func(t *testing.T) {

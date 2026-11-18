@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-analyze/bulk"
 )
@@ -27,6 +28,10 @@ type compatProfile struct {
 type compatProvider struct {
 	client  *httpClient
 	profile compatProfile
+
+	// usageRejected latches a server that refused the usage key, so later
+	// requests stop sending it instead of repeating the refused round trip
+	usageRejected atomic.Bool
 }
 
 // deferredToolsKimi is the deferredToolsMode value activating Kimi's
@@ -50,6 +55,9 @@ func usesCompatBody(caps Capabilities) bool {
 
 // Stream sends a request and returns its normalized event stream.
 func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error) {
+	if p.usageRejected.Load() {
+		req.Model.Caps.StreamUsage = false // the latched downgrade
+	}
 	body, err := buildCompatBody(req, p.profile)
 	if err != nil {
 		return nil, err
@@ -58,14 +66,47 @@ func (p *compatProvider) Stream(ctx context.Context, req Request) (Stream, error
 	if path == "" {
 		path = "/chat/completions"
 	}
-	resp, err := p.client.do(ctx, httpReq{
-		method: http.MethodPost, path: path, body: body,
-		headers: withSessionHeaders(req.Model.Headers, req), classify: p.profile.classify,
-	})
+	resp, err := p.open(ctx, req, path, body)
+	// the local caps now report whether this attempt carried the key
+	if err != nil && req.Model.Caps.StreamUsage && refusedStreamUsage(err) {
+		// the endpoint rejected stream_options: latch the downgrade and retry
+		// once without it, so an old engine costs one refused call
+		p.usageRejected.Store(true)
+		req.Model.Caps.StreamUsage = false
+		if retryBody, berr := buildCompatBody(req, p.profile); berr == nil {
+			resp, err = p.open(ctx, req, path, retryBody)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	return newCompatStream(ctx, resp, req.Model.Caps, p.profile), nil
+}
+
+// open posts one chat request and returns the response whose headers arrived.
+func (p *compatProvider) open(ctx context.Context, req Request, path string, body []byte) (*http.Response, error) {
+	return p.client.do(ctx, httpReq{
+		method: http.MethodPost, path: path, body: body,
+		headers: withSessionHeaders(req.Model.Headers, req), classify: p.profile.classify,
+	})
+}
+
+// refusedStreamUsage reports whether err is the endpoint rejecting the usage
+// key. The body must name the key so an unrelated 400 keeps surfacing.
+func refusedStreamUsage(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) ||
+		(ae.Status != http.StatusBadRequest && ae.Status != http.StatusUnprocessableEntity) {
+		return false
+	}
+	return namesStreamUsage(ae.Message) || namesStreamUsage(string(ae.Body))
+}
+
+// namesStreamUsage reports whether s mentions the usage key in a spelling
+// servers use for it.
+func namesStreamUsage(s string) bool {
+	lower := strings.ToLower(s)
+	return strings.Contains(lower, "stream_options") || strings.Contains(lower, "include_usage")
 }
 
 // buildCompatBody marshals a request into a chat-completions body. It is pure,

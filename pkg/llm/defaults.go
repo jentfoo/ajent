@@ -34,14 +34,16 @@ type flavorDefault struct {
 // OpenAI-compatible flavors. Vendor detection layers quirks over it.
 func chatCaps() Capabilities {
 	return Capabilities{
-		Dialect:                 DialectOpenAICompletions,
-		Reasoning:               true, // hosted openai-completions families reason by default
-		Tokenizer:               TokenizerLocalEstimate,
-		MaxTokensField:          fieldMaxTokens,
-		SystemAsRole:            true,
-		Temperature:             true,
-		ToolChoice:              true,
-		ParallelTools:           true, // hosted families accept multiple calls in one completion
+		Dialect:        DialectOpenAICompletions,
+		Reasoning:      true, // hosted openai-completions families reason by default
+		Tokenizer:      TokenizerLocalEstimate,
+		MaxTokensField: fieldMaxTokens,
+		SystemAsRole:   true,
+		Temperature:    true,
+		ToolChoice:     true,
+		ParallelTools:  true, // hosted families accept multiple calls in one completion
+		// requested optimistically, a refusing endpoint downgrades at runtime
+		StreamUsage:             true,
 		SupportsReasoningEffort: true,
 		SupportsFinishReason:    true,
 		SupportsStrict:          true,
@@ -56,7 +58,6 @@ func zaiCaps() Capabilities {
 	caps.Thinking = ThinkingZAI
 	caps.ReasoningField = fieldReasoningConten
 	caps.ParallelTools = true
-	caps.StreamUsage = true
 	caps.ZaiToolStream = true
 	return caps
 }
@@ -122,10 +123,11 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			SystemAsRole:                true,
 			DeveloperRole:               true,
 			ParallelTools:               true,
-			StreamUsage:                 true,
-			Images:                      true,
-			Temperature:                 true,
-			ToolChoice:                  true,
+			// read by the chat-completions fallback, since responses reports usage anyway
+			StreamUsage: true,
+			Images:      true,
+			Temperature: true,
+			ToolChoice:  true,
 		},
 	},
 	// z.ai serves GLM over chat-completions. The coding-plan endpoints share the
@@ -201,9 +203,10 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			MaxTokensField:  fieldMaxOutputTokens,
 			SystemAsRole:    true,
 			ParallelTools:   true,
-			StreamUsage:     true,
-			Temperature:     true,
-			ToolChoice:      true,
+			// read by the chat-completions fallback, since responses reports usage anyway
+			StreamUsage: true,
+			Temperature: true,
+			ToolChoice:  true,
 		},
 	},
 	FlavorGroq: {
@@ -398,9 +401,9 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			RequiresUserOpener: true,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
-			// older builds reject the unknown stream_options key, discovery
-			// turns it back on when the build reports support
-			StreamUsage:          false,
+			// builds before upstream b6508 ignore the key and report usage anyway;
+			// a build that rejects it takes the shared runtime downgrade
+			StreamUsage:          true,
 			Temperature:          true,
 			ToolChoice:           true,
 			SupportsFinishReason: true,
@@ -413,8 +416,10 @@ var flavorDefaults = map[Flavor]flavorDefault{
 			Tokenizer:      TokenizerLocalEstimate,
 			MaxTokensField: fieldMaxTokens,
 			SystemAsRole:   true,
-			Temperature:    true,
-			ToolChoice:     true,
+			// requested optimistically, a refusing endpoint downgrades at runtime
+			StreamUsage: true,
+			Temperature: true,
+			ToolChoice:  true,
 			// the chat-completions default emits reasoning_effort
 			SupportsReasoningEffort: true,
 			SupportsFinishReason:    true,

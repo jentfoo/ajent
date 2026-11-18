@@ -37,7 +37,6 @@ type llamaProps struct {
 	ModelPath   string `json:"model_path"`
 	TotalSlots  int    `json:"total_slots"`
 	ChatFormat  string `json:"chat_format"`
-	BuildInfo   string `json:"build_info"`
 	NCtxPerSlot int    `json:"n_ctx_per_slot"`
 }
 
@@ -69,29 +68,7 @@ func parseLlamaProps(body []byte) ([]ModelConfig, error) {
 	}
 	// /props describes the model being served, so it is resident by definition
 	m.Loaded = true
-	// the flavor default keeps stream usage off, and discovery enables it only
-	// when /props proves the build can answer. A declared entry or override wins.
-	if llamaSupportsStreamUsage(p.BuildInfo) {
-		m.Compat = &Compat{SupportsUsageInStreaming: ptrOf(true)}
-	}
 	return []ModelConfig{m}, nil
-}
-
-// llamaStreamUsageBuild is the first upstream build honouring
-// stream_options.include_usage (llama.cpp PR #16052).
-const llamaStreamUsageBuild = 6508
-
-// llamaSupportsStreamUsage reports whether a /props build_info names a build new
-// enough to answer include_usage. Older builds ignore or reject the unknown key,
-// and anything unparsable counts as old.
-func llamaSupportsStreamUsage(buildInfo string) bool {
-	s := strings.TrimPrefix(strings.TrimSpace(buildInfo), "b")
-	end := strings.IndexFunc(s, func(r rune) bool { return r < '0' || r > '9' })
-	if end >= 0 {
-		s = s[:end]
-	}
-	n, err := strconv.Atoi(s)
-	return err == nil && n >= llamaStreamUsageBuild
 }
 
 // countBlocks renders a message's content into token-countable text, including

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/go-analyze/bulk"
@@ -1184,4 +1186,144 @@ func TestThinkTagReplayField(t *testing.T) {
 	body, err := buildCompatBody(req, compatProfile{})
 	require.NoError(t, err)
 	assert.Contains(t, string(body), `"reasoning_content":"pondering"`)
+}
+
+// usageSSE is a minimal completions stream ending in the usage chunk an
+// include_usage server appends after finish_reason.
+const usageSSE = "data: {\"id\":\"c1\",\"model\":\"m1\",\"choices\":[{\"index\":0," +
+	"\"delta\":{\"content\":\"Hi\"}}]}\n\n" +
+	"data: {\"id\":\"c1\",\"model\":\"m1\",\"choices\":[{\"index\":0,\"delta\":{}," +
+	"\"finish_reason\":\"stop\"}]}\n\n" +
+	"data: {\"id\":\"c1\",\"model\":\"m1\",\"choices\":[],\"usage\":{\"prompt_tokens\":12," +
+	"\"completion_tokens\":3}}\n\n" +
+	"data: [DONE]\n\n"
+
+func TestCompatStreamUsageDowngrade(t *testing.T) {
+	t.Parallel()
+
+	t.Run("refusal_downgrades_and_latches", func(t *testing.T) {
+		var mu sync.Mutex
+		var bodies []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			call := len(bodies)
+			bodies = append(bodies, string(body))
+			mu.Unlock()
+			if call == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"message":"Unknown parameter: 'stream_options'"}}`)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, usageSSE)
+		}))
+		t.Cleanup(srv.Close)
+		p := newCompatTestProvider(t, srv.URL)
+
+		// the refused first attempt retries without the key and still streams
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		assert.Contains(t, eventKinds(collect(t, s)), "usage")
+
+		mu.Lock()
+		require.Len(t, bodies, 2)
+		assert.Contains(t, bodies[0], "stream_options")
+		assert.NotContains(t, bodies[1], "stream_options")
+		mu.Unlock()
+
+		// the downgrade holds: later requests never send the key again
+		s, err = p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		collect(t, s)
+
+		mu.Lock()
+		require.Len(t, bodies, 3)
+		assert.NotContains(t, bodies[2], "stream_options")
+		mu.Unlock()
+	})
+
+	t.Run("pydantic_refusal_downgrades", func(t *testing.T) {
+		// mistral and pydantic-strict gateways answer 422 naming the key inside
+		// detail[].loc rather than an error.message string
+		var mu sync.Mutex
+		var bodies []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			body, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			call := len(bodies)
+			bodies = append(bodies, string(body))
+			mu.Unlock()
+			if call == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = io.WriteString(w, `{"object":"error","message":{"detail":[{"type":"extra_forbidden",`+
+					`"loc":["body","stream_options","include_usage"],"msg":"Extra inputs are not permitted"}]},`+
+					`"type":"invalid_request_error","param":null,"code":null}`)
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, usageSSE)
+		}))
+		t.Cleanup(srv.Close)
+		p := newCompatTestProvider(t, srv.URL)
+
+		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.NoError(t, err)
+		assert.Contains(t, eventKinds(collect(t, s)), "usage")
+
+		mu.Lock()
+		require.Len(t, bodies, 2)
+		assert.Contains(t, bodies[0], "stream_options")
+		assert.NotContains(t, bodies[1], "stream_options")
+		mu.Unlock()
+	})
+
+	t.Run("unrelated_rejection_surfaces", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"model not found"}}`)
+		}))
+		t.Cleanup(srv.Close)
+		p := newCompatTestProvider(t, srv.URL)
+
+		_, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
+		require.Error(t, err) // a 400 that names no usage key is not ours to eat
+		mu.Lock()
+		assert.Equal(t, 1, calls)
+		mu.Unlock()
+	})
+
+	t.Run("opted_out_never_retries", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			mu.Lock()
+			calls++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"Unknown parameter: 'stream_options'"}}`)
+		}))
+		t.Cleanup(srv.Close)
+		p := newCompatTestProvider(t, srv.URL)
+
+		// the key was never sent, so even a usage-key refusal is not ours to interpret
+		_, err := p.Stream(t.Context(), Request{Model: compatModel(func(c *Capabilities) {
+			c.StreamUsage = false
+		})})
+		require.Error(t, err)
+		mu.Lock()
+		assert.Equal(t, 1, calls)
+		mu.Unlock()
+	})
 }

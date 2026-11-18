@@ -624,7 +624,7 @@ func TestRegistryWithCache(t *testing.T) {
 	})
 
 	t.Run("llamacpp_discovered_compat_reaches_the_caps", func(t *testing.T) {
-		// /props discovery turns stream usage on for builds that can answer it
+		// a cache written before usage became the baseline may carry the compat
 		f := File{Providers: map[string]ProviderConfig{"llamacpp": {}}}
 		cache := map[string]CacheEntry{"llamacpp": {Models: []ModelConfig{
 			{ID: "m.gguf", Name: "m.gguf",
