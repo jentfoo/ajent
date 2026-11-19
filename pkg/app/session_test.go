@@ -1984,6 +1984,149 @@ func TestResumeSeesConcurrentAppend(t *testing.T) {
 	}))
 }
 
+func TestResumeHead(t *testing.T) {
+	t.Parallel()
+
+	entries := []session.Entry{
+		{ID: "root", Type: session.TypeSession},
+		{ID: "a", ParentID: "root", Type: session.TypeMessage},
+		{ID: "b", ParentID: "a", Type: session.TypeMessage},
+	}
+	newRoot := append(slices.Clone(entries),
+		session.Entry{ID: "c", ParentID: "", Type: session.TypeHead})
+	buried := append(slices.Clone(newRoot),
+		session.Entry{ID: "d", ParentID: "c", Type: session.TypeMessage})
+
+	t.Run("live_head_wins", func(t *testing.T) {
+		assert.Equal(t, "a", resumeHead("a", entries))
+	})
+
+	t.Run("unknown_live_falls_to_tail", func(t *testing.T) {
+		assert.Equal(t, "b", resumeHead("zz", entries))
+	})
+
+	t.Run("empty_live_new_root_stands", func(t *testing.T) {
+		assert.Empty(t, resumeHead("", newRoot))
+	})
+
+	t.Run("empty_live_survives_buried_cursor", func(t *testing.T) {
+		// a peer's appends never steer this writer, so its resolved new root stands
+		assert.Empty(t, resumeHead("", buried))
+	})
+}
+
+func TestResumeNewRootCursor(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	// a fork to an empty context persisted its cursor, then the process quit
+	// before anything landed on the new root
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-fork.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version(), Model: "p/a"})
+	require.NoError(t, err)
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "abandoned")})
+	require.NoError(t, err)
+	w.SetHead("")
+	require.NoError(t, w.Close())
+
+	// the resume opens the transcript the way a new process does
+	w2, _, _, err := session.OpenEntries(p)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w2.Close() })
+	require.Empty(t, w2.Head()) // the persisted new-root cursor resolved
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	m, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	r := &sessRec{w: w2, rec: session.NewRecorder(w2)}
+	st := &agent.State{Model: m, Tokens: tokens.New(m)}
+	branch, warns := r.restoreState(set, reg, st, nil)
+	require.Empty(t, warns)
+	assert.Nil(t, branch) // the fresh root holds no history yet, nothing to replay
+
+	// the run leads the root with the model it starts it with
+	after := readEntriesRewind(t, p)
+	last := after[len(after)-1]
+	require.Equal(t, session.TypeModelChange, last.Type)
+	assert.Empty(t, last.ParentID)
+	var md session.ModelData
+	require.NoError(t, last.Decode(&md))
+	assert.Equal(t, "p/a", md.Model)
+	require.Equal(t, last.ID, w2.Head()) // the next append chains from the lead
+
+	// the next prompt starts the root's own chain, holding none of the trunk
+	kickoff, err := w2.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "kickoff")})
+	require.NoError(t, err)
+	assert.Equal(t, last.ID, kickoff.ParentID)
+
+	root := session.Branch(readEntriesRewind(t, p), kickoff.ID)
+	require.Len(t, root, 2) // the model_change lead plus the kickoff
+	rebuilt, wwarns := session.State(root, modelResolver(reg))
+	assert.Empty(t, wwarns)
+	assert.Equal(t, "p/a", rebuilt.Model.Key())
+	require.Len(t, rebuilt.Messages, 1)
+}
+
+func TestResumeModellessRoot(t *testing.T) {
+	t.Parallel()
+
+	reg, warnings := llm.NewRegistry(llm.File{
+		Providers: map[string]llm.ProviderConfig{"p": {Models: []llm.ModelConfig{{ID: "a"}}}},
+	}, nil, llm.RegistryOptions{})
+	require.Empty(t, warnings)
+
+	// a root chain with no lead model_change: the shape a pre-fix build wrote
+	// when a fork-to-empty resume mis-followed the abandoned branch
+	p := filepath.Join(t.TempDir(), "2026-01-02T03-04-05Z-root.jsonl")
+	w, err := session.Create(p, session.SessionData{Version: session.Version()})
+	require.NoError(t, err)
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "trunk")})
+	require.NoError(t, err)
+	w.SetHead("")
+	_, err = w.Append(session.TypeMessage,
+		session.MessageData{Message: llm.Text(llm.RoleUser, "kickoff")})
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+
+	w2, err := session.Open(p)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = w2.Close() })
+	require.NotEmpty(t, w2.Head()) // the cursor is buried, the tail continues
+
+	set, _, err := config.Load(config.Options{
+		Workspace: t.TempDir(),
+		Env:       func(string) string { return "" },
+	})
+	require.NoError(t, err)
+
+	m, err := reg.Resolve("p/a")
+	require.NoError(t, err)
+	r := &sessRec{w: w2, rec: session.NewRecorder(w2)}
+	st := &agent.State{Model: m, Tokens: tokens.New(m)}
+	branch, warns := r.restoreState(set, reg, st, nil)
+	require.Empty(t, warns)
+	require.Len(t, branch, 1) // the new root's own chain, the trunk unreachable
+
+	// the branch named no model: the ledger is framed against the live one
+	// rather than rebuilt window-less
+	cs := st.Tokens.Context()
+	assert.Equal(t, m.ContextWindow, cs.Window)
+	assert.Equal(t, m.Key(), st.Model.Key())
+	assert.Len(t, st.Messages, 1)
+}
+
 func TestOpenSessionAdoptsPreResolution(t *testing.T) {
 	t.Parallel()
 

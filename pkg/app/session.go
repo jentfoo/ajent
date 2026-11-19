@@ -607,6 +607,11 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 		return nil, nil
 	}
 	head := resumeHead(r.w.Head(), entries)
+	// a fresh root leads with a model_change like every fork writes, so a later
+	// resume resolves the branch instead of the config default
+	if head == "" && st.Model.ID != "" {
+		r.rec.ModelChange(st.Model, "resume")
+	}
 	branch := session.Branch(entries, head)
 	// stamp the threshold before state resolution so the trigger and context bar
 	// read one number after resume. permissions.mode is dropped (even when an older
@@ -621,6 +626,11 @@ func (r *sessRec) restoreState(set *config.Set, reg *llm.Registry, st *agent.Sta
 	rebuilt, warns := session.State(branch, modelResolver(reg))
 	if len(rebuilt.Messages) == 0 && rebuilt.Model.ID == "" {
 		return nil, append(rwarns, warns...) // a brand-new transcript carries no history yet
+	}
+	if rebuilt.Model.ID == "" && st.Model.ID != "" {
+		// a branch written before its lead model_change: frame the ledger against
+		// the live one rather than leaving a zero window, the rule a switch applies
+		rebuilt.Tokens.SetWindow(st.Model)
 	}
 	st.Messages = rebuilt.Messages
 	if rebuilt.Model.ID != "" {
@@ -802,8 +812,11 @@ func (r *sessRec) restoreForkModel(ui *hubUI, ag *agent.Agent, reg *llm.Registry
 	return nil
 }
 
+// resumeHead reports the head a resume rebuild follows: the writer's live
+// head wins as-is, empty included, since it is a resolved new-root cursor not
+// a missing one. The file tail answers only for a live head entries lack.
 func resumeHead(live string, entries []session.Entry) string {
-	if live != "" && slices.ContainsFunc(entries, func(e session.Entry) bool { return e.ID == live }) {
+	if live == "" || slices.ContainsFunc(entries, func(e session.Entry) bool { return e.ID == live }) {
 		return live
 	}
 	return session.Head(entries)
