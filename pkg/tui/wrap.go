@@ -35,16 +35,14 @@ func cells(s string) []cell {
 	}
 	out := make([]cell, 0, n)
 
-	var active strings.Builder
-	var style string
+	var style string // concat only: a Builder's String() aliases memory later writes reuse
 	for _, seg := range split {
 		if seg.escape {
 			if seg.text == sgrReset {
-				active.Reset()
+				style = ""
 			} else {
-				active.WriteString(seg.text)
+				style += seg.text
 			}
-			style = active.String() // aliases the builder, which Reset replaces wholesale
 			continue
 		}
 		out = appendCells(out, seg.text, style)

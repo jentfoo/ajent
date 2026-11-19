@@ -149,6 +149,16 @@ func TestWrapLineStyled(t *testing.T) {
 		assert.Contains(t, joined.String(), "strong")
 		assert.Contains(t, rows[0]+rows[1], bold.Open())
 	})
+
+	t.Run("spans_keep_own_style_across_rows", func(t *testing.T) {
+		// a reset between spans must not retroactively restyle the first span,
+		// even when the wrap cuts both onto separate rows
+		line := "\x1b[3mone\x1b[0m\x1b[4mtwo"
+		rows := wrapLine(line, 5)
+		require.Len(t, rows, 2)
+		assert.Equal(t, "\x1b[3mone\x1b[0m\x1b[4mtw\x1b[0m", rows[0])
+		assert.Equal(t, "\x1b[4mo\x1b[0m", rows[1])
+	})
 }
 
 func TestHardWrap(t *testing.T) {
@@ -252,6 +262,43 @@ func TestCells(t *testing.T) {
 		assert.Empty(t, cs[0].style)
 		assert.Equal(t, "\x1b[1m", cs[1].style)
 		assert.Empty(t, cs[2].style)
+	})
+
+	t.Run("styles_survive_reset", func(t *testing.T) {
+		// two spans separated by a reset keep their own SGR opens
+		cs := cells("\x1b[3mab\x1b[0m\x1b[4mcd")
+		require.Len(t, cs, 4)
+		for _, c := range cs[:2] {
+			assert.Equal(t, "\x1b[3m", c.style)
+		}
+		for _, c := range cs[2:] {
+			assert.Equal(t, "\x1b[4m", c.style)
+		}
+	})
+
+	t.Run("reset_never_rewrites_earlier_style", func(t *testing.T) {
+		// a shorter open after the reset must not splice parameter bytes into
+		// the longer style captured before it
+		cs := cells("\x1b[38;5;180mcode\x1b[0m more \x1b[3mem")
+		require.Len(t, cs, 12)
+		for _, c := range cs[:4] {
+			assert.Equal(t, "\x1b[38;5;180m", c.style)
+		}
+		for _, c := range cs[4:10] {
+			assert.Empty(t, c.style)
+		}
+		for _, c := range cs[10:] {
+			assert.Equal(t, "\x1b[3m", c.style)
+		}
+	})
+
+	t.Run("accumulates_opens_until_reset", func(t *testing.T) {
+		cs := cells("a\x1b[3mb\x1b[1mc\x1b[0md")
+		require.Len(t, cs, 4)
+		assert.Empty(t, cs[0].style)
+		assert.Equal(t, "\x1b[3m", cs[1].style)
+		assert.Equal(t, "\x1b[3m\x1b[1m", cs[2].style)
+		assert.Empty(t, cs[3].style)
 	})
 
 	t.Run("measures_width", func(t *testing.T) {
