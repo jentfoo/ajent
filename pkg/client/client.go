@@ -44,9 +44,10 @@ type Conn struct {
 	nextID  int
 	waiters map[string]chan ctl.Reply
 
-	once    sync.Once
-	done    chan struct{}
-	deadErr error
+	doneMu   sync.Mutex // guards the finish state below
+	done     chan struct{}
+	finished bool
+	deadErr  error
 }
 
 // Dial connects to the unix socket at path and reads its hello, refusing a
@@ -380,14 +381,18 @@ func (c *Conn) AgentsStop(ctx context.Context, params ctl.AgentsStopParams) (ctl
 	return res, err
 }
 
-// finish marks the connection dead exactly once.
+// finish marks the connection dead exactly once; the first error wins.
 func (c *Conn) finish(err error) {
-	c.once.Do(func() {
-		if err != nil {
-			c.deadErr = err
-		}
-		close(c.done)
-	})
+	c.doneMu.Lock()
+	defer c.doneMu.Unlock()
+	if c.finished {
+		return
+	}
+	c.finished = true
+	if err != nil {
+		c.deadErr = err
+	}
+	close(c.done)
 }
 
 // Done closes when Serve returned.
@@ -397,7 +402,8 @@ func (c *Conn) Done() <-chan struct{} { return c.done }
 // closed the socket cleanly, nil while Serve still runs. Whether a clean close
 // was an end or a loss follows session.exit, not this error.
 func (c *Conn) Err() error {
-	c.once.Do(func() {}) // synchronize with finish's write
+	c.doneMu.Lock()
+	defer c.doneMu.Unlock()
 	return c.deadErr
 }
 

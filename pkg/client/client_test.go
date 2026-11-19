@@ -3,6 +3,8 @@ package client
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -342,6 +344,50 @@ func TestCloseWakesCallers(t *testing.T) {
 
 	err := <-errCh
 	require.Error(t, err)
+}
+
+func TestErrMidServeKeepsFinishArmed(t *testing.T) {
+	t.Parallel()
+	f := newFakeSession(t)
+	conn, _, _ := f.dial(t)
+
+	require.NoError(t, conn.Err())
+
+	conn.Close() // Serve's read fails into finish
+
+	select {
+	case <-conn.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done() never closed after an early Err() call")
+	}
+	assert.Error(t, conn.Err())
+}
+
+func TestErrConcurrentWithFinish(t *testing.T) {
+	t.Parallel()
+	c := &Conn{done: make(chan struct{})}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-c.Done():
+					return
+				default:
+					_ = c.Err()
+				}
+			}
+		}()
+	}
+
+	c.finish(io.EOF)
+	wg.Wait()
+
+	c.finish(errors.New("second")) // a late finish never re-closes or overwrites
+	assert.ErrorIs(t, c.Err(), io.EOF)
 }
 
 func TestQueueRecall(t *testing.T) {
