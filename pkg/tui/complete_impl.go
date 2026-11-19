@@ -110,17 +110,22 @@ func (o *completionOverlay) rows(t Theme, width, maxRows int) []string {
 }
 
 // detailRows renders one candidate per line with its dim trailing detail,
-// marking the highlight in a menu.
+// marking the highlight in a menu. The window scrolls with the cursor, so
+// Enter and Tab accept a rendered row.
 func (o *completionOverlay) detailRows(t Theme, width, maxRows int) ([]string, int) {
-	n, more := fitRows(len(o.items), maxRows, 1)
+	n, _ := fitRows(len(o.items), maxRows, 1)
+	start, end := windowFor(o.cursor, len(o.items), n)
 	rows := make([]string, 0, maxRows)
-	for i, c := range o.items[:n] {
+	for i := start; i < end; i++ {
+		c := o.items[i]
 		rows = append(rows, listRow(t, o.menu && i == o.cursor, "", c.Label, c.Detail, width))
 	}
-	return rows, more
+	return rows, len(o.items) - (end - start)
 }
 
 // columnRows packs the labels into equal-width columns, filling row by row.
+// A tab-driven listing holds no selection: its cursor never moves, so the
+// head window needs no scrolling.
 func (o *completionOverlay) columnRows(t Theme, width, maxRows int) ([]string, int) {
 	colW := completionGap
 	for _, c := range o.items {

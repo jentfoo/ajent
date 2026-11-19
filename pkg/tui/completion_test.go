@@ -188,6 +188,38 @@ func TestCompletionMenu(t *testing.T) {
 	})
 }
 
+func TestCompletionMenuOverflow(t *testing.T) {
+	t.Parallel()
+
+	// three menu rows on this terminal: two candidates plus the "... N more" footer
+	items := itemsOf("/cmd0", "/cmd1", "/cmd2", "/cmd3", "/cmd4", "/cmd5", "/cmd6", "/cmd7")
+
+	v := newVT(80, 12)
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	u := newTestUI(t, v, pr)
+	u.SetCompleter(fakeMenuCompleter{items: items})
+
+	press(t, pw, "/")
+	require.Eventually(t, func() bool {
+		return strings.Contains(u.snapshot(v), "> /cmd0") && strings.Contains(u.snapshot(v), "... 6 more")
+	}, time.Second, testPoll)
+
+	press(t, pw, "\x1b[B\x1b[B\x1b[B\x1b[B") // ↓ ↓ ↓ ↓ walks past the rendered head
+	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "> /cmd4") }, time.Second, testPoll)
+	assert.NotContains(t, u.snapshot(v), "/cmd0")
+	assert.Contains(t, u.snapshot(v), "... 6 more")
+
+	// Enter accepts the highlighted row, which is the one on screen
+	press(t, pw, "\r")
+	select {
+	case msg := <-u.Messages():
+		assert.Equal(t, "/cmd4", msg)
+	case <-time.After(time.Second):
+		t.Fatal("Enter must accept the highlighted candidate")
+	}
+}
+
 // fakeAtCompleter mimics a path source, replacing from just past the @.
 type fakeAtCompleter struct{ items []Completion }
 

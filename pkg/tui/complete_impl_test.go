@@ -85,6 +85,58 @@ func TestCompletionOverlayRows(t *testing.T) {
 		rows := l.rows(theme, 40, 4)
 		assert.Equal(t, []string{"  aa", "> bb"}, rows)
 	})
+
+	// more candidates than rows scroll the window with the highlight
+	t.Run("menu_scrolls_to_the_cursor", func(t *testing.T) {
+		l := &completionOverlay{menu: true, items: itemsOf("aa", "bb", "cc", "dd", "ee", "ff"), cursor: 4}
+
+		rows := l.rows(theme, 40, 3)
+		assert.Equal(t, []string{"  dd", "> ee", "  ... 4 more"}, rows)
+	})
+
+	// ↑ from the first item wraps to the tail and the window follows
+	t.Run("menu_wraps_to_the_tail", func(t *testing.T) {
+		l := &completionOverlay{menu: true, items: itemsOf("aa", "bb", "cc", "dd", "ee", "ff")}
+		l.move(-1)
+
+		rows := l.rows(theme, 40, 3)
+		assert.Equal(t, []string{"  ee", "> ff", "  ... 4 more"}, rows)
+	})
+
+	// every cursor position keeps exactly one rendered highlight
+	t.Run("menu_highlight_stays_visible", func(t *testing.T) {
+		l := &completionOverlay{menu: true, items: itemsOf("aa", "bb", "cc", "dd", "ee", "ff")}
+		for i := range l.items {
+			l.cursor = i
+
+			rows := l.rows(theme, 40, 3)
+			require.Len(t, rows, 3)
+			assert.Contains(t, rows[:2], "> "+l.items[i].Label)
+		}
+	})
+}
+
+func TestFitRows(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		total, max, per   int
+		expShown, expMore int
+	}{
+		{"all_fit", 3, 4, 1, 3, 0},
+		{"exact_fit", 4, 4, 1, 4, 0},
+		{"overflow_reserves_a_row", 6, 3, 1, 2, 4},
+		{"columns_overflow", 9, 2, 3, 3, 6},
+		{"single_row_shows_none", 5, 1, 1, 0, 5},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			shown, more := fitRows(tc.total, tc.max, tc.per)
+			assert.Equal(t, tc.expShown, shown)
+			assert.Equal(t, tc.expMore, more)
+		})
+	}
 }
 
 func itemsOf(labels ...string) []Completion {
