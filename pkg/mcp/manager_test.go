@@ -1428,23 +1428,36 @@ func TestReconnectCaptureEra(t *testing.T) {
 		t.Fatal("reload re-registration never reached its swap")
 	}
 
-	// the child dies inside the window: the capture must classify the standing
-	// split against era A, so nothing pins era-A defaults over era B
-	mgr.reconnect(s, s.client())
-
-	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
-		assert.Equal(t, StateDisabled, mustState(pr.fakeRegistrar, "fake__"+n))
-	}
-
-	// the parked pass holds a client the reconnect closed, so its own revert
-	// empties the source rather than leaving dead-client tools registered
+	// the child dies inside the pass's window: the death's capture takes the
+	// same registration lock, so it must stay parked behind the pass. A
+	// successor install landing inside the window is exactly what a source-wide
+	// revert could wipe
+	dead := s.client()
+	go mgr.reconnect(s, dead)
+	require.Never(t, func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return s.down || s.c != dead
+	}, 400*time.Millisecond, 10*time.Millisecond)
 	close(pr.release)
+
+	// the death then unregisters the pass's fresh registration (bound to the
+	// client it closes) and the loop re-registers under era B: everything off,
+	// nothing pinned from era A, and the successor's registration stands. The
+	// new-client gate matters: while the death sits parked the pass's own swap
+	// would satisfy every other condition
 	require.Eventually(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		return !s.rediscovering
-	}, 5*time.Second, 10*time.Millisecond)
-	assert.Empty(t, pr.AllNames("mcp: fake"))
+		return s.c != nil && s.c != dead && !s.down && !s.rediscovering
+	}, 10*time.Second, 20*time.Millisecond)
+	for _, n := range []string{"tool_00", "tool_01", "tool_02"} {
+		assert.Equal(t, StateDisabled, mustState(pr.fakeRegistrar, "fake__"+n))
+	}
+	assert.Len(t, pr.AllNames("mcp: fake"), 3)
+	require.Never(t, func() bool {
+		return len(pr.AllNames("mcp: fake")) == 0
+	}, 300*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestReconnectAfterDeath(t *testing.T) {

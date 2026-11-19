@@ -81,7 +81,7 @@ type server struct {
 
 	mu sync.Mutex // sole guard for every mutable field above, m.mu covers only the servers map
 
-	regMu  sync.Mutex   // pairs each registration swap with its era record, captures read both as one
+	regMu  sync.Mutex   // serializes swaps with era captures and installScan's whole check→revert window
 	regEra ServerConfig // config that produced the source's current registration
 }
 
@@ -386,12 +386,19 @@ func (m *Manager) dropped(name string, s *server) bool {
 // deliberate /tools toggles captured before a refresh, layered over the current
 // config's defaults. Tools absent from keep follow those defaults.
 func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState) {
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
+	m.registerLocked(s, c, defs, keep)
+}
+
+// registerLocked is register for a caller already holding regMu, so installScan
+// can span its whole check → install → revert window as one critical section.
+func (m *Manager) registerLocked(s *server, c *Client, defs []ToolDef, keep *toolState) {
 	cfg := s.config()
 	defs = filterTools(defs, cfg.Tools, cfg.ExcludeTools)
 	dur := time.Duration(cfg.Timeout)
 
-	// regMu spans the era write and the swap, so a capture never mixes generations
-	s.regMu.Lock()
+	// the era write and the swap are one critical section, so a capture never mixes generations
 	s.regEra = cfg
 	for _, d := range defs {
 		n := s.name + "__" + d.Name
@@ -418,7 +425,6 @@ func (m *Manager) register(s *server, c *Client, defs []ToolDef, keep *toolState
 	if ro := readOnlyOf(defs, s.name); len(ro) > 0 { // sub-agent publication metadata
 		m.opts.Registrar.MarkReadOnly(ro)
 	}
-	s.regMu.Unlock()
 
 	s.mu.Lock()
 	s.defs = defs
@@ -845,18 +851,23 @@ func (m *Manager) rediscan(ctx context.Context, s *server, keep *toolState) {
 }
 
 // installScan replaces a source's registration with defs discovered from c,
-// layering keep over current defaults as register does. A disconnect, death or
-// Close sweep landing mid-scan still wins: the pass bails instead of touching a
-// successor's registration and compensates its own fresh one if preemption
-// landed during the swap, so no tool bound to a closed client stays registered.
+// layering keep over current defaults as register does. regMu spans the whole
+// check → install → revert window, so the pass is the source's sole
+// registration writer inside it: a disconnect landing mid-swap still wins, and
+// the source-wide revert can only tear out the pass's own fresh registration,
+// since a death or successor dial serializes behind the pass.
 func (m *Manager) installScan(s *server, c *Client, defs []ToolDef, keep *toolState) {
+	s.regMu.Lock()
+	defer s.regMu.Unlock()
 	if !s.stillServing(c) { // replaced or disconnected mid-list: what stands in the registry now stays
 		return
 	}
 	m.opts.Registrar.Unregister(s.source)
-	m.register(s, c, defs, keep)
+	m.registerLocked(s, c, defs, keep)
 	// a disconnect landing during the swap already unregistered under us, so this
-	// fresh registration must be torn back out (dial's post-check-and-revert)
+	// fresh registration must be torn back out (dial's post-check-and-revert). A
+	// successor cannot own the source here: its registration parks behind regMu
+	// until this window closes
 	if !s.stillServing(c) {
 		m.opts.Registrar.Unregister(s.source)
 		m.updateStatus() // registration removed, the ratio must follow
