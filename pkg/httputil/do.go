@@ -151,9 +151,11 @@ func doAttempt(ctx context.Context, hc *http.Client, r Request, h callHooks, att
 		Header: redactHeaders(req.Header), Status: resp.StatusCode, Attempt: attemptNum,
 		Duration: h.now().Sub(start)})
 
+	// every body read rides the idle bound, so a stalled stream cannot hang Do
+	resp.Body = wrapIdle(resp.Body, r.Timeouts.Idle, h.afterFunc)
+
 	// 304 counts as success so a conditional discovery refetch is not an error
 	if (resp.StatusCode >= 200 && resp.StatusCode < 300) || resp.StatusCode == http.StatusNotModified {
-		resp.Body = wrapIdle(resp.Body, r.Timeouts.Idle, h.afterFunc)
 		return resp, 0, nil
 	}
 

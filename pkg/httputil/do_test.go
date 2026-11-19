@@ -418,6 +418,36 @@ func TestDo(t *testing.T) {
 		assert.Len(t, *slept, 3)
 	})
 
+	t.Run("stalled_error_body_unblocks", func(t *testing.T) {
+		srv, _ := countingServer(t, func(w http.ResponseWriter, req *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, "partial")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-req.Context().Done() // hold the body open without finishing it
+		})
+
+		r, hc, _, _ := testRequest(t, srv.URL)
+		r.Timeouts.Idle = dur(100 * time.Millisecond)
+		var got string
+		r.Error = func(_ int, body []byte, _ time.Duration) (error, bool) {
+			got = string(body)
+			return context.Canceled, false
+		}
+
+		// the watchdog bounds a regression, where only the caller context
+		// could end the stalled read
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		start := time.Now()
+		_, err := Do(ctx, hc, r)
+
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Contains(t, got, "partial")
+		require.Less(t, time.Since(start), 2*time.Second) // idle bound, not the watchdog, ended the read
+	})
+
 	t.Run("total_timeout_outlives_the_call", func(t *testing.T) {
 		srv, _ := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = io.WriteString(w, "streamed")
