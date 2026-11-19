@@ -28,8 +28,9 @@ type compactor struct {
 	notify      func(msg string, level agent.Level)
 	busy        func() func()
 	providerFor func(llm.Model) (llm.Provider, error)
-	// focus supplies a caller's summariser instructions for automatic runs, but an
-	// explicit /compact <instructions> still wins. nil leaves runs unguided.
+	// focus supplies the plan workflow's summariser instructions for automatic
+	// runs, so a bare /compact inside a phase stays unguided. nil leaves runs
+	// unguided.
 	focus func() string
 	// cfg supplies live compaction settings so a /settings edit takes effect on
 	// the next run; both front ends wire it to their config set
@@ -171,8 +172,8 @@ func (c *compactor) run(ctx context.Context, reason agent.CompactReason, instruc
 	if base == 0 {
 		base = c.st.Tokens.Base() // mid-turn BaseEstimate reports 0, the ledger holds the real value
 	}
-	if instructions == "" && c.focus != nil {
-		instructions = c.focus() // a plan phase keeps its own focus across auto-compaction
+	if instructions == "" && reason != agent.CompactManual && c.focus != nil {
+		instructions = c.focus()
 	}
 	// a fraction outside (0,1) defers to pkg/compact's own default bound
 	vt := 0

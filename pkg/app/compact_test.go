@@ -1177,6 +1177,67 @@ func TestCompactorAutoSetting(t *testing.T) {
 	})
 }
 
+// summariserPrompt flattens the user prompt of every request the scripted
+// provider recorded, so assertions can look for the focus line anywhere.
+func summariserPrompt(sp *llm.ScriptedProvider) string {
+	var sb strings.Builder
+	for _, req := range sp.Requests() {
+		sb.WriteString(textOfMain(req.Messages[0]))
+	}
+	return sb.String()
+}
+
+func TestCompactorFocus(t *testing.T) {
+	t.Parallel()
+
+	const focus = "follow the plan's implementation focus"
+	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 100}
+
+	setup := func(t *testing.T) (*compactor, *llm.ScriptedProvider) {
+		t.Helper()
+
+		sp := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textStream(fullSummary)}}}
+		c, st, w := testCompactor(t, model, sp)
+		c.cfg = func() config.Compaction {
+			return config.Compaction{Auto: true, MinSteps: 1, VerbatimFraction: 0.1}
+		}
+		c.focus = func() string { return focus }
+		appendText(t, w, llm.RoleUser, "read me a short story")
+		appendSteps(t, w, 6)
+		st.Tokens.Add(7000) // past the compaction point so the automatic gates pass
+		return c, sp
+	}
+
+	t.Run("bare_manual_stays_unguided", func(t *testing.T) {
+		c, sp := setup(t)
+
+		did, err := c.run(t.Context(), agent.CompactManual, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.NotContains(t, summariserPrompt(sp), "Additional focus:")
+	})
+
+	t.Run("auto_run_keeps_focus", func(t *testing.T) {
+		c, sp := setup(t)
+
+		did, err := c.run(t.Context(), agent.CompactStep, "")
+		require.NoError(t, err)
+		require.True(t, did)
+		assert.Contains(t, summariserPrompt(sp), "Additional focus: "+focus)
+	})
+
+	t.Run("manual_instructions_win", func(t *testing.T) {
+		c, sp := setup(t)
+
+		did, err := c.run(t.Context(), agent.CompactManual, "keep the file paths")
+		require.NoError(t, err)
+		require.True(t, did)
+		prompt := summariserPrompt(sp)
+		assert.Contains(t, prompt, "Additional focus: keep the file paths")
+		assert.NotContains(t, prompt, focus)
+	})
+}
+
 func TestCompactorProviderError(t *testing.T) {
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 8000, MaxOutput: 1000}
 

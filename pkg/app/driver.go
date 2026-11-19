@@ -661,8 +661,8 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		cmds.Register(c)
 	}
 	if ctl != nil && comp != nil {
-		// automatic compaction inside a phase keeps its own focus, but an explicit
-		// /compact <instructions> still wins.
+		// automatic compaction inside a phase keeps its own focus; a manual /compact,
+		// bare or instructed, never inherits it.
 		comp.focus = ctl.Focus
 	}
 	expander.Seed(st.Messages) // a resumed transcript already holds ref ids
