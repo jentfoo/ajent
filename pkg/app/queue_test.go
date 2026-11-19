@@ -326,10 +326,11 @@ func TestSteerQueue(t *testing.T) {
 		assert.Equal(t, []string{"typed", "typed two"}, fake.echoed)
 	})
 
-	t.Run("controller_joins_user_run", func(t *testing.T) {
-		// a controller submit is a user line with an origin, never injected:
-		// it joins the same run its typed neighbours form, so grouping, echo
-		// and recall stay truthful
+	t.Run("controller_runs_keep_origin", func(t *testing.T) {
+		// a controller submit is an ordinary user line carrying provenance: its
+		// run hands back the origin the direct dispatch records, so the queued
+		// entry does not land as a plain typed message. It never merges into a
+		// typed run, where one entry could not name both submitters
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
 		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
@@ -337,14 +338,24 @@ func TestSteerQueue(t *testing.T) {
 		q.offer(agent.Input{Text: "seed"}, "seed", 1) // starts the drain, not queued
 		require.True(t, q.offer(agent.Input{Text: "typed"}, "typed", 1))
 		require.True(t, q.offer(agent.Input{Text: "remote", Origin: "controller"}, "remote", 1))
+		require.True(t, q.offer(agent.Input{Text: "remote two", Origin: "controller"}, "remote two", 1))
+		require.True(t, q.offer(agent.Input{Text: "typed two"}, "typed two", 1))
 
 		runs := q.pull()
-		require.Len(t, runs, 1)
+		require.Len(t, runs, 3)
+		assert.Empty(t, runs[0].Origin) // the typed run records as locally typed
 		assert.False(t, runs[0].Injected)
-		assert.Equal(t, "typed\n\nremote", runs[0].Text)
+		assert.Equal(t, "typed", runs[0].Text)
+		assert.Equal(t, "controller", runs[1].Origin)
+		assert.False(t, runs[1].Injected) // still an ordinary user message to the model
+		assert.Equal(t, "remote\n\nremote two", runs[1].Text)
+		assert.Empty(t, runs[2].Origin) // typed after controller starts a fresh run
+		assert.Equal(t, "typed two", runs[2].Text)
 
 		runs[0].Delivered()
-		assert.Equal(t, []string{"typed\n\nremote"}, fake.echoed)
+		runs[1].Delivered()
+		runs[2].Delivered()
+		assert.Equal(t, []string{"typed", "remote\n\nremote two", "typed two"}, fake.echoed)
 	})
 
 	t.Run("join_chains_afters_per_run", func(t *testing.T) {

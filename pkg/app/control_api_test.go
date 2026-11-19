@@ -335,16 +335,9 @@ func TestControlSubmit(t *testing.T) {
 
 		// the submitted prompt reached the transcript carrying its controller
 		// origin, byte-identical to the typed text: no marker rides the message
-		var origins []string
-		for _, e := range rigBranch(t, rig.rec) {
-			if e.Type != session.TypeMessage {
-				continue
-			}
-			var md session.MessageData
-			require.NoError(t, json.Unmarshal(e.Data, &md))
-			if md.Message.Role != llm.RoleUser || llm.OnlyToolResults(md.Message.Content) {
-				continue // tool results ride user rows without being prompts
-			}
+		prompts := userPrompts(t, rig)
+		origins := make([]string, 0, len(prompts))
+		for _, md := range prompts {
 			text, ok := md.Message.Content[0].(llm.TextBlock)
 			require.True(t, ok)
 			assert.Equal(t, "first", text.Text)
@@ -356,6 +349,69 @@ func TestControlSubmit(t *testing.T) {
 		}
 		assert.Equal(t, []string{submitOriginController}, origins)
 	})
+
+	t.Run("queued_submit_records_origin", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "driver")
+
+		entered := make(chan struct{})
+		release := make(chan struct{})
+		prov := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: mainToolTurn()},   // the held call: pins the first turn inside its tool
+			{Events: textTurn("done")}, // the held turn closes after its tool returns
+			{Events: textTurn("done")}, // the queued prompt's own turn
+		}}
+		wireControlPump(t, rig, prov, holdBash{release: release, entered: entered})
+
+		// the first submit drives a turn pinned inside its tool call
+		rp := c.call("s1", ctl.MethodSubmit, map[string]any{"line": "first"})
+		require.Nil(t, rp.Error)
+		<-entered
+
+		// a submit behind the running turn queues, and delivers only once the
+		// held tool returns and the turn closes
+		rp = c.call("s2", ctl.MethodSubmit, map[string]any{"line": "second", "pendingId": "ctl-row-1"})
+		require.Nil(t, rp.Error)
+		c.collect(ctl.EventQueued, 1)
+
+		close(release)
+		c.collect(ctl.EventTurnEnd, 2) // the held turn and the queued prompt's turn
+
+		// both prompts reach the transcript with their controller origin: the
+		// queued one through the queue join, proving it does not strip provenance
+		prompts := userPrompts(t, rig)
+		texts := make([]string, 0, len(prompts))
+		origins := make([]string, 0, len(prompts))
+		for _, md := range prompts {
+			text, ok := md.Message.Content[0].(llm.TextBlock)
+			require.True(t, ok)
+			texts = append(texts, text.Text)
+			origins = append(origins, md.Origin)
+		}
+		assert.Equal(t, []string{"first", "second"}, texts)
+		assert.Equal(t, []string{submitOriginController, submitOriginController}, origins)
+	})
+}
+
+// userPrompts returns the branch's user messages in transcript order, skipping
+// the tool-result rows that ride user entries without being prompts.
+func userPrompts(t *testing.T, rig *controlRig) []session.MessageData {
+	t.Helper()
+	var out []session.MessageData
+	for _, e := range rigBranch(t, rig.rec) {
+		if e.Type != session.TypeMessage {
+			continue
+		}
+		var md session.MessageData
+		require.NoError(t, json.Unmarshal(e.Data, &md))
+		if md.Message.Role != llm.RoleUser || llm.OnlyToolResults(md.Message.Content) {
+			continue
+		}
+		out = append(out, md)
+	}
+	return out
 }
 
 // wireControlPump wires the driver's submit path over a serve-shaped rig:

@@ -160,10 +160,11 @@ func (s *steerQueue) hold(in agent.Input, label string, est int) {
 }
 
 // join splits the queue into contiguous provenance runs (caller holds the
-// lock): items sharing an Injected value merge into one input, texts joined by
+// lock): items sharing Injected and Origin merge into one input, texts joined by
 // a blank line, Before blocks and After resolvers chained in submit order. A
-// provenance change starts a new input, so a mixed user + system batch keeps
-// per-item attribution on the transcript rows instead of one OR-ed flag. The
+// provenance change starts a new input, so a mixed batch keeps per-item
+// attribution on the transcript rows instead of one OR-ed flag, and a queued
+// controller submit records the origin its direct dispatch would. The
 // final run clears accounting once everything behind it has landed. Each run
 // echoes its labels and images as its message lands, so Input.Echo is never
 // carried: a loop-side echo too would draw twice. Blocks concatenate in queue order
@@ -181,9 +182,11 @@ func (s *steerQueue) join() []agent.Input {
 		return &runs[len(runs)-1]
 	}
 	for _, it := range s.items {
-		if len(runs) == 0 || cur().in.Injected != it.input.Injected {
+		if len(runs) == 0 || cur().in.Injected != it.input.Injected ||
+			cur().in.Origin != it.input.Origin {
 			runs = append(runs, runAcc{
-				in: agent.Input{Injected: it.input.Injected, Prepared: it.input.Prepared}})
+				in: agent.Input{Injected: it.input.Injected, Prepared: it.input.Prepared,
+					Origin: it.input.Origin}})
 		}
 		r := cur()
 		r.merged++
