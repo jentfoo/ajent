@@ -120,6 +120,11 @@ func Prepare(data []byte) (Result, error) {
 		if !ok || c2.Width <= 0 || c2.Height <= 0 {
 			return Result{}, ErrUnsupported
 		}
+		// the outer guard saw only the VP8X canvas: the bare frame carries none,
+		// so its header dims face the decode budget themselves
+		if tooManyPixels(c2.Width, c2.Height) {
+			return Result{}, ErrTooLarge
+		}
 		data, mediaType, cfg = frame, mt, c2
 	}
 	flattened := frames > 0

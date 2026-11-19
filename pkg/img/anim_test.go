@@ -162,6 +162,16 @@ func anmfPayload(still []byte) []byte {
 	return append(make([]byte, 16), still[12:]...)
 }
 
+// vp8lStill wraps a five-byte VP8L header claiming w by h pixels as a bare
+// still webp: enough for sniff, which reads the header only.
+func vp8lStill(w, h int) []byte {
+	u := uint32(w-1) | uint32(h-1)<<14 // dims ride as two 14-bit fields
+	payload := append([]byte{0x2f}, byte(u), byte(u>>8), byte(u>>16), byte(u>>24))
+	body := append([]byte("WEBP"), riffChunk("VP8L", payload)...)
+	out := binary.LittleEndian.AppendUint32([]byte("RIFF"), uint32(len(body)))
+	return append(out, body...)
+}
+
 // riffChunk frames one payload as a RIFF chunk, padded to an even size.
 func riffChunk(fourCC string, payload []byte) []byte {
 	out := binary.LittleEndian.AppendUint32([]byte(fourCC), uint32(len(payload)))
@@ -237,6 +247,28 @@ func TestPrepareAnimatedWebPOversizeCanvas(t *testing.T) {
 	assert.Equal(t, typePNG, res.MediaType)
 	assert.True(t, res.Flattened)
 	assert.Equal(t, 2, res.Frames)
+}
+
+func TestPrepareAnimatedWebPOversizeFrame(t *testing.T) {
+	t.Parallel()
+
+	// the VP8L header tops out at 16383 per axis: ~268M pixels claimed on a tiny
+	// file, over the decode budget and refused before any memory is promised
+	const w, h = 16383, 16383
+
+	t.Run("bare_still_refused", func(t *testing.T) {
+		// no canvas to hide behind: the outer guard sees the claim itself
+		_, err := Prepare(vp8lStill(w, h))
+		require.ErrorIs(t, err, ErrTooLarge)
+	})
+
+	// a tiny VP8X canvas must not launder an oversized frame header: the
+	// extraction re-sniff faces the same pixel budget as any other input
+	t.Run("frame_inside_anmf", func(t *testing.T) {
+		src := buildAnimatedWebP(t, 100, 50, anmfPayload(vp8lStill(w, h)))
+		_, err := Prepare(src)
+		require.ErrorIs(t, err, ErrTooLarge)
+	})
 }
 
 func TestPrepareAnimatedWebPUnreadable(t *testing.T) {
