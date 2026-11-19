@@ -570,6 +570,17 @@ func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
 	}
 }
 
+// entryWrapped reports whether the stored registry entry under name is the
+// generic bound wrapper rather than the raw tool.
+func entryWrapped(r *Registry, name string) bool {
+	rt, ok := r.findLocked(name)
+	if !ok {
+		return false
+	}
+	_, wrapped := rt.tool.(*boundTool)
+	return wrapped
+}
+
 // stubTool returns a fixed result, so tests can drive the generic output bound.
 type stubTool struct {
 	name string
@@ -712,10 +723,7 @@ func TestRegistryGenericOutputBound(t *testing.T) {
 	t.Run("self_bounding_tool_unwrapped", func(t *testing.T) {
 		r := New()
 		r.Register(&readTool{policy: PathPolicy{Cwd: t.TempDir()}, tracker: NewTracker()}, true)
-		for _, rt := range r.tools {
-			_, wrapped := rt.tool.(*boundTool)
-			assert.False(t, wrapped, rt.tool.Name())
-		}
+		assert.False(t, entryWrapped(r, "read"))
 	})
 }
 
@@ -738,11 +746,7 @@ func TestRegistryWrappedToolProbes(t *testing.T) {
 	r.Register(&probeStub{stubTool{name: "pv"}}, true)
 
 	// the registry wrapped it: the precondition of this whole test
-	var wrapped bool
-	for _, rt := range r.tools {
-		_, wrapped = rt.tool.(*boundTool)
-	}
-	require.True(t, wrapped, "probeStub must be wrapped for this test to mean anything")
+	require.True(t, entryWrapped(r, "pv"), "probeStub must be wrapped for this test to mean anything")
 
 	t.Run("preview_reaches_inner", func(t *testing.T) {
 		ch, ok := r.Preview(agent.ToolCall{Name: "pv"})
@@ -763,5 +767,40 @@ func TestRegistryWrappedToolProbes(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, d.calls, 1)
 		assert.Equal(t, "/tmp/probe", d.last().Path)
+	})
+}
+
+// closeSpy records whether its Close ran.
+type closeSpy struct {
+	stubTool
+	closed bool
+}
+
+func (c *closeSpy) Close() { c.closed = true }
+
+func TestRegistryCloseFanOut(t *testing.T) {
+	t.Parallel()
+
+	// the wrapper is the stored entry, so teardown must reach through it
+	t.Run("delegates_through_wrapper", func(t *testing.T) {
+		r := New()
+		spy := &closeSpy{stubTool: stubTool{name: "srv__x"}}
+		r.Register(spy, true)
+		require.True(t, entryWrapped(r, "srv__x")) // the precondition of this whole test
+
+		r.Close()
+		assert.True(t, spy.closed)
+	})
+
+	// a SelfBounded tool is stored raw and embeds the interface, so Close
+	// reaches it without any delegation
+	t.Run("self_bounded_reached_directly", func(t *testing.T) {
+		r := New()
+		spy := &closeSpy{stubTool: stubTool{name: "srv__x"}}
+		r.Register(SelfBounded(spy), true)
+		require.False(t, entryWrapped(r, "srv__x"))
+
+		r.Close()
+		assert.True(t, spy.closed)
 	})
 }

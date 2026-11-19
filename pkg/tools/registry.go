@@ -702,7 +702,10 @@ func (b *boundTool) Schema() llm.ToolSchema { return b.t.Schema() }
 func (b *boundTool) Mode() agent.ExecutionMode {
 	return b.t.Mode()
 }
-func (b *boundTool) Close() {}
+
+// Close delegates; the wrapper is the stored registry entry, so teardown
+// must reach through it.
+func (b *boundTool) Close() { b.t.Close() }
 
 // Execute delegates and then bounds each text block's model-visible content.
 // Bounding runs per block so one non-text block cannot disable it for the whole
