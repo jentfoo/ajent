@@ -40,14 +40,25 @@ func (c pathCompleter) Complete(text string, pos int) (int, []tui.Completion) {
 }
 
 // atComplete offers idx's candidates for the @ token under pos in cells, with
-// the returned cell just past @ so accepting keeps the leading @. A nil idx or
-// a cursor off any @ token offers nothing.
+// the returned cell just past @ so accepting keeps the leading @. A cursor off
+// any @ token offers nothing.
 func atComplete(idx *refs.Index, cells []string, pos int) (int, []tui.Completion) {
-	start := tokenStart(cells, pos, 0)
+	start := refTokenStart(cells, pos)
 	if start >= len(cells) || cells[start] != "@" || start == pos {
 		return pos, nil
 	}
 	return offer(start+1, pos, idx.Candidates(strings.Join(cells[start+1:pos], ""), nil))
+}
+
+// refTokenStart returns the first cell of the @ token ending at pos. A break
+// cell preceded by `\` is an escaped literal (the form offered names insert),
+// so it stays inside the token and a completed name keeps completing. Mirrors
+// the escape rule refs.Parse applies at submit.
+func refTokenStart(cells []string, pos int) int {
+	for pos > 0 && (!isTokenBreakCell(cells[pos-1]) || (pos > 1 && cells[pos-2] == "\\")) {
+		pos--
+	}
+	return pos
 }
 
 // completeKind is what the cursor is completing.
@@ -88,7 +99,7 @@ func (c *Completer) classify(text string, pos int) completeCtx {
 		return ctx
 	}
 
-	ctx.start = tokenStart(cells, ctx.pos, 0)
+	ctx.start = refTokenStart(cells, ctx.pos)
 	var first string // "" when the cursor sits on a break or the end
 	if ctx.start < n {
 		first = cells[ctx.start]

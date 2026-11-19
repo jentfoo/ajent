@@ -86,6 +86,31 @@ func TestCompleter(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
+	// a name no bare token could survive completes in the escaped form Parse
+	// re-expands; the accepted buffer still parses and still completes
+	t.Run("escaped_name_round_trip", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "my notes.txt"), []byte("x"), 0o600))
+		comp := NewCompleter(NewRegistry(), newFakeConsole(t), refs.NewIndex(dir))
+
+		start, items := comp.Complete("@my", 3)
+		assert.Equal(t, 1, start) // replacement starts just past @ so accepting keeps it
+		require.NotEmpty(t, items)
+		assert.Equal(t, `my\ notes.txt`, items[0].Text)
+
+		line := acceptCompletion("@my", 3, start, items[0])
+		assert.Equal(t, `@my\ notes.txt`, line)
+
+		// submit-side agreement: the accepted text parses to the real path
+		parsed := refs.Parse(line)
+		require.Len(t, parsed, 1)
+		assert.Equal(t, "my notes.txt", parsed[0].Path)
+
+		// and the escaped space does not end the completion token
+		_, again := comp.Complete(line, len(tui.GraphemeCells(line)))
+		assert.NotEmpty(t, again)
+	})
+
 	// completion does not trigger mid-token without a special char
 	t.Run("no_trigger_mid_token", func(t *testing.T) {
 		c := newFakeConsole(t)
@@ -248,6 +273,7 @@ func TestCompleterStyle(t *testing.T) {
 		want tui.CompleteStyle
 	}{
 		{"at_token", "@mai", tui.CompleteStyle{Async: true}},
+		{"escaped_at_token", `@my\ notes.txt`, tui.CompleteStyle{Async: true}},
 		{"shell_line", "!cat mai", tui.CompleteStyle{Async: true}},
 		{"excluded_shell_line", "!!cat mai", tui.CompleteStyle{Async: true}},
 		{"slash_command", "/mo", tui.CompleteStyle{Menu: true}},

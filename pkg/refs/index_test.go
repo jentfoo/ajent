@@ -139,6 +139,29 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"b.go", "a.go"}, labelsOf(cands))
 	})
 
+	// a name no bare token could survive is offered escaped but labelled bare:
+	// the listing shows the real file, accepting inserts the parseable form
+	t.Run("escapes_unparseable_names", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "my notes.txt", "report,v2.pdf")
+		idx := NewIndex(dir)
+
+		assert.Equal(t, []string{"my\\ notes.txt"}, textsOf(idx.Candidates("my", nil)))
+		assert.Equal(t, []string{"my notes.txt"}, labelsOf(idx.Candidates("my", nil)))
+		assert.Equal(t, []string{"report\\,v2.pdf"}, textsOf(idx.Candidates("re", nil)))
+	})
+
+	// an accepted escaped name keeps completing: the query is read unescaped, so
+	// drilling through the space still reaches the next level
+	t.Run("escaped_query_drills", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "my notes/inner.go")
+		idx := NewIndex(dir)
+
+		assert.Equal(t, []string{"my\\ notes/"}, textsOf(idx.Candidates("my\\ n", nil)))
+		assert.Equal(t, []string{"my\\ notes/inner.go"}, textsOf(idx.Candidates("my\\ notes/i", nil)))
+	})
+
 	// tilde completion mutates the global userHome, so it stays sequential and
 	// shares one root + home tree across its cases.
 	t.Run("tilde", func(t *testing.T) {
@@ -172,6 +195,15 @@ func TestCandidates(t *testing.T) {
 
 func TestShellCandidates(t *testing.T) {
 	t.Parallel()
+
+	// the shell surface inserts raw names: quoting is bash's own business
+	t.Run("keeps_raw_names", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "my notes.txt")
+		idx := NewIndex(dir)
+
+		assert.Equal(t, []string{"my notes.txt"}, textsOf(idx.ShellCandidates("my")))
+	})
 
 	// a shell command may name a VCS or dependency directory that @ hides
 	t.Run("offers_skipped_dirs", func(t *testing.T) {

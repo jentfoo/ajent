@@ -344,19 +344,20 @@ func (x *Expander) lsCall(run int64, path, dir string) injection {
 }
 
 // annotate returns the replacement text for a large/non-text reference: the
-// @path plus its measurement. An existing annotation on ref is replaced, never doubled.
+// @path plus its measurement, re-escaped so it parses back to the same path.
+// An existing annotation on ref is replaced, never doubled.
 func annotate(ref Ref, m tools.Measurement) string {
-	return "@" + ref.Path + " (" + measurementText(m) + ")"
+	return "@" + escapePath(ref.Path) + " (" + measurementText(m) + ")"
 }
 
 // stripNote drops an absorbed size claim from a mention whose output landed
 // elsewhere: injected or shown at the first mention, so any stale measurement
-// must not survive.
+// must not survive. The rebuilt token re-escapes like annotate.
 func stripNote(out string, ref Ref) string {
 	if ref.Note == "" {
 		return out
 	}
-	return splice(out, ref, "@"+ref.Path)
+	return splice(out, ref, "@"+escapePath(ref.Path))
 }
 
 // measurementText renders the annotation shape: "800 lines, 64kb" for text,

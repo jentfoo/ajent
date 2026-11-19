@@ -37,20 +37,27 @@ func NewIndex(root string) *Index {
 // already in the conversation, (b) recent mtime, (c) fuzzy score. Only the
 // directory under the cursor is listed, so `dir/` descends one level per step,
 // directories coming back with a trailing `/`, and a `~`, `./` or absolute query
-// keeps its leading form. VCS and dependency directories are skipped.
+// keeps its leading form. Names a bare token could not survive are offered
+// backslash-escaped (`my\ notes.txt`), so accepting inserts a form Parse
+// re-expands; the query is read unescaped, so an accepted name keeps completing.
+// VCS and dependency directories are skipped.
 func (idx *Index) Candidates(query string, inConversation func(path string) bool) []tui.Completion {
-	return idx.candidates(query, inConversation, true)
+	return idx.candidates(query, inConversation, true, true)
 }
 
 // ShellCandidates returns path candidates for query like Candidates, plus the
-// VCS and dependency directories a `!` shell command may name.
+// VCS and dependency directories a `!` shell command may name. Names insert raw:
+// quoting and escapes are the shell line's own business.
 func (idx *Index) ShellCandidates(query string) []tui.Completion {
-	return idx.candidates(query, nil, false)
+	return idx.candidates(query, nil, false, false)
 }
 
-func (idx *Index) candidates(query string, inConversation func(path string) bool, skipVCS bool) []tui.Completion {
+func (idx *Index) candidates(query string, inConversation func(path string) bool, skipVCS, escape bool) []tui.Completion {
 	if inConversation == nil {
 		inConversation = func(string) bool { return false }
+	}
+	if escape {
+		query = unescapePath(query) // the escapes offered names carry are not typed prefix
 	}
 
 	var qrel, base, displayPrefix string
@@ -110,28 +117,36 @@ func (idx *Index) candidates(query string, inConversation func(path string) bool
 			continue
 		}
 		text := displayPrefix + fr
+		match := text // the raw form, what query fuzzy-matches against
 		if e.isDir {
 			text += "/"
+			match += "/"
+		}
+		// escaping never touches the `~`, `.` and `/` of the display prefix, so the
+		// whole text escapes at once; the label keeps the bare name for the listing
+		if escape {
+			text = escapePath(text)
 		}
 		label := name // one directory per listing, so the bare name is unique; mark dirs the way Text does
 		if e.isDir {
 			label += "/"
 		}
-		out = append(out, rankCandidate(text, label, inConversation(e.path), mtime[e.path], query))
+		out = append(out, rankCandidate(text, label, match, inConversation(e.path), mtime[e.path], query))
 	}
 	slices.SortStableFunc(out, func(a, b tui.Completion) int { return b.Score - a.Score })
 	return out
 }
 
 // rankCandidate builds one completion, scoring by conversation presence first,
-// then recency, then fuzzy match.
-func rankCandidate(text, label string, inConvo bool, mt time.Time, query string) tui.Completion {
+// then recency, then fuzzy match of query against match, the unescaped path
+// behind text.
+func rankCandidate(text, label, match string, inConvo bool, mt time.Time, query string) tui.Completion {
 	var score int
 	if inConvo {
 		score += 1000
 	}
 	score += recentScore(mt)
-	if q, ok := tui.MatchScore(text, query); ok {
+	if q, ok := tui.MatchScore(match, query); ok {
 		score += q
 	}
 	return tui.Completion{Text: text, Label: label, Score: score}

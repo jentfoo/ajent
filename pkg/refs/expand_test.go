@@ -223,6 +223,47 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 	})
 
+	// the escaped form completion inserts parses back to the real name and reads it
+	t.Run("escaped_ref_injects_read", func(t *testing.T) {
+		dir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "my notes.txt"), []byte("hello\n"), 0o600))
+		x, sink := newExpander(t, dir)
+
+		res := x.Expand("see @my\\ notes.txt")
+		assert.Equal(t, "see @my\\ notes.txt", res.Text)
+		assert.Empty(t, res.Notices)
+		require.Len(t, injected(t, res), 2)
+		assert.Contains(t, sink.starts, "read my notes.txt")
+	})
+
+	// an annotation on an escaped name re-escapes on rebuild, so re-expanding the
+	// annotated text replaces the measurement instead of stacking a second one
+	t.Run("escaped_annotation_round_trips", func(t *testing.T) {
+		dir := t.TempDir()
+		writeBigLines(t, dir, "big notes.go")
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @big\\ notes.go")
+		assert.Contains(t, res.Text, "@big\\ notes.go (")
+		assert.Empty(t, injected(t, res))
+
+		again := x.Expand(res.Text)
+		assert.Contains(t, again.Text, "@big\\ notes.go (")
+		assert.Equal(t, 1, strings.Count(again.Text, "lines"))
+	})
+
+	// a missing escaped name warns with the natural spelling, not the escapes
+	t.Run("escaped_missing_warns_decoded", func(t *testing.T) {
+		dir := t.TempDir()
+		x, _ := newExpander(t, dir)
+
+		res := x.Expand("see @my\\ notes.txt")
+		assert.Equal(t, "see @my\\ notes.txt", res.Text)
+		require.Len(t, res.Notices, 1)
+		assert.Contains(t, res.Notices[0], "@my notes.txt not found")
+		assert.Empty(t, injected(t, res))
+	})
+
 	// sentence-final '.' and ':' ride inside the token; when the written form
 	// names nothing real they are retried without them
 	t.Run("sentence_period_trims_to_file", func(t *testing.T) {

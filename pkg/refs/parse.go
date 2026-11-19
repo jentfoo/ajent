@@ -5,14 +5,17 @@
 // that rewinding onto the message drops the reads it asked for along with it.
 package refs
 
-import "strings"
+import (
+	"strings"
+)
 
-// Ref is one @path token in a message. Note carries any existing
+// Ref is one @path token in a message. Path is the path the token names:
+// escapes removed, without @ or annotation. Note carries any existing
 // `(800 lines, 64kb)` measurement absorbed into the token, which is what makes
 // re-expansion idempotent: expansion recognises it and replaces it rather than
 // appending a second measurement.
 type Ref struct {
-	Path  string // the path as written, without @ or annotation
+	Path  string // the named path: escapes removed, no @ or annotation
 	Start int    // byte offset of the leading @ in the message
 	End   int    // byte offset just past the token (path or annotation)
 	Note  string // any absorbed trailing (...), empty when none
@@ -20,9 +23,10 @@ type Ref struct {
 
 // Parse returns every @path reference in text. @ matches only at a word
 // boundary (start of line, or after whitespace, an opener, a backtick or a
-// quote) so `email@example.com` is prose. The path token stops at whitespace or trailing
-// punctuation, except that a `]` ends the token only when no `[` before it is
-// open, keeping bracketed names like weird[1] whole. A trailing `(...)`
+// quote) so `email@example.com` is prose. The path token stops at whitespace or
+// trailing punctuation, except that a `]` ends the token only when no `[` before it
+// is open, keeping bracketed names like weird[1] whole, and a `\` escapes the
+// next byte so a name like `my\ notes.txt` stays one token. A trailing `(...)`
 // measurement is absorbed into Note so re-expansion replaces it.
 func Parse(text string) []Ref {
 	var out []Ref
@@ -45,6 +49,10 @@ func Parse(text string) []Ref {
 		var depth int // unmatched '[' seen so far in the token
 		for j < len(text) {
 			c := text[j]
+			if c == '\\' && j+1 < len(text) {
+				j += 2 // an escape pair rides inside the token, never ending it
+				continue
+			}
 			if c == '[' {
 				depth++
 			} else if c == ']' && depth > 0 {
@@ -54,7 +62,7 @@ func Parse(text string) []Ref {
 			}
 			j++
 		}
-		path := text[pathStart:j]
+		path := unescapePath(text[pathStart:j])
 		var note string
 		// absorb a trailing (...) measurement, allowing a single space before it
 		noteStart := j
@@ -96,6 +104,52 @@ func isSpaceOrPunct(c byte) bool {
 		return true
 	}
 	return false
+}
+
+// escapePath returns path with a `\` before every byte that would end or
+// corrupt a bare token, so Parse re-expands the result to path alone. A `]`
+// with an open `[` before it stays bare, matching Parse's bracket rule. Plain
+// names return unchanged.
+func escapePath(path string) string {
+	// every isSpaceOrPunct terminator plus the backslash itself
+	const escapable = " \t\n\r,;)]}`\"'!?\\"
+	if !strings.ContainsAny(path, escapable) {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(2 * len(path))
+	var depth int // unmatched '[' seen so far, as Parse counts them
+	for i := 0; i < len(path); i++ {
+		c := path[i]
+		switch {
+		case c == '[':
+			depth++
+		case c == ']' && depth > 0:
+			depth--
+		case c == '\\' || isSpaceOrPunct(c):
+			b.WriteByte('\\')
+		}
+		b.WriteByte(c)
+	}
+	return b.String()
+}
+
+// unescapePath removes the escapes escapePath adds: `\x` becomes `x`, so an
+// escaped token reads as the path it names. A lone trailing backslash stays
+// literal, and text without one returns unchanged.
+func unescapePath(path string) string {
+	if !strings.ContainsRune(path, '\\') {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for i := 0; i < len(path); i++ {
+		if path[i] == '\\' && i+1 < len(path) {
+			i++ // an escape pair lands as the escaped byte alone
+		}
+		b.WriteByte(path[i])
+	}
+	return b.String()
 }
 
 // absorbNote returns the end index of a trailing `(...)` annotation immediately
