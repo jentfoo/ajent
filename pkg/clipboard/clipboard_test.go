@@ -173,6 +173,30 @@ func TestCopy(t *testing.T) {
 		assert.Contains(t, err.Error(), "tried one, two")
 	})
 
+	t.Run("zero_options_native_win_ok", func(t *testing.T) {
+		fakeBackend(t,
+			[]writer{{"pbcopy", nil, nil}},
+			func(string) bool { return true },
+			ok,
+			true, nil, true)
+
+		// zero-value options are legal input: the native write landed and the
+		// best-effort escape has nowhere to go, so nothing may panic or fail
+		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
+	})
+
+	t.Run("zero_options_fallback_errors", func(t *testing.T) {
+		fakeBackend(t,
+			[]writer{{"xclip", nil, nil}},
+			func(string) bool { return false },
+			ok,
+			true, nil, true)
+
+		err := Copy(t.Context(), "hello", CopyOptions{})
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "CopyOptions.TTY")
+	})
+
 	t.Run("remote_falls_back_to_osc52", func(t *testing.T) {
 		var tty bytes.Buffer
 		fakeBackend(t,
@@ -244,6 +268,10 @@ func TestWriteOSC52(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "OSC 52 limit")
 		assert.Empty(t, out.String())
+	})
+
+	t.Run("nil_writer_refuses", func(t *testing.T) {
+		require.Error(t, writeOSC52("hi", nil))
 	})
 
 	t.Run("write_failure_wrapped", func(t *testing.T) {

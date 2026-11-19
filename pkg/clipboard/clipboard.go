@@ -118,10 +118,11 @@ var stdoutIsTTY = func() bool {
 // falling back to the OSC 52 terminal escape on remote sessions. A cancelled
 // ctx aborts the copy before or during a write. Success means a native writer
 // exited cleanly, or on a remote session with a terminal on stdout that the
-// fallback was emitted. On such sessions the escape also accompanies a native
-// success because a forwarded display can accept a write that never reaches
-// the user's machine. Total failure returns an error naming what was tried
-// plus install guidance.
+// fallback was emitted; emission needs CopyOptions.TTY, without which the
+// remote fallback errors instead of writing stdout unsynchronized. On such
+// sessions the escape also accompanies a native success because a forwarded
+// display can accept a write that never reaches the user's machine. Total
+// failure returns an error naming what was tried plus install guidance.
 func Copy(ctx context.Context, text string, opts CopyOptions) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -138,7 +139,7 @@ func Copy(ctx context.Context, text string, opts CopyOptions) error {
 		}
 		tried = append(tried, w.name)
 		if runWriter(ctx, w, text) == nil {
-			if remote() && stdoutIsTTY() {
+			if osc != nil && remote() && stdoutIsTTY() {
 				_ = writeOSC52(text, osc) // best effort, the native write already landed
 			}
 			return nil
@@ -149,6 +150,11 @@ func Copy(ctx context.Context, text string, opts CopyOptions) error {
 			// non-terminal stdout can never interpret OSC 52, so the bytes
 			// would only corrupt the redirected stream
 			return errors.New("clipboard unavailable: remote session but stdout is not a terminal, OSC 52 cannot reach any clipboard")
+		}
+		if osc == nil {
+			// a sink must serialize with TUI output, so stdout is never written
+			// directly; refuse rather than claim an emission that cannot land
+			return errors.New("clipboard unavailable: remote session needs CopyOptions.TTY to emit OSC 52")
 		}
 		return writeOSC52(text, osc)
 	}
@@ -175,9 +181,12 @@ func nativeError(tried, displayless []string) error {
 }
 
 // writeOSC52 emits the terminal clipboard escape as one Write call, so a sink
-// that serializes writes can never see it torn. Refuses a payload past the
-// encoded limit rather than truncating it.
+// that serializes writes can never see it torn. Refuses an oversized payload
+// rather than truncating it and a nil writer rather than panicking.
 func writeOSC52(text string, w io.Writer) error {
+	if w == nil {
+		return errors.New("OSC 52 clipboard write has no terminal writer")
+	}
 	enc := base64.StdEncoding.EncodeToString([]byte(text))
 	if len(enc) > maxEncoded {
 		return fmt.Errorf("clipboard payload exceeds the %dkb OSC 52 limit; copy less text", maxEncoded/1000)
