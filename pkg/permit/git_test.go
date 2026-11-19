@@ -52,6 +52,14 @@ func TestGitReadOnly(t *testing.T) {
 		// exec / write flags rejected globally and per subcommand
 		{`output flag`, `git diff --output out.patch`, false},
 		{`ext diff`, `git log --ext-diff`, false},
+		// abbreviated spellings resolve to the guarded flags too
+		{`ext diff abbrev`, `git log --ext-dif HEAD`, false},
+		{`output abbrev eq`, `git diff --outp=/tmp/x HEAD`, false},
+		{`textconv abbrev`, `git show --textc HEAD`, false},
+		{`filters abbrev cat-file`, `git cat-file --fil HEAD:a.bin`, false},
+		{`ext diff bool value`, `git log '--ext-diff=true' HEAD`, false},
+		{"grep open pager abbrev", "git grep --open-f vim foo", false},
+		{"ls remote upload pack prefix", "git ls-remote --up=sh origin", false},
 		{"grep open pager", "git grep -O vim foo", false},
 		{"ls remote upload pack", "git ls-remote --upload-pack=sh origin", false},
 		{"ls remote ext url", "git ls-remote 'ext::sh -c cat% .'", false},
@@ -59,11 +67,16 @@ func TestGitReadOnly(t *testing.T) {
 		{`quoted output flag`, `git diff "--output=out.patch"`, false},
 		{`single quoted ext diff`, `git log '--ext-diff'`, false},
 		{`joined quoted output`, `git diff "--o"utput=out.patch`, false},
+		{`quoted abbreviation`, `git log '--ext-di'`, false},
 		{"quoted grep pager", `git grep "-O" vim foo`, false},
 		// pre-subcommand pager flag
 		{`pager config executes`, `git -c pager.log=less status`, false},
-		// benign quoting still verifies and allows
+		// benign quoting still verifies and allows, including formatting long
+		// options that merely share a prefix with --output
 		{"quoted benign flag", `git log "--oneline"`, true},
+		{"output indicator is read only", "git log --output-indicator-new=- HEAD", true},
+		// allow-side checks reject abbreviated spellings they cannot verify
+		{`benign branch abbrev rejected`, `git branch --al foo`, false},
 		// -C <path> relocates the repo, consuming its path token
 		{"worktree path long", "git -C /tmp status", true},
 		{"worktree path branch", "git -C /tmp branch foo", false},
@@ -176,11 +189,72 @@ func TestIsGitExecOrWriteToken(t *testing.T) {
 		{"ext diff", "--ext-diff", true},
 		{"textconv", "--textconv", true},
 		{"filters", "--filters", true},
+		// every prefix of a guarded flag counts as the flag itself
+		{"output minimal prefix", "--o", true},
+		{"output eq prefix", "--outp=/tmp/x", true},
+		{"ext diff prefix", "--ext-dif", true},
+		{"textconv prefix", "--tex", true},
+		{"filters prefix", "--fil", true},
+		{`bool with value`, "--ext-diff=true", true},
 		{"stat is read only", "--stat", false},
+		// negated forms disable the feature instead of enabling it
+		{"negated form", "--no-ext-diff", false},
+		// not prefixes: formatting options and misspellings stay unmatched
+		{"output indicator flag", "--output-indicator-old=x", false},
+		{`bare terminator`, "--", false},
+		{`not a prefix`, "--filterx", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			assert.Equal(t, c.want, isGitExecOrWriteToken(c.in))
+		})
+	}
+}
+
+func TestIsGitGrepExec(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"open pager exact", "--open-files-in-pager", true},
+		{"open pager value", "--open-files-in-pager=less", true},
+		{"open pager prefix", "--open-f", true},
+		{"short open pager", "-O", true},
+		{"cluster with O", "-iO", true},
+		{"only matching read only", "--only-matching", false},
+		{"plain short flag", "-i", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitGrepExec(c.in))
+		})
+	}
+}
+
+func TestIsGitLsRemoteExec(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"upload pack value", "--upload-pack=sh", true},
+		{"upload pack bare", "--upload-pack", true},
+		{"upload pack prefix", "--up=sh", true},
+		{"short upload", "-u", true},
+		{"cluster short upload", "-hu", true},
+		{"ext url", "ext::sh -c id", true},
+		{"retained double quote", `x"y`, true},
+		{"symref read only", "--symref", false},
+		{`plain ref`, "origin", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, isGitLsRemoteExec(c.in))
 		})
 	}
 }

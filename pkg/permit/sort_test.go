@@ -62,38 +62,3 @@ func TestSortQuotedFlagSegments(t *testing.T) {
 		})
 	}
 }
-
-func TestSortLongWrite(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		in   string
-		want bool
-	}{
-		{"output exact", "--output", true},
-		{"output eq", "--output=out", true},
-		{"output prefix", "--outp", true},
-		{"minimal prefix", "--o", true},
-		{"compress exact", "--compress-program", true},
-		{"compress prefix", "--comp", true},
-		{"temp exact", "--temporary-directory", true},
-		{"temp prefix", "--temp", true},
-		{"temp eq prefix", "--temp=/d", true},
-		// anything not a prefix of the three flags stays unmatched
-		{"bare dashdash", "--", false},
-		{"bare dash", "-", false},
-		{"short flag", "-o", false},
-		{"benign flag", "--stable", false},
-		{"benign prefix", "--n", false},
-		{"compress minimal prefix", "--c", true},
-		{"longer than flag", "--output-dir", false},
-		{"not a prefix", "--tempdir", false},
-		{"operand", "file", false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, sortLongWrite(c.in))
-		})
-	}
-}

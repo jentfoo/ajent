@@ -11,31 +11,9 @@ var sortLongWriteFlags = []string{
 	"--output", "--compress-program", "--temporary-directory",
 }
 
-// sortLongWrite reports whether tok is one of sort's write/exec long options or
-// a getopt_long abbreviation of one. GNU resolves any proper prefix past the
-// dashes (--outp=/x, --o f, --temp D) to the option, and whether an
-// abbreviation is ambiguous depends on the installed sort's option table, so
-// every prefix of these flags is treated as the flag itself. A bare --
-// terminates options instead.
-func sortLongWrite(tok string) bool {
-	if !strings.HasPrefix(tok, "--") {
-		return false
-	}
-	name := tok
-	if i := strings.IndexByte(name, '='); i >= 0 {
-		name = name[:i]
-	}
-	if len(name) < 3 {
-		return false
-	}
-	return slices.ContainsFunc(sortLongWriteFlags, func(flag string) bool {
-		return strings.HasPrefix(flag, name)
-	})
-}
-
 // sortWriteFlag reports whether a short token is -o exact, an attached -ofile,
-// or a getopt cluster containing the o rune (-ro out.txt). Long forms live in
-// sortLongWrite.
+// or a getopt cluster containing the o rune (-ro out.txt). Long forms go
+// through abbrevLong.
 func sortWriteFlag(tok string) bool {
 	if !strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "--") {
 		return false
@@ -45,7 +23,7 @@ func sortWriteFlag(tok string) bool {
 }
 
 // sortTmpFlag reports whether a short token writes scratch output outside
-// TMPDIR, which -T does during the sort. Long forms live in sortLongWrite.
+// TMPDIR, which -T does during the sort. Long forms go through abbrevLong.
 func sortTmpFlag(tok string) bool {
 	if !strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "--") {
 		return false
@@ -62,6 +40,6 @@ func sortTmpFlag(tok string) bool {
 // benign long flags (--stable, --numeric-sort) never prompting.
 func sortReadOnly(tokens []string) bool {
 	return !slices.ContainsFunc(tokens, func(t string) bool {
-		return sortWriteFlag(t) || sortTmpFlag(t) || sortLongWrite(t)
+		return sortWriteFlag(t) || sortTmpFlag(t) || abbrevLong(t, sortLongWriteFlags...)
 	})
 }

@@ -48,11 +48,14 @@ var gitActionActions = map[string]map[string]struct{}{
 	"worktree": bulk.SliceToSet([]string{"list"}),
 }
 
+// gitExecOrWriteLongs are the long options that make git write a file or run
+// a command: --output writes, the rest hand the blob to a config-named command.
+var gitExecOrWriteLongs = []string{"--output", "--ext-diff", "--textconv", "--filters"}
+
 // isGitExecOrWriteToken reports whether t makes git write a file or run a
-// command: --output writes, the rest handing the blob to a config-named command.
+// command, abbreviated spellings of the long options included.
 func isGitExecOrWriteToken(t string) bool {
-	return strings.HasPrefix(t, "--output") || t == "--ext-diff" ||
-		t == "--textconv" || t == "--filters"
+	return abbrevLong(t, gitExecOrWriteLongs...)
 }
 
 var (
@@ -66,14 +69,14 @@ var (
 // isGitGrepExec reports whether an argument makes `git grep` run a pager over
 // the matching files.
 func isGitGrepExec(t string) bool {
-	return gitGrepOpenRe.MatchString(t) || strings.HasPrefix(t, "--open-files-in-pager")
+	return abbrevLong(t, "--open-files-in-pager") || gitGrepOpenRe.MatchString(t)
 }
 
 // isGitLsRemoteExec reports whether an argument names a command git runs: an
 // --upload-pack/-u form, an ext::<cmd> URL, or a token retaining a double quote
 // (only escaped quoting keeps one past tokenization), failing safe to prompting.
 func isGitLsRemoteExec(t string) bool {
-	return strings.HasPrefix(t, "--upload-pack") || gitLsRemoteUploadRe.MatchString(t) ||
+	return abbrevLong(t, "--upload-pack") || gitLsRemoteUploadRe.MatchString(t) ||
 		strings.Contains(t, "::") || strings.Contains(t, "\"")
 }
 
