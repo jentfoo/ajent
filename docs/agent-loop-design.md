@@ -276,6 +276,12 @@ Interruption is cancellation, not draining:
 - `Prompt` derives a cancellable context and stores its cancel func under the
   agent mutex, and `Agent.Interrupt()` calls it. Key handling never touches the
   agent's internals.
+- A turn's input exists outside both queues between `drive` popping it and
+  `runTurn` registering the cancel. An interrupt landing in that claim window
+  pends under the agent mutex and is consumed by the claim: the freshly derived
+  context cancels before anything appends or streams, so those inputs resolve
+  through the same abort path as any other interrupt. With nothing claimed an
+  interrupt is a no-op, so an idle agent ignores it.
 - The stream starts one watcher goroutine that closes it on cancellation, via
   the shared `llm.CloseOnDone` helper. Close abandons buffered
   events rather than draining them, so in-flight tokens are dropped at the

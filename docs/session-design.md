@@ -394,7 +394,11 @@ after `SetHead("")` stamps an empty `ParentID` and starts a second, which
 chain. The plan workflow uses this to give an implementation round a genuinely
 empty context (see `plan-design.md`), and `TreeRows` already renders every root,
 so an extra one stays visible in the rewind picker. A new root must lead with a
-`model_change` entry, or `State` has no model to resolve for that branch.
+`model_change` entry, or `State` has no model to resolve for that branch. The
+same rule covers resume: the writer's resolved head wins over the file tail
+(`resumeHead`), so an empty one restores the empty root the fork moved to, and
+the resumed run records the model it starts that root with as its lead
+`model_change`.
 
 **Rewinding** is how you start a new branch: picking an earlier message moves
 the writer's `SetHead` to that message's *parent* (so the picked text becomes

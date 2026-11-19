@@ -88,12 +88,14 @@ settled.
 
 Joining a batch joins its resolvers too: `steerQueue.join` chains every queued
 item's `After` into one, run in submit order behind the joined message. The
-batch splits into **one input per contiguous provenance run**: items sharing an
-`Injected` value merge into a single blank-line-joined message, while a provenance
-change starts a new input. A batch mixing user text with system-injected
-context therefore keeps per-item attribution on the transcript rows, so recall
-excludes exactly the injected messages and replay renders them as such, instead
-of one OR-ed flag labelling the whole batch.
+batch splits into **one input per contiguous provenance run**: items sharing
+both `Injected` and `Origin` merge into a single blank-line-joined message,
+while a provenance change starts a new input. A batch mixing user text with
+system-injected context therefore keeps per-item attribution on the transcript
+rows, so recall excludes exactly the injected messages and replay renders them
+as such, instead of one OR-ed flag labelling the whole batch. Origin splits the
+same way, so a queued controller submit reaches its transcript entry with the
+origin direct dispatch records, since an entry cannot name two submitters.
 
 ## Commands
 
@@ -105,7 +107,10 @@ error.
 `Complete` is for *argument* completion: past the first space the matched
 command supplies its candidates. `/model` supplies model keys and aliases,
 `/reasoning` supplies `llm.Levels()`, and a command with no completer offers
-nothing.
+nothing. The prefix a `Complete` receives spans the whole argument (a two-word
+command like `/mcp connect <name>` passes the verb along) and its candidates
+replace only the argument's final word: the offered span starts there, so
+accepting a candidate can never clobber the words before it.
 
 ### Registry
 
@@ -439,7 +444,10 @@ untouched.
 The aggregating completer sources commands from the registry and paths from
 `refs.Index`. `/` at line start offers command names, and past the first space it
 delegates to the matched command's `Complete`. `@` anywhere offers workspace
-paths. A nil path index disables path completion (plain mode).
+paths. The `@` token's
+start scans back over escaped breaks (a `\` before a space or tab), so a
+completed name still classifies as a path instead of splitting at its own
+space.
 
 One `classify` call decides which of those the cursor is in, and both `Complete`
 and `Style` dispatch on its result, so how a context presents can never disagree
@@ -485,11 +493,16 @@ inside the token because dotted names and `x:y` need them. A closing `]`
 stays in the token when it closes an earlier `[` there, keeping bracketed
 names like `weird[1]` whole, and ends the path otherwise so prose brackets
 (`[see @f.go]`) still terminate. Whether they ended a sentence is decided at
-expand time. The annotation
-shape is matched strictly: a trailing `(...)` is absorbed only when it contains
-a digit or a known kind word (`binary`, `image`, `special`, `dir`, `lines`) and
-is made of the allowed tokens (digits, `b`/`kb`/`mb`, the kind words), so
-ordinary parenthetical prose after a path is never eaten.
+expand time. A `\` escapes the next byte, keeping it inside the token, and
+`Ref.Path` carries the unescaped path the token names. `escapePath` writes
+every escape Parse removes (token terminators plus the backslash itself), so an
+offered name round-trips through Parse whole. Every rebuilt `@path` goes
+through `escapePath`, which is what keeps an annotated escaped reference
+re-parsing whole. The annotation shape is matched strictly: a trailing `(...)` is
+absorbed only when it contains a digit or a known kind word (`binary`,
+`image`, `special`, `dir`, `lines`) and is made of the allowed tokens
+(digits, `b`/`kb`/`mb`, the kind words), so ordinary parenthetical prose after
+a path is never eaten.
 
 ### Expand (`refs/expand.go`)
 
@@ -585,6 +598,12 @@ their leading form so accepting inserts a usable path.
 Ranking is (a) already in the conversation (`Tracker.Records()`), (b) recent
 mtime, (c) fuzzy score (reusing `tui.MatchScore` rather than a second
 implementation). Directories complete with a trailing `/` and keep completing.
+A name a bare token could not survive (a space, trailing punctuation) is
+offered backslash-escaped (`my\ notes.txt`) so accepting inserts a form Parse
+re-expands, with the listing label staying bare so it still shows the real
+file. The query is read unescaped, so an accepted name keeps completing at the
+next level, and the shell surface inserts raw names instead: quoting is
+bash's own business.
 
 ### Measure
 

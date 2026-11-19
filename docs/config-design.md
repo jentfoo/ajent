@@ -310,11 +310,12 @@ changes nothing, so it reports no warnings beside its error. Writes go through
 `WriteFileAtomic` with secret permissions.
 
 Only hand-edit artifacts the parser can fully consume are forgiven: `//` line
-comments and trailing commas, blanked by RelaxJSON before the rewrite. Bytes
-after the top-level value cannot survive a tree rebuild, so they fail the save
-with an error instead of being dropped silently (Load rejects them too). The
-refusal names the file and position like every load failure. Such bytes can
-only appear by editing while ajent runs.
+comments and trailing commas, blanked by RelaxJSON before the rewrite. A save
+refuses content that cannot survive a tree rebuild instead of dropping it
+silently (Load rejects these shapes too): bytes after the top-level value, and
+a top-level value that is not an object. Setting a key must never discard the
+document it was handed. The refusal names the file and position like every load
+failure. Such content can only appear by editing while ajent runs.
 
 A save is a whole-file replacement, so without coordination two concurrent
 sessions compose last-writer-wins over every key. User-layer saves and

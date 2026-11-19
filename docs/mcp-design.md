@@ -221,9 +221,12 @@ package stays free of `pkg/tools`.
   fresh. It runs through `rediscan`, which
   serializes per server and bounds each pass with its own timeout so an
   unresponsive server surfaces an error rather than leaking a goroutine or
-  hanging. Each pass adopts dial's post-check-and-revert: a disconnect, server
-  death or Close sweep landing mid-pass still wins, tearing the fresh
-  registration back out instead of leaving tools bound to a closed client.
+  hanging. Each pass adopts dial's post-check-and-revert under the per-server
+  registration lock, making it that source's sole registration writer for the
+  window: a disconnect, server death or Close sweep landing mid-pass still
+  wins, tearing the fresh registration back out instead of leaving tools bound
+  to a closed client, and the pass's revert can never tear out a successor's
+  registration because teardown serializes behind the pass.
   A pass broken by the user's own disconnect keeps its fallout out of warning
   history. Discovery covers tools only, and
   resources/prompts are not exposed. Notifications arrive asynchronously from

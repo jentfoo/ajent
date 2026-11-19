@@ -58,8 +58,10 @@ Rules that matter to an implementation:
 - **A request line that fails to parse closes the connection**, as does EOF. Blank lines are
   ignored and line length is unbounded, since event payloads carry transcript entries.
 - **Every reply carries a `seq`.** On a read it is the number the result was taken at, on a
-  write the post-mutation watermark, and on an error the current watermark. One number
-  space per session, dense and monotonic for its lifetime.
+  write the watermark its mutation's synchronous effects reached, and on an error the
+  current watermark. Reads taken outside the hub lock and writes whose effects land later
+  (`submit` hands the line to the session's pump) carry the pre-work watermark instead, so
+  events racing them keep higher `seq`s than the reply and still arrive. One number space per session, dense and monotonic for its lifetime.
 - **Delivery is fail-open.** Outbound lines stage behind bounded queues under a short write
   deadline, so a peer that stops reading loses its connection rather than stalling the
   session's turn loop. Only `session.exit` bypasses every bound, so an attached controller

@@ -127,7 +127,9 @@ Further rules follow from the single path:
 
 **Provenance.** A controller-submitted prompt records its origin on the transcript
 message entry and reaches the model as an ordinary user message: no in-context marker, and
-none of the injected flag's behavior changes (`prompt-design.md`).
+none of the injected flag's behavior changes (`prompt-design.md`). Queue delivery keeps
+that promise: a queued submit joins only prompts of the same provenance, so its run hands
+the origin to the appended entry the way direct dispatch does (`command-design.md`).
 
 ## The seat
 
@@ -152,9 +154,12 @@ never delay the session, the seat or another accept.
 
 The session hub stamps every observable change with one event number at commit, before
 fanout, so commit order equals event order for every connection. Every reply carries the
-number its result was taken at, a snapshot's own number for reads and the post-mutation
-watermark for writes. That is the whole reconciliation rule: events at or below it are
-superseded by the result, events above it apply. The hub owns the ephemeral view model
+number its result was taken at, a snapshot's own number for reads and, on writes, the
+watermark captured in the same hub-lock section as the mutation's own publications, so
+events racing the verb keep higher seqs and survive reconciliation. A verb whose effects land later (submit's pump handoff) replies with its
+pre-mutation watermark instead, keeping those effects above the reply. That is the whole
+reconciliation rule: events at or below it are superseded by the result, events above it
+apply. The hub owns the ephemeral view model
 (status segments, activity and queue rows, idle, running, spinning, model labels, context
 numbers, permission mode, tool rows), and every mutation updates that struct and
 fans out its event in one critical section, so a snapshot's number, its hub-held
