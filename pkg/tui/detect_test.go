@@ -55,7 +55,7 @@ func TestDetectToneLuminanceBoundary(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			u, pw, _ := newReplyUI(t)
-			swapEnv(t, nil)
+			withEnv(u, nil)
 
 			done := make(chan Tone, 1)
 			go func() { done <- u.DetectTone() }()
@@ -67,7 +67,7 @@ func TestDetectToneLuminanceBoundary(t *testing.T) {
 
 	t.Run("unparseable_spec_keeps_waiting", func(t *testing.T) {
 		u, pw, _ := newReplyUI(t)
-		swapEnv(t, nil)
+		withEnv(u, nil)
 
 		done := make(chan Tone, 1)
 		go func() { done <- u.DetectTone() }()
@@ -81,7 +81,7 @@ func TestDetectToneLuminanceBoundary(t *testing.T) {
 func TestDetectTone(t *testing.T) {
 	t.Run("env_answers_without_query", func(t *testing.T) {
 		u, out := newRecordingUI(t, strings.NewReader(""))
-		swapEnv(t, map[string]string{"COLORFGBG": "0;15"})
+		withEnv(u, map[string]string{"COLORFGBG": "0;15"})
 
 		assert.Equal(t, ToneLight, u.DetectTone())
 		assert.Empty(t, out.String())
@@ -89,7 +89,7 @@ func TestDetectTone(t *testing.T) {
 
 	t.Run("light_reply", func(t *testing.T) {
 		u, pw, out := newReplyUI(t)
-		swapEnv(t, nil)
+		withEnv(u, nil)
 
 		done := make(chan Tone, 1)
 		go func() { done <- u.DetectTone() }()
@@ -101,7 +101,7 @@ func TestDetectTone(t *testing.T) {
 
 	t.Run("dark_reply", func(t *testing.T) {
 		u, pw, _ := newReplyUI(t)
-		swapEnv(t, nil)
+		withEnv(u, nil)
 
 		done := make(chan Tone, 1)
 		go func() { done <- u.DetectTone() }()
@@ -112,7 +112,7 @@ func TestDetectTone(t *testing.T) {
 
 	t.Run("attrs_fence_ends_wait", func(t *testing.T) {
 		u, pw, _ := newReplyUI(t)
-		swapEnv(t, nil)
+		withEnv(u, nil)
 
 		done := make(chan Tone, 1)
 		go func() { done <- u.DetectTone() }()
@@ -125,7 +125,7 @@ func TestDetectTone(t *testing.T) {
 		pr, pw := io.Pipe()
 		t.Cleanup(func() { _ = pw.Close() })
 		u, _ := newRecordingUI(t, pr)
-		swapEnv(t, nil)
+		withEnv(u, nil)
 		// fire the deadline inline, nothing will ever answer this reader
 		u.afterDelay = func(_ time.Duration, fn func()) *time.Timer {
 			fn()
@@ -138,7 +138,7 @@ func TestDetectTone(t *testing.T) {
 	t.Run("plain_mode_never_queries", func(t *testing.T) {
 		u, out := newRecordingUI(t, strings.NewReader("\x1b]11;rgb:ffff/ffff/ffff\x07"))
 		u.mode = ModePlain
-		swapEnv(t, nil)
+		withEnv(u, nil)
 
 		assert.Equal(t, ToneUnknown, u.DetectTone())
 		assert.Empty(t, out.String())
@@ -167,11 +167,8 @@ func feed(pw io.Writer, reply string) {
 	_, _ = io.WriteString(pw, reply)
 }
 
-// swapEnv points the package env lookup at a fixed map for one test.
-func swapEnv(tb testing.TB, vars map[string]string) {
-	tb.Helper()
-
-	prev := osEnv
-	osEnv = func(k string) string { return vars[k] }
-	tb.Cleanup(func() { osEnv = prev })
+// withEnv points one UI's env lookup at a fixed map, per-test so parallel tests
+// never share the package global.
+func withEnv(u *UI, vars map[string]string) {
+	u.env = func(k string) string { return vars[k] }
 }

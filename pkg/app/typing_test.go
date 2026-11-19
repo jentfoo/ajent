@@ -226,15 +226,21 @@ func TestTypingGateHold(t *testing.T) {
 
 	t.Run("countdown_status_set_and_cleared", func(t *testing.T) {
 		g := newTypingGate()
-		g.idle = 40 * time.Millisecond
 		rec := &statusRecorder{}
 		g.status = rec.record
 
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 		g.edit("draft")
-		<-g.holdIn(t.Context())
+		done := g.holdIn(ctx)
+		// the hold publishes its countdown segment shortly after engaging, and the
+		// wide idle window keeps expiry from racing these assertions under load
+		require.Eventually(t, func() bool {
+			return rec.count() > 0 && strings.Contains(rec.first(), "paused ")
+		}, time.Second, time.Millisecond)
 
-		require.NotZero(t, rec.count())
-		assert.Contains(t, rec.first(), "paused ")
+		cancel() // release ends the hold, the published segment must be cleared
+		<-done
 		assert.Empty(t, rec.last())
 	})
 }
@@ -422,15 +428,19 @@ func TestTypingGateHoldDialog(t *testing.T) {
 	// the dialog hold publishes its own label, distinct from the boundary hold's
 	t.Run("countdown_labels_approval", func(t *testing.T) {
 		g := newTypingGate()
-		g.idle = 40 * time.Millisecond
 		rec := &statusRecorder{}
 		g.status = rec.record
 
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 		g.edit("draft")
-		<-g.holdDialogIn(t.Context())
+		done := g.holdDialogIn(ctx)
+		require.Eventually(t, func() bool {
+			return rec.count() > 0 && strings.Contains(rec.first(), "approval ")
+		}, time.Second, time.Millisecond)
 
-		require.NotZero(t, rec.count())
-		assert.Contains(t, rec.first(), "approval ")
+		cancel() // release ends the hold, the published segment must be cleared
+		<-done
 		assert.Empty(t, rec.last()) // the countdown segment is cleared on release
 	})
 }

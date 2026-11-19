@@ -328,5 +328,5 @@ func (p *plainRenderer) resume(int) error           { return nil }
 func (p *plainRenderer) close(int)                  {}
 func (p *plainRenderer) size() (int, int)           { return defaultWidth, defaultHeight }
 
-// osEnv is the default environment lookup, replaced in tests.
+// osEnv is the default environment lookup, Options.Env overrides it.
 var osEnv = os.Getenv

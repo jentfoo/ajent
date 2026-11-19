@@ -85,6 +85,7 @@ func newRecordingUI(tb testing.TB, in io.Reader) (*UI, *strings.Builder) {
 		editor:     editor{shell: true},
 		in:         in,
 		inFd:       -1,
+		env:        osEnv,
 		msgs:       make(chan string),
 		controls:   make(chan Control, 4),
 		done:       make(chan struct{}),

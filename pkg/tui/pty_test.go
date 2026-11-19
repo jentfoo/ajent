@@ -163,11 +163,10 @@ func termiosOf(t *testing.T, f *os.File) syscall.Termios {
 func newPTYUI(t *testing.T, master, slave *os.File) *UI {
 	t.Helper()
 
-	prev := osEnv
-	osEnv = func(string) string { return "xterm-256color" }
-	t.Cleanup(func() { osEnv = prev })
-
-	u, err := New(Options{In: slave, Out: slave, Mode: ModeInline, Model: "test"})
+	u, err := New(Options{
+		In: slave, Out: slave, Mode: ModeInline, Model: "test",
+		Env: func(string) string { return "xterm-256color" },
+	})
 	require.NoError(t, err)
 	t.Cleanup(u.Close)
 	return u

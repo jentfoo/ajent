@@ -89,6 +89,9 @@ type Options struct {
 	// Keymap configures which keys submit the prompt and which insert a newline.
 	// The zero value uses the defaults (Enter submits, Ctrl+J/Alt+Enter newline).
 	Keymap Keymap
+	// Env overrides the environment lookup behind startup detection (mode, color
+	// profile, image protocol, tone); the zero value reads the process environment.
+	Env func(string) string
 }
 
 // UI is the terminal front end: committed history above a live block holding the
@@ -110,7 +113,8 @@ type UI struct {
 	controls chan Control
 	done     chan struct{}
 
-	images ImageProtocol // resolved image protocol, ImageNone hides them
+	env    func(string) string // env lookup for startup detection, osEnv by default
+	images ImageProtocol       // resolved image protocol, ImageNone hides them
 	// kitty image ids to occupied rows, bounded. Deliberately survives Reset:
 	// inline scrollback keeps the drawings visible, and these ids are the only
 	// handle for freeing their terminal-side data.
@@ -246,9 +250,13 @@ func New(opts Options) (*UI, error) {
 		out = os.Stdout
 	}
 
+	env := opts.Env
+	if env == nil {
+		env = osEnv
+	}
 	isTTY := term.IsTerminal(int(in.Fd())) && term.IsTerminal(int(out.Fd()))
-	mode := ResolveMode(opts.Mode, osEnv, isTTY)
-	theme := NewTheme(DetectColorProfile(opts.Color, osEnv, mode != ModePlain), opts.Palette)
+	mode := ResolveMode(opts.Mode, env, isTTY)
+	theme := NewTheme(DetectColorProfile(opts.Color, env, mode != ModePlain), opts.Palette)
 
 	u := &UI{
 		theme:    theme,
@@ -262,7 +270,8 @@ func New(opts Options) (*UI, error) {
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
 		imgIDs:   make(map[uint32]int, maxTrackedImages),
-		images:   DetectImageProtocol(opts.Images, osEnv, isTTY),
+		images:   DetectImageProtocol(opts.Images, env, isTTY),
+		env:      env,
 	}
 	if opts.OnEdit != nil {
 		u.onEdit = opts.OnEdit

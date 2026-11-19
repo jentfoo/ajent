@@ -124,9 +124,20 @@ func compactionEntries(t *testing.T, w *session.Writer) []session.Entry {
 
 	entries, _, err := session.Read(w.Path())
 	require.NoError(t, err)
-	return bulk.SliceFilter(func(e session.Entry) bool { return e.Type == session.TypeCompaction },
-		session.Branch(entries, w.Head()))
+	return bulk.SliceFilter(isCompaction, session.Branch(entries, w.Head()))
 }
+
+// compactionCount is compactionEntries without the t dependency, so it is safe as
+// a require.Never condition: its goroutine can still run after the test completes.
+func compactionCount(w *session.Writer) int {
+	entries, _, err := session.Read(w.Path())
+	if err != nil {
+		return 0
+	}
+	return len(bulk.SliceFilter(isCompaction, session.Branch(entries, w.Head())))
+}
+
+func isCompaction(e session.Entry) bool { return e.Type == session.TypeCompaction }
 
 func TestCompactorSwapJoinsStateLane(t *testing.T) {
 	t.Parallel()
@@ -149,7 +160,7 @@ func TestCompactorSwapJoinsStateLane(t *testing.T) {
 		done <- err
 	}()
 
-	require.Never(t, func() bool { return len(compactionEntries(t, w)) > 0 },
+	require.Never(t, func() bool { return compactionCount(w) > 0 },
 		150*time.Millisecond, 10*time.Millisecond,
 		"the checkpoint must not record while a rewind holds the lane")
 

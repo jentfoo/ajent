@@ -20,7 +20,7 @@ const (
 // be established. It queries the terminal, so it belongs on a startup path with
 // no interaction in flight.
 func (u *UI) DetectTone() Tone {
-	if t := toneFromEnv(osEnv); t != ToneUnknown {
+	if t := toneFromEnv(u.env); t != ToneUnknown {
 		return t
 	} else if u.mode == ModePlain || u.reader == nil {
 		return ToneUnknown
