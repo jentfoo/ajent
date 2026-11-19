@@ -173,6 +173,68 @@ func TestCompleter(t *testing.T) {
 		labels := labelsOf(items)
 		assert.Contains(t, labels, "medium")
 	})
+
+	// a two-word argument completes its final word only, so accepting keeps
+	// the verb: /agents stop sub accepts into /agents stop sub-1
+	t.Run("two_word_arg_keeps_verb", func(t *testing.T) {
+		c, _ := agentsConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, emptyIdx(t))
+
+		line := "/agents stop sub"
+		start, items := comp.Complete(line, len(line))
+		assert.Equal(t, len("/agents stop "), start) // span is the job id, not the whole argument
+		require.NotEmpty(t, items)
+		assert.Equal(t, "/agents stop sub-1", acceptCompletion(line, len(line), start, items[0]))
+	})
+
+	// a cursor mid final word spans from that word's start, and the query still
+	// reads only up to the cursor
+	t.Run("two_word_arg_mid_word", func(t *testing.T) {
+		c, _ := agentsConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, emptyIdx(t))
+
+		line := "/agents stop subx"
+		pos := len("/agents stop su")
+		start, items := comp.Complete(line, pos)
+		assert.Equal(t, len("/agents stop "), start)
+		assert.Equal(t, []string{"sub-1", "sub-2"}, textsOf(items))
+	})
+
+	// completing the verb itself still replaces the verb word
+	t.Run("verb_word_replaces_verb", func(t *testing.T) {
+		c, _ := agentsConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, emptyIdx(t))
+
+		line := "/agents sto"
+		start, items := comp.Complete(line, len(line))
+		assert.Equal(t, len("/agents "), start)
+		require.NotEmpty(t, items)
+		assert.Equal(t, "/agents stop", acceptCompletion(line, len(line), start, items[0]))
+	})
+
+	// /mcp offers server names after its verb, and acceptance keeps the verb
+	t.Run("mcp_verb_then_server", func(t *testing.T) {
+		c := mcpConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		comp := NewCompleter(r, c, emptyIdx(t))
+
+		line := "/mcp connect gi"
+		start, items := comp.Complete(line, len(line))
+		assert.Equal(t, len("/mcp connect "), start)
+		require.NotEmpty(t, items)
+		assert.Equal(t, "/mcp connect github", acceptCompletion(line, len(line), start, items[0]))
+	})
 }
 
 func TestCompleterStyle(t *testing.T) {
@@ -227,6 +289,13 @@ func textsOf(items []tui.Completion) []string {
 		out = append(out, it.Text)
 	}
 	return out
+}
+
+// acceptCompletion applies a candidate the way both front ends accept one:
+// the buffer from start through the cursor is replaced by its Text.
+func acceptCompletion(line string, pos, start int, item tui.Completion) string {
+	cells := tui.GraphemeCells(line)
+	return strings.Join(cells[:start], "") + item.Text + strings.Join(cells[pos:], "")
 }
 
 func TestPathCompleter(t *testing.T) {

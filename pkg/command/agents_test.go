@@ -139,6 +139,15 @@ func TestAgentsCompletion(t *testing.T) {
 		assert.Equal(t, []string{"sub-1", "sub-2"}, picked)
 	})
 
+	// extra breaks before the id parse like dispatch, which trims them
+	t.Run("extra_breaks_before_id", func(t *testing.T) {
+		c, _ := agentsConsole(t)
+		fn := agentsCompletion(c)
+
+		assert.Equal(t, []string{"all", "sub-1", "sub-2"}, fn("stop  "))
+		assert.Equal(t, []string{"sub-1", "sub-2"}, fn("stop  sub"))
+	})
+
 	t.Run("unavailable_nil", func(t *testing.T) {
 		c := newFakeConsole(t)
 		fn := agentsCompletion(c)

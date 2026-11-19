@@ -86,6 +86,7 @@ func agentsCompletion(c Console) func(prefix string) []string {
 			return nil
 		}
 		verb, rest, hasSpace := strings.Cut(prefix, " ")
+		rest = strings.TrimSpace(rest) // extra breaks parse like dispatch
 		switch {
 		case !hasSpace:
 			return bulk.SliceFilter(func(v string) bool {

@@ -160,7 +160,8 @@ func (c *Completer) commandComplete(ctx completeCtx) (int, []tui.Completion) {
 }
 
 // commandArgComplete delegates to the matched command's Complete, resolving the
-// name as dispatch does. An empty or absent arg lists every candidate.
+// name as dispatch does. An empty or absent arg lists every candidate, and the
+// span on offer covers the argument's final word only.
 func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) {
 	nameEnd := tokenEnd(ctx.cells, ctx.start+1)
 	// Registry.Get is case sensitive on the lowercased name ParseLine produces
@@ -173,7 +174,10 @@ func (c *Completer) commandArgComplete(ctx completeCtx) (int, []tui.Completion) 
 	for argStart < ctx.pos && isTokenBreakCell(ctx.cells[argStart]) {
 		argStart++
 	}
-	return offer(argStart, ctx.pos, textCompletions(cmd.Complete(ctx.spanText(argStart))))
+	// completers parse earlier words (a verb) and answer for the final word, so
+	// acceptance replaces from that word alone and keeps the verb intact
+	return offer(tokenStart(ctx.cells, ctx.pos, argStart), ctx.pos,
+		textCompletions(cmd.Complete(ctx.spanText(argStart))))
 }
 
 // spanText returns the buffer from start up to the cursor.

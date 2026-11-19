@@ -37,7 +37,8 @@ type fakeConsole struct {
 	resets     []string        // recorded ResetSessionSetting keys
 
 	settings *config.Set
-	agents   Agents // set by tests exercising /agents, nil when unavailable
+	agents   Agents     // set by tests exercising /agents, nil when unavailable
+	mcp      MCPServers // set by tests exercising /mcp, nil when unavailable
 
 	models       *llm.Registry
 	state        *agent.State
@@ -222,8 +223,8 @@ func (f *fakeConsole) State() *agent.State            { return f.state }
 func (f *fakeConsole) SettledMessages() []llm.Message { return f.state.Messages }
 func (f *fakeConsole) Tools() *tools.Registry         { return f.tools }
 
-// MCP returns a nil manager, so the /mcp command reports it unavailable.
-func (f *fakeConsole) MCP() MCPServers { return nil }
+// MCP returns nil by default. Tests that exercise /mcp set f.mcp first.
+func (f *fakeConsole) MCP() MCPServers { return f.mcp }
 
 // Agents returns nil by default. Tests that exercise /agents set f.agents first.
 func (f *fakeConsole) Agents() Agents        { return f.agents }

@@ -7,7 +7,9 @@ type Command struct {
 	Name        string
 	Description string
 	Args        string // usage hint, e.g. "<optional-instructions>"
-	// Complete returns argument candidates for prefix, or nil when none.
+	// Complete returns argument candidates for prefix, or nil when none. prefix
+	// spans the whole argument, earlier words like a verb included; candidates
+	// replace only its final word, so they must not repeat those words.
 	Complete func(prefix string) []string
 	// Handler runs the command, with long work on a goroutine.
 	Handler func(ctx context.Context, args string, c Console) error
