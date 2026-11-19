@@ -1222,4 +1222,55 @@ func TestControlEvents(t *testing.T) {
 			assert.Equal(t, []uint64{1, 2, 3, 4, 5}, seqs)
 		}
 	})
+
+	// A lane verb's reply carries the watermark its mutation's synchronous
+	// effects reached, captured beside their publication: here the drop event
+	// itself, so the rows event published beside it applies above the reply
+	// instead of being reconciled away.
+	t.Run("recall_reply_caps_at_own_effect", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "r")
+
+		rig.hub.q = newSteerQueue(rig.hub.ui, func(int) {},
+			func(context.Context) {}, func() []agent.MessageInfo { return nil }, rig.hub.queueDroppedCause)
+		rig.hub.q.hold(agent.Input{Text: "queued one", QueueIDs: []string{"row-1"}}, "queued one", 0)
+		c.collectEventsAny(t, 1) // the hold's rows event
+
+		rp := c.call("q", ctl.MethodQueueRecall, map[string]any{})
+		require.Nil(t, rp.Error)
+		var res ctl.RecallResult
+		require.NoError(t, rp.DecodeResult(&res))
+		assert.Equal(t, "queued one", res.Text)
+
+		evs := c.collectEventsAny(t, 2)
+		require.Equal(t, ctl.EventQueueDropped, evs[0].Name)
+		require.Equal(t, ctl.EventQueued, evs[1].Name)
+		assert.Equal(t, evs[0].Seq, rp.Seq)
+		assert.Equal(t, evs[1].Seq, rp.Seq+1) // stamped after the mutation: applies, never dropped
+	})
+
+	// A verb whose mutation publishes nothing synchronously replies with the
+	// watermark taken before it, so the effects it produces later (submit's
+	// queued row and idle flip land from the pump) keep seqs above the reply and
+	// a controller reconciling against it still receives them.
+	t.Run("submit_reply_leaves_effects_above", func(t *testing.T) {
+		rig := newServeRig(t, nil)
+		c := dialControl(t, rig.path)
+		c.hello()
+		attachControl(t, c, "s")
+		rig.hub.setSubmitLine(func(string, string, string) error { return nil })
+
+		rig.hub.publish("marker", nil)
+		before := c.collectEventsAny(t, 1)[0].Seq
+
+		rp := c.call("s", ctl.MethodSubmit, map[string]any{"line": "hi"})
+		require.Nil(t, rp.Error)
+		assert.Equal(t, before, rp.Seq)
+
+		rig.hub.publish("marker", nil)
+		after := c.collectEventsAny(t, 1)[0].Seq
+		assert.Greater(t, after, rp.Seq)
+	})
 }

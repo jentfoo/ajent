@@ -165,6 +165,17 @@ type sessionHub struct {
 	acct  *tokens.Accounting // last ledger captured under the agent state lock
 	vm    viewModel          // the ephemeral view model: mutated and read beside evSeq
 
+	// reply-watermark capture: one control lane verb arms it around its
+	// mutation, and the setters that publish a lane verb's synchronous effects
+	// cap it at the seq their event stamped (a new setter in that role notes
+	// beside its publishLocked). The reply then supersedes the mutation's own
+	// events without covering turn-loop events published after them, which
+	// keep higher seqs and reach the controller. Events stamped between arming
+	// and the first note sit below the reply's watermark; the window is the
+	// verb's handler entry to its first publication.
+	effectSeq   uint64
+	effectArmed bool
+
 	// control-plane event log: one seq space, one delivery listener per
 	// connection. Committed content reconciles by entry id, so nothing needs
 	// retained events past the live fanout.
@@ -271,6 +282,7 @@ func (h *sessionHub) setHead(id, cause string) {
 	from := h.headID
 	h.headID = id
 	h.publishLocked(ctl.EventBranchChanged, ctl.BranchChangedData{From: from, Head: id, Cause: cause})
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -366,6 +378,38 @@ func (h *sessionHub) evWatermark() uint64 {
 	return h.evSeq
 }
 
+// armEffects opens the reply-watermark capture one control lane verb runs its
+// mutation under, seeded with the current watermark. A verb whose mutation
+// publishes nothing synchronously (submit hands off to the pump) replies with
+// that seed, so the effects it produces later keep seqs above the reply.
+func (h *sessionHub) armEffects() {
+	h.mu.Lock()
+	h.effectSeq = h.evSeq
+	h.effectArmed = true
+	h.mu.Unlock()
+}
+
+// noteEffectLocked caps the capture at the seq a just-published effect stamped
+// and closes it, so events stamped afterwards carry higher seqs and reach the
+// controller above the reply's watermark. The first note wins; later ones are
+// no-ops, whether the mutation's remaining effects or an unrelated publisher
+// stamped them. Caller holds h.mu, directly after the effect's publish.
+func (h *sessionHub) noteEffectLocked() {
+	if h.effectArmed {
+		h.effectSeq = h.evSeq
+		h.effectArmed = false
+	}
+}
+
+// endEffects closes any capture left open and returns the watermark the verb's
+// reply carries: the first noted effect's seq, else the seed taken at arm time.
+func (h *sessionHub) endEffects() uint64 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.effectArmed = false
+	return h.effectSeq
+}
+
 // evListen registers one connection's delivery func, reporting the seq it is
 // current through: events past it arrive via the listener.
 func (h *sessionHub) evListen(f func(*evFrame)) (*evListener, uint64) {
@@ -389,8 +433,11 @@ func (h *sessionHub) evUnlisten(l *evListener) {
 // Recorded notices ride entry.append instead, so there is no duplicate to
 // dedupe; this family is never reconciled against the file.
 func (h *sessionHub) notice(key, msg string, level tui.Level) {
-	h.publish(ctl.EventNotice, ctl.NoticeData{Text: msg,
+	h.mu.Lock()
+	h.publishLocked(ctl.EventNotice, ctl.NoticeData{Text: msg,
 		Level: levelName(agent.Level(level)), Key: key})
+	h.noteEffectLocked()
+	h.mu.Unlock()
 }
 
 // print publishes one markdown block, the form /help and /usage use.
@@ -409,6 +456,7 @@ func (h *sessionHub) setSegment(seg tui.Segment) {
 	}
 	wire := ctlSegment(seg)
 	h.publishStatusLocked(ctl.StatusData{Segment: &wire})
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -419,6 +467,7 @@ func (h *sessionHub) setModel(m llm.Model) {
 	h.vm.model = hubModel{Key: m.Key(), Short: m.ShortName(),
 		Window: m.ContextWindow, Caps: m.Caps}
 	h.publishModelLocked(h.vm.model)
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -428,6 +477,7 @@ func (h *sessionHub) setModelLabel(key, short string, window int) {
 	h.mu.Lock()
 	h.vm.model.Key, h.vm.model.Short, h.vm.model.Window = key, short, window
 	h.publishModelLocked(h.vm.model)
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -452,6 +502,7 @@ func (h *sessionHub) setQueued(rows []ctl.QueueRow) {
 	h.mu.Lock()
 	h.vm.queued = slices.Clone(rows)
 	h.publishLocked(ctl.EventQueued, ctl.QueuedData{Rows: redactQueueRows(rows)})
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -459,8 +510,11 @@ func (h *sessionHub) setQueued(rows []ctl.QueueRow) {
 // pending rows resolve instead of vanishing. The cause names what removed them:
 // an interrupt recovery, a rewind clear, or a recall back into an editor.
 func (h *sessionHub) queueDroppedCause(cause string, rows []ctl.QueueRow) {
-	h.publish(ctl.EventQueueDropped,
+	h.mu.Lock()
+	h.publishLocked(ctl.EventQueueDropped,
 		ctl.QueueDroppedData{Rows: redactQueueRows(rows), Cause: cause})
+	h.noteEffectLocked()
+	h.mu.Unlock()
 }
 
 // setIdle remembers the prompt's rest state and publishes the flip, so
@@ -495,6 +549,7 @@ func (h *sessionHub) setContext(c tokens.ContextState) {
 	h.mu.Lock()
 	h.vm.context = c
 	h.publishLocked(ctl.EventContext, contextWire(c))
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -506,6 +561,7 @@ func (h *sessionHub) setPermissionMode(m permit.Mode) {
 	name := m.String()
 	h.vm.permission = name
 	h.publishLocked(ctl.EventPermission, ctl.PermissionData{Mode: name})
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 
@@ -536,6 +592,7 @@ func (h *sessionHub) refreshTools() {
 	h.mu.Lock()
 	h.vm.tools = rows
 	h.publishLocked(ctl.EventTools, ctl.ToolsData{Rows: ctlTools(rows)})
+	h.noteEffectLocked()
 	h.mu.Unlock()
 }
 

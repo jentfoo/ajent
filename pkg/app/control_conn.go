@@ -328,8 +328,14 @@ func (c *controlConn) refuseSeat(req ctl.Request, seat bool) bool {
 // dispatch answers one request through the method registry. Off-lane calls
 // run here. Lane calls enqueue on the control executor, whose pop-time run
 // revalidates the seat so a takeover can never leave a success after its
-// effect. Reads reply with the seq their result was taken at, writes reply
-// with the watermark after their mutation, superseding its events.
+// effect. Reply seqs follow the reconciliation contract: a lane write answers
+// with the watermark its mutation reached, captured under the hub lock beside
+// its own publications (armEffects), so events the turn loop races past the
+// verb keep higher seqs and survive reconciliation; verbs whose effects land
+// later, like submit's pump handoff, answer with the pre-mutation seed for
+// the same reason. Off-lane calls answer with the watermark taken before the
+// handler, racing events above it. state.get replies with its snapshot's own
+// seq, every error with the current watermark.
 func (c *controlConn) dispatch(req ctl.Request) {
 	m, ok := controlMethods[req.Method]
 	if !ok {
@@ -346,8 +352,9 @@ func (c *controlConn) dispatch(req ctl.Request) {
 			if c.refuseSeat(req, m.seat) {
 				return
 			}
+			c.srv.hub.armEffects()
 			result, rerr := m.handle(c, req.Params)
-			c.reply(req.ID, c.srv.hub.evWatermark(), result, rerr)
+			c.replyResult(req, c.srv.hub.endEffects(), result, rerr)
 		}) {
 			c.reply(req.ID, c.srv.hub.evWatermark(), nil,
 				ctl.Errf(ctl.CodeUnavailable, "the session is shutting down"))
@@ -357,11 +364,19 @@ func (c *controlConn) dispatch(req ctl.Request) {
 	if c.refuseSeat(req, m.seat) {
 		return
 	}
+	seq := c.srv.hub.evWatermark() // taken before handle: racing events apply above it
 	result, rerr := m.handle(c, req.Params)
-	seq := c.srv.hub.evWatermark()
-	if sr, ok := result.(seqResult); ok {
-		result = sr.val
-		seq = sr.seq
+	c.replyResult(req, seq, result, rerr)
+}
+
+// replyResult stages one handled request's answer. Errors carry the current
+// watermark, a seqResult the seq its result was taken at, anything else the
+// seq the caller captured beside its work.
+func (c *controlConn) replyResult(req ctl.Request, seq uint64, result any, rerr *ctl.Error) {
+	if rerr != nil {
+		seq = c.srv.hub.evWatermark()
+	} else if sr, ok := result.(seqResult); ok {
+		result, seq = sr.val, sr.seq
 	}
 	c.reply(req.ID, seq, result, rerr)
 }

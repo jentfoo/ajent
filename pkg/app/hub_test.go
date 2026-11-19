@@ -700,6 +700,66 @@ func TestHubPublishWithoutListeners(t *testing.T) {
 	assert.Equal(t, uint64(2), hub.evWatermark()) // listenerless again: spent nothing
 }
 
+func TestHubEffectCapture(t *testing.T) {
+	t.Parallel()
+
+	t.Run("note_caps_at_own_effect", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		log := &emitLog{}
+		hub := newTestHub(term)
+		log.attach(hub)
+
+		hub.armEffects()
+		hub.publish("marker", nil)                   // a turn-loop event racing the verb stamps past the seed
+		hub.setQueued([]ctl.QueueRow{{ID: "row-1"}}) // the mutation's own effect notes
+		hub.publish("marker", nil)                   // stamped after the mutation, before the reply
+
+		seq := hub.endEffects()
+		queued := log.named(ctl.EventQueued)[0].Seq
+		assert.Equal(t, queued, seq)
+		assert.Less(t, seq, hub.evWatermark()) // the post-mutation marker stays above the reply
+	})
+
+	t.Run("unnoted_falls_back_to_seed", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		log := &emitLog{}
+		hub := newTestHub(term)
+		log.attach(hub)
+
+		hub.publish("marker", nil)
+		before := hub.evWatermark()
+		hub.armEffects()
+		hub.publish("marker", nil) // stamped mid-mutation, but nothing notes it
+
+		assert.Equal(t, before, hub.endEffects())
+	})
+
+	t.Run("first_note_wins", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		log := &emitLog{}
+		hub := newTestHub(term)
+		log.attach(hub)
+
+		hub.armEffects()
+		hub.setQueued([]ctl.QueueRow{{ID: "row-1"}}) // notes and closes
+		want := hub.endEffects()
+		hub.setContext(tokens.ContextState{Used: 8, Window: 64000}) // capture closed: no-op
+
+		assert.Equal(t, want, hub.endEffects())
+	})
+
+	t.Run("listenerless_publish_spends_nothing", func(t *testing.T) {
+		term, _ := pipeUI(t)
+		hub := newTestHub(term)
+
+		before := hub.evWatermark()
+		hub.armEffects()
+		hub.setQueued([]ctl.QueueRow{{ID: "row-1"}}) // no listener: no seq, the note still fires
+
+		assert.Equal(t, before, hub.endEffects())
+	})
+}
+
 // Every listener receives one and the same frame for one publish, and its
 // wire line encodes once no matter how many writers drain it.
 func TestEvFrameBytes(t *testing.T) {
