@@ -270,6 +270,8 @@ func (u *UI) SetStatusSegment(seg Segment) {
 }
 
 // setSegmentLocked is SetStatusSegment for callers already holding the lock.
+// u.status.Segments is UI-owned (SetStatus clones at ingress), so the in-place
+// delete never shifts caller memory.
 func (u *UI) setSegmentLocked(seg Segment) {
 	seg.Text = sanitizeRow(seg.Text) // arbitrary caller text, keep SGR only
 	seg.Short = sanitizeRow(seg.Short)

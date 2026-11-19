@@ -508,11 +508,15 @@ func (u *UI) Divider() {
 }
 
 // SetStatus replaces the whole status line, including the model and every
-// segment. To update one part use SetModel or SetStatusSegment instead.
+// segment. The UI keeps its own copy of Segments. To update one part use
+// SetModel or SetStatusSegment instead.
 func (u *UI) SetStatus(s Status) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
+	// own the backing array: segment removal shifts elements in place and must
+	// not touch caller memory
+	s.Segments = slices.Clone(s.Segments)
 	u.status = s
 	u.repaint()
 }

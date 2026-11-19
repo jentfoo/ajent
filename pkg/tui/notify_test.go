@@ -2,6 +2,7 @@ package tui
 
 import (
 	"io"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,6 +160,60 @@ func TestUISetStatusReplacesEverything(t *testing.T) {
 		u.SetModel("lmstudio/qwen", "qwen", 65536)
 		u.SetStatus(Status{Tokens: 10, MaxTokens: 100})
 		assert.NotContains(t, u.snapshot(v), "lmstudio/qwen")
+	})
+}
+
+func TestUISetStatusAliasing(t *testing.T) {
+	t.Parallel()
+
+	// storedSegments reads the UI's own copy of the segments under the lock.
+	storedSegments := func(u *UI) []Segment {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		return slices.Clone(u.status.Segments)
+	}
+
+	t.Run("edits_do_not_leak", func(t *testing.T) {
+		v := newVT(80, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+
+		segs := []Segment{{Key: "a", Text: "alpha"}, {Key: "b", Text: "beta"}}
+		u.SetStatus(Status{Model: "m", Segments: segs})
+		segs[0].Text = "hacked" // a host reusing its slice must not reach the UI
+
+		assert.Equal(t, []Segment{{Key: "a", Text: "alpha"}, {Key: "b", Text: "beta"}}, storedSegments(u))
+	})
+
+	t.Run("removal_keeps_caller_slice", func(t *testing.T) {
+		v := newVT(80, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+
+		segs := []Segment{{Key: "a", Text: "alpha"}, {Key: "b", Text: "beta"}}
+		u.SetStatus(Status{Model: "m", Segments: segs})
+
+		// empty Text removes, shifting elements in place
+		u.SetStatusSegment(Segment{Key: "a"})
+		assert.Equal(t, []Segment{{Key: "a", Text: "alpha"}, {Key: "b", Text: "beta"}}, segs)
+		screen := u.snapshot(v)
+		assert.Contains(t, screen, "beta")
+		assert.NotContains(t, screen, "alpha")
+	})
+
+	t.Run("append_spares_caller_capacity", func(t *testing.T) {
+		v := newVT(80, 12)
+		u := newTestUI(t, v, strings.NewReader(""))
+
+		segs := make([]Segment, 0, 4)
+		segs = append(segs, Segment{Key: "a", Text: "alpha"})
+		u.SetStatus(Status{Model: "m", Segments: segs})
+
+		// a keyed add must not write into the spare capacity past the caller's
+		// len, which reusing the backing array here would expose
+		u.SetStatusSegment(Segment{Key: "b", Text: "beta"})
+		reused := append(segs[:0], Segment{Key: "c", Text: "gamma"})
+
+		assert.Equal(t, []Segment{{Key: "a", Text: "alpha"}, {Key: "b", Text: "beta"}}, storedSegments(u))
+		assert.Equal(t, []Segment{{Key: "c", Text: "gamma"}}, reused)
 	})
 }
 
