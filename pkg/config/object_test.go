@@ -108,6 +108,31 @@ func TestSetKey(t *testing.T) {
 		assert.Equal(t, `{"a":2}`, string(out))
 	})
 
+	t.Run("non_object_document_refused", func(t *testing.T) {
+		// a stray document cannot gain a key without discarding what it holds;
+		// Load rejects these shapes too, so saving must refuse them loudly
+		for _, data := range []string{`[1]`, `123`, `"x"`, `null`} {
+			out, err := SetKey([]byte(data), "model", "m")
+			assert.Nil(t, out)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "expected a JSON object at the top level")
+		}
+	})
+
+	t.Run("non_object_refusal_names_the_value", func(t *testing.T) {
+		// the refusal is positioned at the value's first byte so JSONError can
+		// name its line and column like every other config file failure
+		data := "\n  [1]"
+		_, err := SetKey([]byte(data), "a", 1)
+		var oe *offsetError
+		require.ErrorAs(t, err, &oe)
+		assert.Equal(t, int64(3), oe.offset)
+
+		wrapped := JSONError("f.json", []byte(data), err)
+		assert.Contains(t, wrapped.Error(), "f.json:2:3")
+		assert.Contains(t, wrapped.Error(), "found an array")
+	})
+
 	t.Run("unserializable_value_errors", func(t *testing.T) {
 		// a value json.Marshal rejects surfaces as an error rather than corrupting the layer
 		_, err := SetKey([]byte(`{}`), "a", make(chan int))

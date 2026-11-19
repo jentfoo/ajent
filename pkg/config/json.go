@@ -38,18 +38,30 @@ func RelaxJSONReport(data []byte) (out []byte, hasComments bool) {
 // position. Content after the opening brace may still fail to decode.
 func RelaxedObject(path string, raw []byte) ([]byte, error) {
 	data := RelaxJSON(raw)
-	start := bytes.IndexFunc(data, func(r rune) bool { return !unicode.IsSpace(r) })
+	start := firstNonSpace(data)
 	if start < 0 {
 		return nil, nil // blank or comment-only content behaves as an absent file
 	}
 	if data[start] == '{' {
 		return data, nil
 	}
-	err := &offsetError{
+	return nil, JSONError(path, data, nonObjectError(data))
+}
+
+// nonObjectError builds the shape refusal for a document whose top-level value
+// is not an object, positioned at that value. Callers wrap it with JSONError
+// to name the file.
+func nonObjectError(data []byte) error {
+	start := firstNonSpace(data)
+	return &offsetError{
 		msg:    "expected a JSON object at the top level, found " + jsonValueName(data[start:]),
 		offset: int64(start),
 	}
-	return nil, JSONError(path, data, err)
+}
+
+// firstNonSpace returns data's first byte offset that is not whitespace, or -1.
+func firstNonSpace(data []byte) int {
+	return bytes.IndexFunc(data, func(r rune) bool { return !unicode.IsSpace(r) })
 }
 
 // jsonValueName names the kind of v's leading JSON value for error messages.

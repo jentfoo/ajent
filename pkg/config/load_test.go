@@ -453,6 +453,33 @@ func TestSave(t *testing.T) {
 		assert.Equal(t, junked, string(b)) // the hand edit is left untouched
 	})
 
+	t.Run("hand_edited_non_object_refuse_save", func(t *testing.T) {
+		// the same hand-edit window as trailing bytes: Load rejects these shapes,
+		// so saving must refuse them instead of replacing the document silently
+		for _, doc := range []string{"[1]", "123", `"x"`, "null"} {
+			home := t.TempDir()
+			t.Setenv("AJENT_HOME", home)
+			userFile := userPathFor(t)
+			writeConfig(t, userFile, `{"model":"keep"}`)
+			s, _, err := Load(Options{Workspace: "."})
+			require.NoError(t, err)
+
+			strayed := doc + "\n"
+			require.NoError(t, os.WriteFile(userFile, []byte(strayed), 0o600))
+
+			warns, err := s.Save("user", "reasoning.level", "high")
+			require.Error(t, err)
+			assert.Empty(t, warns) // nothing was written, so no loss to report
+			assert.Contains(t, err.Error(), userFile)
+			assert.Contains(t, err.Error(), ":1:1: expected a JSON object at the top level")
+
+			b, err := os.ReadFile(userFile)
+			require.NoError(t, err)
+			assert.Equal(t, strayed, string(b))         // the hand edit is left untouched
+			assert.Equal(t, "keep", s.Settings().Model) // the layer keeps its last good state
+		}
+	})
+
 	t.Run("failed_save_reports_no_loss", func(t *testing.T) {
 		// a refused save writes nothing, so it must not claim comments were dropped
 		home := t.TempDir()
