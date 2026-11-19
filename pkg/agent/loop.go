@@ -95,16 +95,19 @@ func (a *Agent) drive(ctx context.Context) error {
 				a.follow = a.follow[1:]
 				ok = true
 			}
+			// a turn starts on text, extra blocks or an after-context request;
+			// framing-only inputs (Before, delivery callbacks) fold into the next
+			// turn. Claim at the pop: until runTurn registers its cancel the input
+			// lives only in locals, so an interrupt in that window pends against
+			// this claim instead of missing the turn entirely
+			if ok && (next.Text != "" || len(next.Blocks) > 0 || next.After != nil) {
+				head, have = next, true
+				a.claimed = true
+			}
 			a.mu.Unlock()
 
-			if !ok {
-				break // both queues drained
-			}
-			// a turn starts on text, extra blocks or an after-context request;
-			// framing-only inputs (Before, delivery callbacks) fold into the next turn
-			if next.Text != "" || len(next.Blocks) > 0 || next.After != nil {
-				head, have = next, true
-				break
+			if have || !ok {
+				break // a turn is claimed, or both queues drained
 			}
 			leads = append(leads, next)
 		}
@@ -167,6 +170,13 @@ func (a *Agent) runTurn(ctx context.Context, head Input, leads []Input) error {
 	a.running = true
 	turnCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
+	a.claimed = false // the registered cancel takes over from the pop claim
+	if a.interruptPending {
+		// an interrupt landed between the head's pop and this claim: the turn
+		// aborts before anything appends or streams
+		a.interruptPending = false
+		cancel()
+	}
 	// fold pre-start steer in atomically with claiming the turn, so input Steer'd
 	// after Running() lands at a step boundary (drainSteer), not with the prompt.
 	promptInputs := append(append(slices.Clone(leads), head), a.steer...)

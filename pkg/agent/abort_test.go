@@ -139,6 +139,60 @@ func TestInterrupt(t *testing.T) {
 		assert.Equal(t, "c1", ids[0])
 		assert.NotEqual(t, "c1", ids[1])
 	})
+
+	// an interrupt landing after the head's pop but before the turn claims pends
+	// against that claim, so the turn aborts before anything streams
+	t.Run("claim_window_pends", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("recovered")}}}
+		catch := &resultCatcher{}
+		a := newTestAgent(nil, p, catch)
+
+		// park the agent in the window drive sits in between pop and claim
+		a.mu.Lock()
+		a.claimed = true
+		a.mu.Unlock()
+
+		a.Interrupt()
+		a.mu.Lock()
+		pended := a.interruptPending
+		a.mu.Unlock()
+		require.True(t, pended)
+
+		var leadDropped, headDropped bool
+		require.NoError(t, a.PromptBatch(t.Context(), []Input{
+			{Before: []MessageInfo{{}}, Dropped: func() { leadDropped = true }},
+			{Text: "x", Dropped: func() { headDropped = true }},
+		}))
+		assert.Empty(t, p.Requests()) // the provider was never reached
+		assert.Equal(t, llm.StopAborted, catch.result.Stop)
+		assert.True(t, leadDropped) // framing dropped with the head, none of it lands
+		assert.True(t, headDropped)
+		assert.Empty(t, a.state.Messages) // nothing appends for the aborted turn
+
+		// the pend is consumed by the claim, so the next turn runs normally
+		a.mu.Lock()
+		pended = a.interruptPending
+		a.mu.Unlock()
+		assert.False(t, pended)
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "y"}))
+		assert.Equal(t, []string{"recovered"}, assistantTexts(a.state.Messages))
+	})
+
+	// an interrupt with nothing claimed or running is ignored, it must not
+	// poison the next turn
+	t.Run("idle_not_pended", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+
+		a.Interrupt()
+		a.mu.Lock()
+		pended := a.interruptPending
+		a.mu.Unlock()
+		require.False(t, pended)
+
+		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
+		assert.Equal(t, []string{"ok"}, assistantTexts(a.state.Messages))
+	})
 }
 
 func TestAbortResults(t *testing.T) {

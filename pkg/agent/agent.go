@@ -90,13 +90,15 @@ type Agent struct {
 
 	retrySleep func(context.Context, time.Duration) error // stream backoff, test seam
 
-	mu       sync.Mutex
-	running  bool
-	draining bool // a runTurns loop owns queue draining, later callers only seed
-	settling int  // depth of OnSettled notification, observers may queue work while >0
-	steer    []Input
-	follow   []Input
-	cancel   context.CancelFunc
+	mu               sync.Mutex
+	running          bool
+	draining         bool // a runTurns loop owns queue draining, later callers only seed
+	settling         int  // depth of OnSettled notification, observers may queue work while >0
+	steer            []Input
+	follow           []Input
+	cancel           context.CancelFunc
+	claimed          bool // a popped turn head awaits runTurn's cancel registration
+	interruptPending bool // an interrupt landed in the claim window, the claim must abort
 }
 
 // New returns an agent bound to state. Events emit through every sink in
@@ -183,12 +185,17 @@ func (a *Agent) FollowUp(in Input) bool {
 }
 
 // Interrupt cancels the running turn and drops anything queued. It is safe to
-// call at any time, an idle agent ignores it.
+// call at any time, an idle agent ignores it. An interrupt landing after a
+// turn's input is claimed but before its turn starts aborts that turn before
+// anything streams.
 func (a *Agent) Interrupt() {
 	a.mu.Lock()
 	cancel := a.cancel
 	a.steer = nil
 	a.follow = nil
+	if cancel == nil && a.claimed {
+		a.interruptPending = true // the head is in flight unregistered: pend the abort
+	}
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()
