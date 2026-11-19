@@ -413,6 +413,33 @@ func TestCompatWarnings(t *testing.T) {
 		assert.Empty(t, w)
 	})
 
+	// max_completion_tokens is what routes a responses model onto the chat-completions
+	// fallback (usesCompatBody), so both openai dialects must accept it
+	t.Run("responses_honors_the_fallback_selector", func(t *testing.T) {
+		c := &Compat{MaxTokensField: ptr(fieldMaxCompletion)}
+		assert.Empty(t, compatWarnings(c, DialectOpenAICompletions))
+		assert.Empty(t, compatWarnings(c, DialectOpenAIResponses))
+	})
+
+	t.Run("responses_non_fallback_value_warns", func(t *testing.T) {
+		w := compatWarnings(&Compat{MaxTokensField: ptr(fieldMaxTokens)}, DialectOpenAIResponses)
+		require.Len(t, w, 1)
+		assert.Contains(t, w[0], `unless set to "max_completion_tokens"`)
+	})
+
+	t.Run("completions_prompt_cache_opt_in", func(t *testing.T) {
+		w := compatWarnings(&Compat{SupportsExplicitPromptCache: ptr(true)}, DialectOpenAICompletions)
+		assert.Empty(t, w)
+	})
+
+	t.Run("anthropic_still_warns_on_openai_fields", func(t *testing.T) {
+		w := compatWarnings(&Compat{MaxTokensField: ptr(fieldMaxCompletion),
+			SupportsExplicitPromptCache: ptr(true)}, DialectAnthropic)
+		require.Len(t, w, 2)
+		assert.Contains(t, w[0], `"maxTokensField" is ignored by dialect anthropic-messages`)
+		assert.Contains(t, w[1], `"supportsExplicitPromptCacheMode" is ignored by dialect anthropic-messages`)
+	})
+
 	t.Run("both_stream_usage_spellings_warn", func(t *testing.T) {
 		w := compatWarnings(&Compat{SupportsStreamUsage: ptr(true), SupportsUsageInStreaming: ptr(false)},
 			DialectOpenAICompletions)

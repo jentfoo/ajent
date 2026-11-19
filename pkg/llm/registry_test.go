@@ -90,6 +90,19 @@ func TestNewRegistry(t *testing.T) {
 		require.Len(t, r.Models(), 1) // the declaration alone
 	})
 
+	// a responses model riding the chat-completions fallback and a completions endpoint
+	// opting into prompt_cache_key are documented seams, so neither field may warn here
+	t.Run("fallback_and_prompt_cache_fields_do_not_warn", func(t *testing.T) {
+		f := File{Providers: map[string]ProviderConfig{
+			"openai": {Models: []ModelConfig{{ID: "gpt-5.2",
+				Compat: &Compat{MaxTokensField: ptr(fieldMaxCompletion), SupportsExplicitPromptCache: ptr(true)}}}},
+			"proxy": {BaseURL: "http://x/v1", Models: []ModelConfig{{ID: "m1",
+				Compat: &Compat{SupportsExplicitPromptCache: ptr(true)}}}},
+		}}
+		_, warnings := NewRegistry(f, nil, RegistryOptions{})
+		assert.Empty(t, warnings)
+	})
+
 	t.Run("sorts_by_provider_then_id", func(t *testing.T) {
 		r, warnings := NewRegistry(testFile(), nil, RegistryOptions{})
 		assert.Empty(t, warnings)

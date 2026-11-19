@@ -293,8 +293,10 @@ type ModelOverride struct {
 // honours it, which is where ajent's own extensions sit. compatWarnings reports
 // any set field whose dialect does not include the model's resolved dialect.
 type Compat struct {
-	ThinkingFormat        *string `json:"thinkingFormat,omitempty"`
-	MaxTokensField        *string `json:"maxTokensField,omitempty" dialect:"openai-completions"`
+	ThinkingFormat *string `json:"thinkingFormat,omitempty"`
+	// MaxTokensField also selects the chat-completions fallback on a responses model
+	// (see usesCompatBody), so both openai dialects read it.
+	MaxTokensField        *string `json:"maxTokensField,omitempty" dialect:"openai-completions,openai-responses"`
 	ReasoningContentField *string `json:"reasoningContentField,omitempty"`
 	// RetainDefault is the policy a model falls back to when no layer sets one.
 	// "none" parses to the enum zero and reads as unset, a silent no-op here
@@ -341,9 +343,11 @@ type Compat struct {
 	SupportsCacheControlOnTools *bool `json:"supportsCacheControlOnTools,omitempty" dialect:"anthropic-messages"`
 	EagerToolInputStreaming     *bool `json:"supportsEagerToolInputStreaming,omitempty" dialect:"anthropic-messages"`
 
-	SupportsAdditionalTools     *bool `json:"supportsAdditionalTools,omitempty" dialect:"openai-responses"`
-	SupportsToolSearch          *bool `json:"supportsToolSearch,omitempty" dialect:"openai-responses"`
-	SupportsExplicitPromptCache *bool `json:"supportsExplicitPromptCacheMode,omitempty" dialect:"openai-responses"`
+	SupportsAdditionalTools *bool `json:"supportsAdditionalTools,omitempty" dialect:"openai-responses"`
+	SupportsToolSearch      *bool `json:"supportsToolSearch,omitempty" dialect:"openai-responses"`
+	// SupportsExplicitPromptCache opts non-openai (in practice completions) endpoints into
+	// prompt_cache_key, and both openai body builders read it.
+	SupportsExplicitPromptCache *bool `json:"supportsExplicitPromptCacheMode,omitempty" dialect:"openai-completions,openai-responses"`
 
 	SendSessionAffinityHeaders *bool                      `json:"sendSessionAffinityHeaders,omitempty"`
 	ChatTemplateKwargs         map[string]json.RawMessage `json:"chatTemplateKwargs,omitempty" dialect:"openai-completions"`
@@ -453,8 +457,9 @@ func SaveUserFile(f File) ([]string, error) {
 
 // compatWarnings reports configuration that will not behave as authored for the
 // dialect d: an unknown thinkingFormat value, alias spellings set twice in one
-// block, and any set field whose dialect tag excludes d. It returns nil when
-// nothing is wrong with o.
+// block, any set field whose dialect tag excludes d and, under responses, a
+// maxTokensField other than the fallback selector. It returns nil when nothing
+// is wrong with o.
 func compatWarnings(o *Compat, d Dialect) []string {
 	if o == nil {
 		return nil
@@ -466,6 +471,12 @@ func compatWarnings(o *Compat, d Dialect) []string {
 		if _, ok := parseThinkingFormat(*o.ThinkingFormat); !ok {
 			out = append(out, fmt.Sprintf("compat thinkingFormat %q is not supported, the provider default is used", *o.ThinkingFormat))
 		}
+	}
+	// under responses only max_completion_tokens does anything (see usesCompatBody),
+	// so any other value warns although the tag allows the dialect
+	if o.MaxTokensField != nil && d == DialectOpenAIResponses && *o.MaxTokensField != fieldMaxCompletion {
+		out = append(out, fmt.Sprintf(
+			`compat field "maxTokensField" is ignored by dialect openai-responses unless set to %q`, fieldMaxCompletion))
 	}
 	for i := range t.NumField() {
 		f := t.Field(i)
