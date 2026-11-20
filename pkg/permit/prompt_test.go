@@ -1,6 +1,7 @@
 package permit
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,24 +67,45 @@ func TestBuildOptions(t *testing.T) {
 		{"for f in *.md; do head -20 \"$f\"; done", 3, ""},
 	}
 	for _, c := range cases {
-		opts := buildOptions(tools.ToolBash, c.in)
+		opts := buildOptions(ModeAuto, tools.ToolBash, c.in)
 		assert.Len(t, opts, c.wantLen, c.in)
-		actions := optionActions(tools.ToolBash, c.in) // labels and actions stay aligned
+		actions := optionActions(ModeAuto, tools.ToolBash, c.in) // labels and actions stay aligned
 		assert.Len(t, actions, c.wantLen, c.in)
 		if c.expect != "" {
-			assert.Equal(t, c.expect, opts[optAllowSession], c.in)
+			assert.Equal(t, c.expect, opts[slices.Index(actions, int(optAllowSession))], c.in)
 		} else {
 			assert.Equal(t, "Deny", opts[len(opts)-1], c.in)
 		}
 	}
 
-	// non-shell tools remember under their own name, in bash's backtick style
+	// non-shell tools remember under their own name, in bash's backtick style;
+	// block-all offers no jump, so the session option sits at its shorter-list spot
 	for _, name := range []string{"edit", "write"} {
-		opts := buildOptions(name, "")
-		actions := optionActions(name, "") // labels and actions stay aligned
+		opts := buildOptions(ModeBlockAll, name, "")
+		actions := optionActions(ModeBlockAll, name, "") // labels and actions stay aligned
 		assert.Len(t, opts, 4)
 		assert.Len(t, actions, 4)
-		assert.Equal(t, "Allow `"+name+"` for session", opts[optAllowSession])
+		assert.Equal(t, "Allow `"+name+"` for session", opts[slices.Index(actions, int(optAllowSession))])
+	}
+
+	// write/edit prompts under allow-read or auto offer the auto+write jump
+	// above session memory, both shapes staying index-aligned
+	for _, m := range []Mode{ModeAllowRead, ModeAuto} {
+		for _, name := range []string{"edit", "write"} {
+			opts := buildOptions(m, name, "")
+			actions := optionActions(m, name, "") // labels and actions stay aligned
+			assert.Len(t, opts, 5)
+			assert.Len(t, actions, 5)
+			assert.Equal(t, modeSwitchLabel, opts[int(optModeSwitch)], name)
+			assert.Equal(t, "Allow `"+name+"` for session", opts[slices.Index(actions, int(optAllowSession))], name)
+			assert.Equal(t, "Deny", opts[len(opts)-1], name)
+		}
+	}
+
+	// bash and extension tools never offer the jump
+	for _, name := range []string{tools.ToolBash, "srv__tool"} {
+		opts := buildOptions(ModeAuto, name, "ls")
+		assert.NotContains(t, opts, modeSwitchLabel)
 	}
 }
 

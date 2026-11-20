@@ -141,15 +141,18 @@ func waitDialog(t *testing.T, p *fakePrompter) *fakeDialog {
 	return p.last()
 }
 
-// runAndAnswer drives the asker in a goroutine, answers its dialog with idx, and
-// returns the resulting decision.
-func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input []byte, idx int) tools.Decision {
+// runAndAnswer drives the asker in a goroutine, answers its dialog with the
+// option opt names (translated to its display row), and returns the decision.
+func runAndAnswer(t *testing.T, p *fakePrompter, b *Barrier, name string, input []byte, opt int) tools.Decision {
 	t.Helper()
 
 	var got tools.Decision
 	done := make(chan struct{})
 	go func() { got = runAsk(b, t.Context(), name, input); close(done) }()
-	waitDialog(t, p).answer(idx)
+	d := waitDialog(t, p)
+	idx := slices.Index(optionActions(b.Mode(), name, bashCommand(input)), opt)
+	require.NotEqual(t, -1, idx)
+	d.answer(idx)
 	<-done
 	return got
 }
@@ -1271,7 +1274,7 @@ func TestAskerSessionGrants(t *testing.T) {
 
 		// cat | head is read-only end to end and never prompts; a compound needing
 		// approval must name its heads. A redirect line offers no session memory.
-		opts := buildOptions(tools.ToolBash, "echo x >> ~/.ssh/authorized_keys")
+		opts := buildOptions(ModeAuto, tools.ToolBash, "echo x >> ~/.ssh/authorized_keys")
 		require.Len(t, opts, 3) // no memory option to accept
 
 		// allowing an unnameable compound covers only this call, granting nothing
@@ -1328,9 +1331,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		b := newTestBarrier(p)
 
 		// the dialog names go test, not time: the key is what executes
-		displayIdx := slices.Index(optionActions(tools.ToolBash, "time go test ./..."), int(optAllowSession))
-		require.NotEqual(t, -1, displayIdx)
-		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"time go test ./..."}`), displayIdx)
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"time go test ./..."}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
 		// later plain and prefixed runs match the grant without a dialog
@@ -1352,9 +1353,7 @@ func TestAskerSessionGrants(t *testing.T) {
 		b := newTestBarrier(p)
 
 		// three distinct non-readonly heads all land in the named grant
-		displayIdx := slices.Index(optionActions(tools.ToolBash, "rm a && mkdir b && touch c"), int(optAllowSession))
-		require.NotEqual(t, -1, displayIdx)
-		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), displayIdx)
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"rm a && mkdir b && touch c"}`), int(optAllowSession))
 		assert.Equal(t, tools.ActionAllow, got.Action)
 
 		// a different compound of the same three heads is covered without a dialog
@@ -1449,6 +1448,112 @@ func TestAskerSessionGrants(t *testing.T) {
 		// an unrelated write is not covered
 		_, ok := b.sessionAllowed(bashCall("touch x"))
 		assert.False(t, ok)
+	})
+}
+
+func TestAskerModeSwitchChoice(t *testing.T) {
+	t.Parallel()
+
+	// choosing the jump lifts the gate to auto+write and allows this call
+	t.Run("flips_to_auto_write_and_allows", func(t *testing.T) {
+		p := newFakePrompter()
+		n := &noticeRecorder{}
+		var flips []Mode
+		b := newTestBarrierOpts(p, withMode(Options{
+			Notice: n.record, OnModeChange: func(m Mode) { flips = append(flips, m) }}, ModeAuto))
+
+		// the switch option sits directly above session memory; answer it
+		opts := buildOptions(ModeAuto, "write", "")
+		require.Equal(t, modeSwitchLabel, opts[optModeSwitch])
+		require.Equal(t, "Allow `write` for session", opts[optModeSwitch+1])
+		got := runAndAnswer(t, p, b, "write", []byte(`{"path":"/tmp/f.txt"}`), int(optModeSwitch))
+
+		assert.Equal(t, tools.ActionAllow, got.Action)
+		assert.Equal(t, ModeAutoWrite, b.Mode())
+		assert.Equal(t, []Mode{ModeAutoWrite}, flips)
+		assert.Contains(t, n.all(), "permissions mode: auto+write")
+	})
+
+	// the lift covers later in-scope writes without a dialog
+	t.Run("in_scope_writes_stop_prompting", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{"/work"}}, ModeAuto))
+
+		got := runAndAnswer(t, p, b, "write", []byte(`{"path":"/work/f.txt"}`), int(optModeSwitch))
+		assert.Equal(t, tools.ActionAllow, got.Action)
+
+		n := p.count()
+		d := runAsk(b, t.Context(), "edit", []byte(`{"path":"/work/g.txt"}`))
+		assert.Equal(t, tools.ActionAllow, d.Action)
+		assert.Equal(t, n, p.count()) // the lifted gate never asked again
+	})
+
+	// session grants earned before the flip do not survive it
+	t.Run("clears_earned_session_allows", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrierOpts(p, withMode(Options{}, ModeAuto))
+
+		got := runAndAnswer(t, p, b, "bash", []byte(`{"command":"touch x"}`), int(optAllowSession))
+		assert.Equal(t, tools.ActionAllow, got.Action)
+
+		// the write ask is the second dialog on the same prompter; answer it directly
+		var got2 tools.Decision
+		done := make(chan struct{})
+		go func() { got2 = runAsk(b, t.Context(), "write", []byte(`{"path":"f.txt"}`)); close(done) }()
+		require.Eventually(t, func() bool { return p.count() == 2 }, time.Second, 10*time.Millisecond)
+		p.mu.Lock()
+		second := p.dialogs[1]
+		p.mu.Unlock()
+		second.answer(int(optModeSwitch))
+		<-done
+		assert.Equal(t, tools.ActionAllow, got2.Action)
+
+		// the touch grant died with the mode change, so the line asks again
+		_, ok := b.sessionAllowed(bashCall("touch y"))
+		assert.False(t, ok)
+	})
+
+	// a sibling dialog offering the jump re-evaluates when another flips the gate
+	t.Run("sibling_dialog_resolves_under_new_mode", func(t *testing.T) {
+		p := newFakePrompter()
+		b := newTestBarrierOpts(p, withMode(Options{WriteRoots: []string{"/work"}}, ModeAuto))
+
+		var d1, d2 tools.Decision
+		done1, done2 := make(chan struct{}), make(chan struct{})
+		go func() { d1 = runAsk(b, t.Context(), "write", []byte(`{"path":"/work/a.txt"}`)); close(done1) }()
+		go func() { d2 = runAsk(b, t.Context(), "write", []byte(`{"path":"/work/b.txt"}`)); close(done2) }()
+		require.Eventually(t, func() bool { return p.count() == 2 }, time.Second, 10*time.Millisecond)
+
+		p.mu.Lock()
+		first := p.dialogs[0]
+		p.mu.Unlock()
+		first.answer(int(optModeSwitch)) // this flip re-resolves the still-open sibling
+		<-done1
+		<-done2
+		assert.Equal(t, tools.ActionAllow, d1.Action)
+		assert.Equal(t, tools.ActionAllow, d2.Action)
+	})
+}
+
+func TestOnModeChangeAnnounces(t *testing.T) {
+	t.Parallel()
+
+	t.Run("set_mode_and_cycle_fire_hook", func(t *testing.T) {
+		var flips []Mode
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{
+			OnModeChange: func(m Mode) { flips = append(flips, m) }}, ModeAllowRead))
+
+		b.SetMode(ModeAuto)
+		b.Cycle() // auto -> auto+write
+		assert.Equal(t, []Mode{ModeAuto, ModeAutoWrite}, flips)
+
+		b.SetMode(ModeAutoWrite) // no-op change: no announcement
+		assert.Equal(t, []Mode{ModeAuto, ModeAutoWrite}, flips)
+	})
+
+	t.Run("nil_hook_is_inert", func(t *testing.T) {
+		b := newTestBarrierOpts(newFakePrompter(), withMode(Options{}, ModeAllowRead))
+		assert.NotPanics(t, func() { b.SetMode(ModeAuto) })
 	})
 }
 

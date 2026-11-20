@@ -31,10 +31,17 @@ func (emptyToolSource) ReadOnly(string) bool { return false }
 // front ends install unconditionally, with no-op sinks and an unsure classifier
 // standing in for tests that never reach a classification.
 func wiredBarrier(reg *tools.Registry) *permit.Barrier {
+	return wiredBarrierTo(nil, reg)
+}
+
+// wiredBarrierTo is wiredBarrier publishing mode flips through ui's hub, the
+// shape the interactive driver wires for its status segment and events.
+func wiredBarrierTo(ui *hubUI, reg *tools.Registry) *permit.Barrier {
 	return permit.NewBarrier(reg.ReadOnly, permit.Options{
-		Classifier: func(context.Context, permit.Subject) permit.Class { return permit.ClassUnsure },
-		Notice:     func(string) {},
-		DryRun:     reg.DryRun,
+		Classifier:   func(context.Context, permit.Subject) permit.Class { return permit.ClassUnsure },
+		Notice:       func(string) {},
+		DryRun:       reg.DryRun,
+		OnModeChange: func(m permit.Mode) { setPermissionMode(ui, m) },
 	})
 }
 

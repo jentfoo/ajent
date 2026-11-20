@@ -252,8 +252,7 @@ func (c *uiConsole) SetSessionSetting(key string, value any) error {
 	if key == keyPermissionMode && c.permit != nil {
 		s := fmt.Sprint(value)
 		if m, ok := permit.ParseMode(s); ok {
-			c.permit.SetMode(m)
-			showPermissionIndicator(c.ui, c.permit)
+			c.permit.SetMode(m) // the barrier's hook mirrors the segment and event
 		}
 	}
 	if key == "compaction.threshold" {
@@ -300,8 +299,7 @@ func (c *uiConsole) reapplyResolved(key string) {
 		}
 		// the resolved mode is authoritative on every start, so it is what a reset returns to
 		if m, ok := permit.ParseMode(c.set.Settings().Permissions.Mode); ok {
-			c.permit.SetMode(m)
-			showPermissionIndicator(c.ui, c.permit)
+			c.permit.SetMode(m) // the barrier's hook mirrors the segment and event
 		}
 	case key == "compaction.threshold":
 		v := c.set.Settings().Compaction.Threshold

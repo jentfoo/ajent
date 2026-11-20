@@ -432,6 +432,9 @@ func Driver(term *tui.UI, set *config.Set, reg *llm.Registry, active llm.Model, 
 		// --block-autodenied: asks settle fail-closed instead of opening a dialog,
 		// orthogonal to which gate starts live
 		po.BlockAutoDenied = blockAutoDenied
+		// the hook mirrors barrier-chosen flips (the dialog's auto+write jump) onto
+		// the status segment and the permission event, same as Shift+Tab does
+		po.OnModeChange = func(m permit.Mode) { setPermissionMode(ui, m) }
 		// the ask-a-person paths install as one unit: dialogs open through the
 		// broker, note injection steers the running turn without stopping
 		// it, and Hold runs the typing gate's dialog hold so an approval dialog

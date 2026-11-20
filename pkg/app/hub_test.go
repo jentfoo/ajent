@@ -313,7 +313,7 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 	term, out := pipeUI(t)
 	hub := newTestHub(term)
 	// an unsure classifier and a real registry stand in: the test only cycles modes
-	b := wiredBarrier(tools.New())
+	b := wiredBarrierTo(hub.ui, tools.New())
 	hub.barrier = b
 
 	hub.ModeCycle(false)

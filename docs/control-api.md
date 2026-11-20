@@ -250,7 +250,11 @@ Params and results with their wire keys:
   An id of 0 is `bad-request`, out-of-range or wrong-shape answers are `bad-request`, a
   settled id is `settled`, and a never-seen id is `not-found`. Wrong-shape strictness matters
   because the permission barrier reads an unknown index as denial. Secret answers never echo
-  back in any event.
+  back in any event. A `decision` dialog's option list varies with what it offers: a
+  `write`/`edit` prompt under allow-read or auto includes `Switch to auto+write and allow`
+  directly above the for-session option, and answering it lifts the gate (a `permission`
+  event announces the flip). Always select by the labels announced, never by position
+  remembered from a previous dialog.
 - **`tools.set`** `{names}` reshapes the enabled tool set through the same apply `/tools`
   uses, widen-only by construction: before this run's first dispatched prompt `names` is a
   free replacement (names left out disable, an empty list disables everything). After it

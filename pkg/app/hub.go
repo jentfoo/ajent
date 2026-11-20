@@ -719,7 +719,7 @@ func (h *sessionHub) ModeCycle(back bool) permit.Mode {
 	} else {
 		m = h.barrier.Cycle() // re-evaluates any open dialog under the new mode
 	}
-	setPermissionMode(h.ui, m)
+	// the barrier's own hook mirrored the segment and published the event
 	h.ui.Notify("permissions mode: "+m.String(), tui.LevelInfo)
 	return m
 }

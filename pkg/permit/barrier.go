@@ -34,16 +34,17 @@ const elideKeep = 232
 // Barrier gates every tool call through static classification plus an optional
 // approval dialog, holding the live mode and any open dialogs.
 type Barrier struct {
-	mu         sync.Mutex
-	mode       Mode
-	dialogs    *Dialogs                   // ask-a-person paths, nil meaning unattended
-	classifier *cachedClassifier          // auto-mode verdicts for every gated call
-	notice     func(string)               // transient UI notices (auto-allow)
-	dryRun     func(agent.ToolCall) error // registry-backed edit dry run
-	ro         func(string) bool
-	safe       func(agent.ToolCall) bool // config-declared safe commands, nil = none
-	deny       func(agent.ToolCall) bool // config-declared denied commands, nil = none
-	scope      writeScope                // auto+write's writable roots, zero allows nothing
+	mu           sync.Mutex
+	mode         Mode
+	dialogs      *Dialogs                   // ask-a-person paths, nil meaning unattended
+	classifier   *cachedClassifier          // auto-mode verdicts for every gated call
+	notice       func(string)               // transient UI notices (auto-allow)
+	onModeChange func(Mode)                 // front end's live mode mirror, nil ignored
+	dryRun       func(agent.ToolCall) error // registry-backed edit dry run
+	ro           func(string) bool
+	safe         func(agent.ToolCall) bool // config-declared safe commands, nil = none
+	deny         func(agent.ToolCall) bool // config-declared denied commands, nil = none
+	scope        writeScope                // auto+write's writable roots, zero allows nothing
 
 	blockAutoDenied bool            // no dialog for a call the classifier did not approve
 	grants          []string        // construction grants, re-applied after every mode change
@@ -87,6 +88,7 @@ type Options struct {
 	DeniedCommands  []string                   // exact tool names or bash lines refused in every mode
 	WriteRoots      []string                   // auto+write's writable roots, empty allowing none
 	BlockAutoDenied bool                       // settle asks fail-closed instead of opening an approval dialog
+	OnModeChange    func(Mode)                 // fires after every live mode change, nil ignored
 }
 
 // NewBarrier builds a Barrier from o, consulting ro for whether built-in tools
@@ -105,6 +107,7 @@ func NewBarrier(ro func(string) bool, o Options) *Barrier {
 		dialogs:         o.Dialogs,
 		classifier:      newCachedClassifier(o.Classifier, classCacheMax),
 		notice:          o.Notice,
+		onModeChange:    o.OnModeChange,
 		dryRun:          o.DryRun,
 		blockAutoDenied: o.BlockAutoDenied,
 	}
@@ -150,8 +153,8 @@ func (b *Barrier) Mode() Mode {
 }
 
 // SetMode swaps the live mode: earned session allows reset (construction
-// grants reapplied) and any open dialog re-evaluates under m, resolving as
-// allowed when the new mode would permit it outright. Never rewrites config.
+// grants reapplied), open dialogs re-evaluate under m, and OnModeChange
+// announces the flip. Never rewrites config.
 func (b *Barrier) SetMode(m Mode) {
 	b.mu.Lock()
 	old := b.mode
@@ -162,10 +165,13 @@ func (b *Barrier) SetMode(m Mode) {
 	opens := slices.Clone(b.open)
 	b.mu.Unlock()
 
-	if old == m || len(opens) == 0 {
+	if old == m {
 		return
 	}
-	b.reevaluateOpens(m, opens)
+	b.announceMode(m)
+	if len(opens) > 0 {
+		b.reevaluateOpens(m, opens)
+	}
 }
 
 // Cycle advances to the next mode in order and re-evaluates open dialogs.
@@ -184,8 +190,18 @@ func (b *Barrier) rotate(m Mode) Mode {
 	opens := slices.Clone(b.open)
 	b.mu.Unlock()
 
+	b.announceMode(m)
 	b.reevaluateOpens(m, opens)
 	return m
+}
+
+// announceMode fires the front end's mode mirror, so a barrier-chosen flip
+// still reaches the status line and controllers. Construction-immutable, read
+// without the lock.
+func (b *Barrier) announceMode(m Mode) {
+	if b.onModeChange != nil {
+		b.onModeChange(m)
+	}
 }
 
 // reevaluateOpens settles dialogs still open after a mode change: the new mode's
@@ -401,7 +417,7 @@ func (b *Barrier) Asker() tools.Asker {
 			return tools.Deny(unattendedDenyReason)
 		}
 
-		dlg, err := b.dialogs.Prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(call.Name, bashCommand(call.Input)))
+		dlg, err := b.dialogs.Prompter.Open(promptText(m, call.Name), b.dialogSubject(call), buildOptions(m, call.Name, bashCommand(call.Input)))
 		if err != nil || dlg == nil {
 			// no dialog can open (plain render, a UI that went away): settle the ask
 			// exactly as a run without a prompter would, so permission behavior follows
@@ -462,7 +478,8 @@ func (b *Barrier) Asker() tools.Asker {
 			}
 			return tools.Deny(unattendedDenyReason)
 		}
-		return b.resolveChoice(ctx, call, idx, auto)
+		// map the answer under the ask-time mode the dialog was built with
+		return b.resolveChoice(ctx, m, call, idx, auto)
 	}
 }
 
@@ -508,11 +525,12 @@ func (b *Barrier) unattendedAsk(ctx context.Context, call agent.ToolCall) tools.
 }
 
 // resolveChoice maps a dialog answer to an allow/deny decision and applies its
-// side effects (session memory, note injection). displayIdx is the position in
-// the rendered option list, translated through optionActions so Deny on a plain
-// command (whose list drops the session option) still refuses.
-func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displayIdx int, auto bool) tools.Decision {
-	actions := optionActions(call.Name, bashCommand(call.Input))
+// side effects (mode lift, session memory, note injection). m is the ask-time
+// mode the option list was built under; displayIdx is the position in the
+// rendered list, translated through optionActions so Deny on a plain command
+// still refuses.
+func (b *Barrier) resolveChoice(ctx context.Context, m Mode, call agent.ToolCall, displayIdx int, auto bool) tools.Decision {
+	actions := optionActions(m, call.Name, bashCommand(call.Input))
 	if displayIdx >= 0 && displayIdx < len(actions) {
 		switch actions[displayIdx] {
 		case optAllow:
@@ -523,6 +541,11 @@ func (b *Barrier) resolveChoice(ctx context.Context, call agent.ToolCall, displa
 				b.noteAllowed(call, note)
 			}
 			b.resolveNotice("once", auto)
+			return allowDecision()
+		case optModeSwitch:
+			// lift the gate, then allow, covering a write still outside the roots
+			b.SetMode(ModeAutoWrite) //nolint:contextcheck // SetMode is synchronous and deliberately ctx-less
+			b.modeNotice(ModeAutoWrite)
 			return allowDecision()
 		case optAllowSession:
 			if keys, ok := b.allowSessionKeys(call); ok && len(keys) > 0 {
@@ -717,6 +740,15 @@ func (b *Barrier) resolveNotice(scope string, auto bool) {
 	default:
 		n("Tool call allowed this time")
 	}
+}
+
+// modeNotice reports a barrier-chosen flip, the same text a Shift+Tab cycle shows.
+func (b *Barrier) modeNotice(m Mode) {
+	b.mu.Lock()
+	n := b.notice
+	b.mu.Unlock()
+
+	n("permissions mode: " + m.String())
 }
 
 // autoDenyNotice reports one auto-denied call where a dialog no longer opens,

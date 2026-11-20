@@ -41,9 +41,10 @@ func wireControlConsole(t *testing.T, rig *controlRig) *uiConsole {
 	st := &agent.State{Model: reg.Active(), Tokens: tokens.New(reg.Active())}
 	barrier := permit.NewBarrier(toolsReg.ReadOnly, permit.Options{
 		Mode: permit.ModeAllowRead, ModeSet: true,
-		Classifier: func(context.Context, permit.Subject) permit.Class { return permit.ClassUnsure },
-		Notice:     func(string) {},
-		DryRun:     func(agent.ToolCall) error { return nil },
+		Classifier:   func(context.Context, permit.Subject) permit.Class { return permit.ClassUnsure },
+		Notice:       func(string) {},
+		DryRun:       func(agent.ToolCall) error { return nil },
+		OnModeChange: func(m permit.Mode) { setPermissionMode(rig.hub.ui, m) },
 	})
 	console := &uiConsole{
 		ui: rig.hub.ui, set: set, reg: reg, st: st, tools: toolsReg,

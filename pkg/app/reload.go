@@ -231,8 +231,7 @@ func (c *uiConsole) reloadSettings(s config.Settings) {
 	}
 	if c.permit != nil {
 		if m, ok := permit.ParseMode(s.Permissions.Mode); ok {
-			c.permit.SetMode(m)
-			showPermissionIndicator(c.ui, c.permit)
+			c.permit.SetMode(m) // the barrier's hook mirrors the segment and event
 		}
 	}
 	if c.st != nil {

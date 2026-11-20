@@ -142,6 +142,7 @@ elide to 16 rows / 480 characters with a `…+N lines` marker.
 |---|---|---|
 | Allow | number or Enter | runs once. Notice: `Tool call allowed this time` |
 | Allow with note | | runs and injects the note you type into the model's context as steering, so it learns why without stopping the turn |
+| Switch to auto+write and allow | | `write`/`edit` dialogs only, under allow-read or auto: lifts the gate to auto+write (notice: `permissions mode: auto+write`) and runs the call. From then on in-scope writes run without asking; session grants are cleared like any mode change. Prefer it over "for session" for writes: it also upgrades shell and extension-tool judging to the workspace rules |
 | Allow `x` for session | | remembers the grant (see Session memory). Notice: `Tool allowed for session`. Offered only when the line offers reliable memory |
 | Deny | Esc | refuses. An optional typed reason reaches the model as a user message (`denied by user: <reason>`), an empty one denies plainly |
 
@@ -161,7 +162,10 @@ observers see them announced (`sessions.md`).
 
 ### Session memory
 
-"Allow for session" remembers what later calls can match:
+"Allow for session" remembers what later calls can match. On a `write`/`edit`
+prompt prefer the auto+write jump above it (see the dialog choices): a grant
+here covers only that one tool, while the lift also upgrades shell and
+extension-tool judging:
 
 - a non-bash tool remembers under its own name
 - bash remembers one grant per command head that drives the line's effect,

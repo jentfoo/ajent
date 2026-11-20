@@ -52,36 +52,57 @@ type Noter func(note string)
 const (
 	optAllow        = iota // this call only
 	optAllowNote           // allow and inject a steering note
+	optModeSwitch          // lift the gate to auto+write, then allow this call
 	optAllowSession        // remember by command/tool name for the session
 	optDeny                // refuse with an optional reason
 )
 
+// modeSwitchLabel names the dialog option that lifts the gate to auto+write.
+const modeSwitchLabel = "Switch to auto+write and allow"
+
+// offersModeSwitch reports whether a dialog may offer the auto+write jump:
+// a write/edit prompt from a mode that still gates writers (allow-read, auto).
+func offersModeSwitch(m Mode, name string) bool {
+	if _, isWrite := coreWriteTools[name]; !isWrite {
+		return false
+	}
+	return m == ModeAllowRead || m == ModeAuto
+}
+
 // optionsFor returns the dialog's labels and their action mapping for a tool
 // call, kept index-aligned so resolveChoice maps a rendered choice back to its
-// opt constant. A bash line no grant can cover (compound, substitution or an
-// unnameable head) offers no session memory: allowing it never generalizes.
-func optionsFor(name, command string) ([]string, []int) {
+// opt constant. A write/edit prompt under allow-read or auto offers the
+// auto+write jump above session memory. A bash line no grant can cover
+// (compound, substitution or an unnameable head) offers no session memory:
+// allowing it never generalizes.
+func optionsFor(m Mode, name, command string) ([]string, []int) {
+	labels := []string{"Allow", "Allow with note"}
+	actions := []int{optAllow, optAllowNote}
+	if offersModeSwitch(m, name) {
+		labels = append(labels, modeSwitchLabel)
+		actions = append(actions, optModeSwitch)
+	}
 	if name != tools.ToolBash { // a tool remembers under its own name
-		return []string{"Allow", "Allow with note", namedSessionLabel([]string{name}), "Deny"},
-			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
+		return append(labels, namedSessionLabel([]string{name}), "Deny"),
+			append(actions, optAllowSession, optDeny)
 	}
 	if names, ok := sessionNames(command); ok && len(names) > 0 {
-		return []string{"Allow", "Allow with note", namedSessionLabel(names), "Deny"},
-			[]int{optAllow, optAllowNote, optAllowSession, optDeny}
+		return append(labels, namedSessionLabel(names), "Deny"),
+			append(actions, optAllowSession, optDeny)
 	}
-	return []string{"Allow", "Allow with note", "Deny"}, []int{optAllow, optAllowNote, optDeny}
+	return append(labels, "Deny"), append(actions, optDeny)
 }
 
 // buildOptions returns the option labels an approval dialog offers for a tool call.
-func buildOptions(name, command string) []string {
-	labels, _ := optionsFor(name, command)
+func buildOptions(m Mode, name, command string) []string {
+	labels, _ := optionsFor(m, name, command)
 	return labels
 }
 
 // optionActions maps a dialog's display index back to the logical opt constant, matching
 // optionsFor so Deny is always resolved as a denial regardless of where it sits in the rendered list.
-func optionActions(name, command string) []int {
-	_, actions := optionsFor(name, command)
+func optionActions(m Mode, name, command string) []int {
+	_, actions := optionsFor(m, name, command)
 	return actions
 }
 
