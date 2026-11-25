@@ -680,6 +680,15 @@ func resolveModel(ctx modelContext, base Capabilities, providerCompat *Compat, m
 	caps := resolveCaps(base, layers...)
 	caps.Dialect = dialect
 
+	// declared modalities outrank flavor and provider defaults, while an explicit
+	// per-model compat.supportsImages stays the most specific override
+	switch {
+	case mc.Compat != nil && mc.Compat.SupportsImages != nil:
+		caps.Images = *mc.Compat.SupportsImages
+	case len(mc.Input) > 0:
+		caps.Images = slices.Contains(mc.Input, ModalityImage)
+	}
+
 	if mc.Reasoning != nil {
 		caps.Reasoning = *mc.Reasoning
 	}

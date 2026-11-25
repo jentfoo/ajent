@@ -251,6 +251,11 @@ openai-completions families set on), so a bare `"id"` is a complete entry.
 without them both values resolve to zero, and zero means the context bar has no
 denominator, auto-compaction never fires, and Anthropic gets `max_tokens: 0`.
 
+A declared `input` list feeds resolution rather than describing it. Discovery
+reports vision only as modalities (llama.cpp, LM Studio), so naming `image`
+must set the image capability or those models could never receive one; compat
+stays the escape hatch for a declaration an endpoint contradicts.
+
 `api` and `baseUrl` are settable per model as well as per provider, so one
 gateway serving two dialects is one provider entry. Dialect and endpoint are
 therefore resolved at **model**-resolution time, and `Model.BaseURL` plus

@@ -233,6 +233,43 @@ func TestResolveModel(t *testing.T) {
 		assert.Equal(t, []Modality{ModalityText}, got.Input)
 	})
 
+	t.Run("declared_image_input_enables_caps", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil,
+			ModelConfig{ID: "m1", Input: []Modality{ModalityText, ModalityImage}})
+		assert.True(t, got.Caps.Images)
+	})
+
+	t.Run("declared_text_only_overrides_flavor", func(t *testing.T) {
+		got := resolveModel(tagCtx, flavorDefaults[FlavorOpenAI].caps, nil,
+			ModelConfig{ID: "m1", Input: []Modality{ModalityText}})
+		assert.False(t, got.Caps.Images)
+	})
+
+	t.Run("declaration_beats_provider_compat", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, &Compat{SupportsImages: ptr(true)}, ModelConfig{
+			ID: "m1", Input: []Modality{ModalityText},
+		})
+		assert.False(t, got.Caps.Images)
+	})
+
+	t.Run("per_model_compat_beats_declaration", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
+			ID: "m1", Input: []Modality{ModalityText},
+			Compat: &Compat{SupportsImages: ptr(true)},
+		})
+		assert.True(t, got.Caps.Images)
+	})
+
+	t.Run("per_model_compat_disables_declaration", func(t *testing.T) {
+		got := resolveModel(tagCtx, base, nil, ModelConfig{
+			ID: "m1", Input: []Modality{ModalityText, ModalityImage},
+			Compat: &Compat{SupportsImages: ptr(false)},
+		})
+		assert.False(t, got.Caps.Images)
+		// the declaration still reports what the endpoint accepts
+		assert.Equal(t, []Modality{ModalityText, ModalityImage}, got.Input)
+	})
+
 	t.Run("per_model_headers_carried_onto_the_model", func(t *testing.T) {
 		got := resolveModel(tagCtx, base, nil, ModelConfig{
 			ID: "m1", Headers: map[string]string{"X-Org": "acme"},

@@ -141,7 +141,7 @@ Per model you can set:
 | `id` (required) | the provider's model identifier, also how overrides address it |
 | `name` / `aliases` | display name and extra names the registry resolves. The picker shows the name when set, falling back to the id |
 | `reasoning` | a boolean: `true` enables reasoning with the model's resolved thinking format. There is no style-name form (see Reasoning levels) |
-| `input` | accepted modalities (`text`, `image`). Defaults to text plus image when the model's capabilities allow it. Images sent to a text-only model degrade to a placeholder note instead of failing the request |
+| `input` | accepted modalities (`text`, `image`). Declaring them is what enables image reads and pastes on providers whose defaults lack vision; omitting the field falls back to text plus image when the model's capabilities allow it. Images sent to a text-only model degrade to a placeholder note instead of failing the request |
 | `contextWindow` / `maxTokens` | input window and output cap in tokens. Discovery fills these when unset, so you typically declare them only to pin something discovery got wrong. A zero window leaves the context bar without a denominator and auto-compaction never fires |
 | `contextReserve` | tokens held back from the window for the response: a fraction below 1 (default 0.2) or an absolute count at 1 or more, clamped to 90% of the window |
 | `compactThreshold` | where automatic compaction fires for this model: a fraction of the window (or an absolute token count). Overrides `compaction.threshold`, which is otherwise the default (`config.md`) |
