@@ -902,6 +902,8 @@ func (w *gateWriter) String() string {
 }
 
 func TestTerminalWriter(t *testing.T) {
+	t.Parallel()
+
 	t.Run("writes_serialize_with_frames", func(t *testing.T) {
 		g := newGateWriter()
 		u := withTimer(&UI{
@@ -1676,6 +1678,8 @@ func (u *UI) waitPromptNav(t *testing.T) {
 }
 
 func TestUIMultiLineArrowsAreCursorFirst(t *testing.T) {
+	t.Parallel()
+
 	const wide = 40 // no wrapping, each logical line is its own visual row
 
 	press := func(u *UI, k key) { pressKey(u, k) }

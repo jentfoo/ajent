@@ -1,7 +1,6 @@
 package command
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -14,14 +13,14 @@ func TestReloadCommand(t *testing.T) {
 
 	t.Run("calls_console", func(t *testing.T) {
 		c := newFakeConsole(t)
-		require.NoError(t, reloadCommand(context.Background(), "", c))
+		require.NoError(t, reloadCommand(t.Context(), "", c))
 		assert.Equal(t, 1, c.reloaded)
 		assert.Empty(t, c.noticesSeen()) // the host owns every progress notice
 	})
 	t.Run("error_notified", func(t *testing.T) {
 		c := newFakeConsole(t)
 		c.reloadErr = errors.New("config.json: unexpected end of JSON input")
-		require.NoError(t, reloadCommand(context.Background(), "", c))
+		require.NoError(t, reloadCommand(t.Context(), "", c))
 		assert.True(t, c.noticeContains("unexpected end of JSON input"))
 	})
 }

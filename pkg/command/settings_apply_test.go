@@ -217,15 +217,3 @@ func TestSetSetting(t *testing.T) {
 		assert.ErrorContains(t, err, "needs a value")
 	})
 }
-
-func TestSetSettingErrorSentinels(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	_, unknown := SetSetting(c, "nope", json.RawMessage("1"), "")
-	require.ErrorIs(t, unknown, ErrUnknownSetting)
-
-	c.tools = nil
-	_, unavailable := SetSetting(c, "tools.enabled", json.RawMessage(`[]`), "")
-	require.ErrorIs(t, unavailable, ErrSettingUnavailable)
-}

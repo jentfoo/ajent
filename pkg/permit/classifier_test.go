@@ -68,164 +68,95 @@ func (f *countingFn) call(ctx context.Context, s Subject) Class {
 }
 func (f *countingFn) count() int { f.mu.Lock(); defer f.mu.Unlock(); return f.n }
 
-func TestCachedClassifierHitsCache(t *testing.T) {
+func TestCachedClassifier(t *testing.T) {
 	t.Parallel()
 
-	fn := &countingFn{verdict: ClassAllow}
-	c := newCachedClassifier(fn.call, classCacheMax)
+	t.Run("hits_cache", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassAllow}
+		c := newCachedClassifier(fn.call, classCacheMax)
 
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
-	assert.Equal(t, 1, fn.count())
-	// an identical subject is served from cache without re-invoking the model
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
-	assert.Equal(t, 1, fn.count())
-}
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
+		assert.Equal(t, 1, fn.count())
+		// an identical subject is served from cache without re-invoking the model
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"}))
+		assert.Equal(t, 1, fn.count())
+	})
 
-func TestCachedClassifierPeek(t *testing.T) {
-	t.Parallel()
+	t.Run("peek", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassAllow}
+		c := newCachedClassifier(fn.call, classCacheMax)
+		s := Subject{Name: "bash", Args: "stat a"}
 
-	fn := &countingFn{verdict: ClassAllow}
-	c := newCachedClassifier(fn.call, classCacheMax)
-	s := Subject{Name: "bash", Args: "stat a"}
+		_, ok := c.peek(s)
+		assert.False(t, ok)        // an empty cache peeks empty
+		assert.Zero(t, fn.count()) // peek never invokes the model
 
-	_, ok := c.peek(s)
-	assert.False(t, ok)        // an empty cache peeks empty
-	assert.Zero(t, fn.count()) // peek never invokes the model
+		// after serving a verdict it is visible without running the classifier again
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), s))
+		v, ok := c.peek(s)
+		assert.True(t, ok)
+		assert.Equal(t, ClassAllow, v)
+		assert.Equal(t, 1, fn.count())
+	})
 
-	// after serving a verdict it is visible without running the classifier again
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), s))
-	v, ok := c.peek(s)
-	assert.True(t, ok)
-	assert.Equal(t, ClassAllow, v)
-	assert.Equal(t, 1, fn.count())
-}
+	t.Run("distinct_commands_miss", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassDeny}
+		c := newCachedClassifier(fn.call, classCacheMax)
 
-func TestCachedClassifierDistinctCommandsMissCache(t *testing.T) {
-	t.Parallel()
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"}) // different subject misses
+		assert.Equal(t, 2, fn.count())
+	})
 
-	fn := &countingFn{verdict: ClassDeny}
-	c := newCachedClassifier(fn.call, classCacheMax)
+	t.Run("separates_rule_sets", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassDeny}
+		c := newCachedClassifier(fn.call, classCacheMax)
 
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"}) // different subject misses
-	assert.Equal(t, 2, fn.count())
-}
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"})
+		assert.Equal(t, 1, fn.count())
+		// the same command under auto+write asks a different question, never the cached one
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
+		assert.Equal(t, 2, fn.count())
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
+		assert.Equal(t, 2, fn.count()) // cached within its own rule set
+	})
 
-func TestCachedClassifierSeparatesRuleSets(t *testing.T) {
-	t.Parallel()
-
-	fn := &countingFn{verdict: ClassDeny}
-	c := newCachedClassifier(fn.call, classCacheMax)
-
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f"})
-	assert.Equal(t, 1, fn.count())
-	// the same command under auto+write asks a different question, never the cached one
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
-	assert.Equal(t, 2, fn.count())
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "rm f", AllowWrite: true})
-	assert.Equal(t, 2, fn.count()) // cached within its own rule set
-}
-
-func TestCachedClassifierSeparatesElidedPayloads(t *testing.T) {
-	t.Parallel()
-
-	// two over-budget payloads sharing head and tail render identically; the
-	// digest keeps the unseen middle out of one shared verdict, so a banked
-	// allow for one call can never approve its sibling
-	mid := func(secret string) string {
-		return strings.Repeat("a", 300) + secret + strings.Repeat("b", 300)
-	}
-	a := classifySubject(ModeAuto, call("mcp__x", mid(`{"x":1}`)))
-	b := classifySubject(ModeAuto, call("mcp__x", mid(`{"y":2}`)))
-	require.Equal(t, a.Args, b.Args) // premise: the renderings collide without the digest
-	assert.NotEqual(t, a.key(), b.key())
-
-	fn := &countingFn{verdict: ClassAllow}
-	c := newCachedClassifier(fn.call, classCacheMax)
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), a))
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), b)) // judged fresh
-	assert.Equal(t, 2, fn.count())
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), a)) // still cached per subject
-	assert.Equal(t, 2, fn.count())
-}
-
-func TestCachedClassifierNeverStoresUnsure(t *testing.T) {
-	t.Parallel()
-
-	fn := &countingFn{verdict: ClassUnsure}
-	c := newCachedClassifier(fn.call, classCacheMax)
-
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
-	assert.Equal(t, 1, fn.count())
-	// unsure is transient and never cached, so the same subject runs the model again
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
-	assert.Equal(t, 2, fn.count())
-
-	fn.verdict = ClassAllow // next call now succeeds and gets stored
-	assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}))
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
-	assert.Equal(t, 3, fn.count())
-}
-
-// gatedFn holds each classification open until released or its context ends,
-// counting starts, the leading fails calls answer unsure, the rest verdict.
-type gatedFn struct {
-	release chan struct{}
-	verdict Class
-	fails   int
-
-	mu     sync.Mutex
-	starts int
-	ends   int
-}
-
-func (f *gatedFn) call(ctx context.Context, _ Subject) Class {
-	f.mu.Lock()
-	f.starts++
-	i := f.starts
-	f.mu.Unlock()
-	var v Class
-	select {
-	case <-f.release:
-		if i <= f.fails {
-			v = ClassUnsure
-		} else {
-			v = f.verdict
+	t.Run("separates_elided_payloads", func(t *testing.T) {
+		// two over-budget payloads sharing head and tail render identically; the
+		// digest keeps the unseen middle out of one shared verdict, so a banked
+		// allow for one call can never approve its sibling
+		mid := func(secret string) string {
+			return strings.Repeat("a", 300) + secret + strings.Repeat("b", 300)
 		}
-	case <-ctx.Done():
-		v = ClassUnsure
-	}
-	f.mu.Lock()
-	f.ends++
-	f.mu.Unlock()
-	return v
-}
-func (f *gatedFn) startedN() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
-func (f *gatedFn) endedN() int   { f.mu.Lock(); defer f.mu.Unlock(); return f.ends }
+		a := classifySubject(ModeAuto, call("mcp__x", mid(`{"x":1}`)))
+		b := classifySubject(ModeAuto, call("mcp__x", mid(`{"y":2}`)))
+		require.Equal(t, a.Args, b.Args) // premise: the renderings collide without the digest
+		assert.NotEqual(t, a.key(), b.key())
 
-// collect gathers n classes from ch without sleeping.
-func collect(t *testing.T, ch <-chan Class, n int) []Class {
-	t.Helper()
+		fn := &countingFn{verdict: ClassAllow}
+		c := newCachedClassifier(fn.call, classCacheMax)
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), a))
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), b)) // judged fresh
+		assert.Equal(t, 2, fn.count())
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), a)) // still cached per subject
+		assert.Equal(t, 2, fn.count())
+	})
 
-	var out []Class
-	require.Eventually(t, func() bool {
-		for {
-			select {
-			case v := <-ch:
-				out = append(out, v)
-				if len(out) == n {
-					return true
-				}
-			default:
-				return false
-			}
-		}
-	}, time.Second, 5*time.Millisecond)
-	return out
-}
+	t.Run("never_stores_unsure", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassUnsure}
+		c := newCachedClassifier(fn.call, classCacheMax)
 
-func TestCachedClassifierInFlight(t *testing.T) {
-	t.Parallel()
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
+		assert.Equal(t, 1, fn.count())
+		// unsure is transient and never cached, so the same subject runs the model again
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat a"})
+		assert.Equal(t, 2, fn.count())
+
+		fn.verdict = ClassAllow // next call now succeeds and gets stored
+		assert.Equal(t, ClassAllow, c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}))
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "stat b"}) // cached from here on
+		assert.Equal(t, 3, fn.count())
+	})
 
 	t.Run("joins_concurrent_callers", func(t *testing.T) {
 		fn := &gatedFn{release: make(chan struct{}), verdict: ClassAllow}
@@ -287,24 +218,79 @@ func TestCachedClassifierInFlight(t *testing.T) {
 		assert.Equal(t, ClassAllow, c.Classify(t.Context(), subj)) // the retry cached its verdict
 		assert.Equal(t, 2, fn.startedN())
 	})
+
+	t.Run("evicts_least_recently_used", func(t *testing.T) {
+		fn := &countingFn{verdict: ClassDeny}
+		c := newCachedClassifier(fn.call, 2)
+
+		// fill the cache to its cap
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
+
+		// touch a so b becomes least-recently-used, then push past the cap: b evicts
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "c"}) // forces an eviction
+
+		assert.Equal(t, 3, fn.count()) // a,b,c each classified once
+		// b was evicted and must run the model again, a surviving via recency touch.
+		_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
+		assert.Equal(t, 4, fn.count())
+	})
 }
 
-func TestCachedClassifierEvictsLeastRecentlyUsedAtCap(t *testing.T) {
-	t.Parallel()
+// gatedFn holds each classification open until released or its context ends,
+// counting starts, the leading fails calls answer unsure, the rest verdict.
+type gatedFn struct {
+	release chan struct{}
+	verdict Class
+	fails   int
 
-	fn := &countingFn{verdict: ClassDeny}
-	c := newCachedClassifier(fn.call, 2)
+	mu     sync.Mutex
+	starts int
+	ends   int
+}
 
-	// fill the cache to its cap
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
+func (f *gatedFn) call(ctx context.Context, _ Subject) Class {
+	f.mu.Lock()
+	f.starts++
+	i := f.starts
+	f.mu.Unlock()
+	var v Class
+	select {
+	case <-f.release:
+		if i <= f.fails {
+			v = ClassUnsure
+		} else {
+			v = f.verdict
+		}
+	case <-ctx.Done():
+		v = ClassUnsure
+	}
+	f.mu.Lock()
+	f.ends++
+	f.mu.Unlock()
+	return v
+}
+func (f *gatedFn) startedN() int { f.mu.Lock(); defer f.mu.Unlock(); return f.starts }
+func (f *gatedFn) endedN() int   { f.mu.Lock(); defer f.mu.Unlock(); return f.ends }
 
-	// touch a so b becomes least-recently-used, then push past the cap: b evicts
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "a"})
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "c"}) // forces an eviction
+// collect gathers n classes from ch without sleeping.
+func collect(t *testing.T, ch <-chan Class, n int) []Class {
+	t.Helper()
 
-	assert.Equal(t, 3, fn.count()) // a,b,c each classified once
-	// b was evicted and must run the model again, a surviving via recency touch.
-	_ = c.Classify(t.Context(), Subject{Name: "bash", Args: "b"})
-	assert.Equal(t, 4, fn.count())
+	var out []Class
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case v := <-ch:
+				out = append(out, v)
+				if len(out) == n {
+					return true
+				}
+			default:
+				return false
+			}
+		}
+	}, time.Second, 5*time.Millisecond)
+	return out
 }

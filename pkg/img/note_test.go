@@ -9,6 +9,7 @@ import (
 func TestNote(t *testing.T) {
 	t.Parallel()
 
+	// every shape renders its own clause; the combined form is what models see
 	for _, c := range []struct {
 		name string
 		res  Result

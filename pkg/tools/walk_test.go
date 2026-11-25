@@ -83,8 +83,7 @@ func TestGitTrackedFiles(t *testing.T) {
 		assert.Empty(t, GitTrackedFiles(t.Context(), dir))
 	})
 
-	// -z framing must keep whitespace as name content: a whole-output trim
-	// mangles the first entry's leading run or drops an all-whitespace one
+	// -z framing must keep whitespace as name content, which a whole-output trim would break
 	t.Run("leading_space_name_kept", func(t *testing.T) {
 		dir := t.TempDir()
 		mkfile(dir, " y", "x") // leading space, sorts first in the index
@@ -186,8 +185,7 @@ func TestRepoFiles(t *testing.T) {
 		assert.Equal(t, []string{filepath.Join(dir, "a.txt")}, repoFiles(t.Context(), dir))
 	})
 
-	// -z framing must keep whitespace as name content: a whole-output trim
-	// mangles the first entry's leading run or drops an all-whitespace one
+	// same -z whitespace pin as TestGitTrackedFiles above
 	t.Run("leading_space_name_kept", func(t *testing.T) {
 		dir := t.TempDir()
 		mkfile(dir, " y", "x") // leading space, sorts first in the index

@@ -49,60 +49,58 @@ func TestCompatClassifier(t *testing.T) {
 		err := compatClassifier("p", FlavorOpenAI)(500, []byte(`internal failure`))
 		assert.Contains(t, err.Error(), "internal failure")
 	})
-}
 
-func TestCompatClassifierEngineFailure(t *testing.T) {
-	t.Parallel()
+	t.Run("engine_failure", func(t *testing.T) {
+		const body = `{"error":"Engine protocol predict request failed: fetch failed"}`
 
-	const body = `{"error":"Engine protocol predict request failed: fetch failed"}`
-
-	t.Run("lmstudio_400_is_retryable", func(t *testing.T) {
-		err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest, []byte(body))
-		var ae *APIError
-		require.ErrorAs(t, err, &ae)
-		assert.True(t, ae.Retryable)
-	})
-
-	t.Run("phrases_match_case_insensitive", func(t *testing.T) {
-		err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
-			[]byte(`{"error":"engine protocol predict request failed: FETCH FAILED"}`))
-		var ae *APIError
-		require.ErrorAs(t, err, &ae)
-		assert.True(t, ae.Retryable)
-	})
-
-	t.Run("other_flavors_stay_fatal", func(t *testing.T) {
-		for _, flavor := range []Flavor{FlavorOpenAI, FlavorLlamaCpp, FlavorGeneric} {
-			err := compatClassifier("p", flavor)(http.StatusBadRequest, []byte(body))
+		t.Run("lmstudio_400_is_retryable", func(t *testing.T) {
+			err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest, []byte(body))
 			var ae *APIError
 			require.ErrorAs(t, err, &ae)
-			assert.False(t, ae.Retryable, flavor.String())
-		}
-	})
+			assert.True(t, ae.Retryable)
+		})
 
-	t.Run("non_400_stays_fatal", func(t *testing.T) {
-		err := compatClassifier("p", FlavorLMStudio)(http.StatusForbidden, []byte(body))
-		var ae *APIError
-		require.ErrorAs(t, err, &ae)
-		assert.False(t, ae.Retryable)
-	})
+		t.Run("phrases_match_case_insensitive", func(t *testing.T) {
+			err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
+				[]byte(`{"error":"engine protocol predict request failed: FETCH FAILED"}`))
+			var ae *APIError
+			require.ErrorAs(t, err, &ae)
+			assert.True(t, ae.Retryable)
+		})
 
-	t.Run("validation_400_stays_fatal", func(t *testing.T) {
-		err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
-			[]byte(`{"error":"No user query found in messages."}`))
-		var ae *APIError
-		require.ErrorAs(t, err, &ae)
-		assert.False(t, ae.Retryable)
-	})
+		t.Run("other_flavors_stay_fatal", func(t *testing.T) {
+			for _, flavor := range []Flavor{FlavorOpenAI, FlavorLlamaCpp, FlavorGeneric} {
+				err := compatClassifier("p", flavor)(http.StatusBadRequest, []byte(body))
+				var ae *APIError
+				require.ErrorAs(t, err, &ae)
+				assert.False(t, ae.Retryable, flavor.String())
+			}
+		})
 
-	t.Run("overflow_still_wins", func(t *testing.T) {
-		// a body matching both is an overflow: Overflow clears Retryable on purpose
-		err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
-			[]byte(`{"error":"Engine protocol predict request failed: context length exceeded"}`))
-		assert.True(t, IsOverflow(err))
-		var ae *APIError
-		require.ErrorAs(t, err, &ae)
-		assert.False(t, ae.Retryable)
+		t.Run("non_400_stays_fatal", func(t *testing.T) {
+			err := compatClassifier("p", FlavorLMStudio)(http.StatusForbidden, []byte(body))
+			var ae *APIError
+			require.ErrorAs(t, err, &ae)
+			assert.False(t, ae.Retryable)
+		})
+
+		t.Run("validation_400_stays_fatal", func(t *testing.T) {
+			err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
+				[]byte(`{"error":"No user query found in messages."}`))
+			var ae *APIError
+			require.ErrorAs(t, err, &ae)
+			assert.False(t, ae.Retryable)
+		})
+
+		t.Run("overflow_still_wins", func(t *testing.T) {
+			// a body matching both is an overflow: Overflow clears Retryable on purpose
+			err := compatClassifier("p", FlavorLMStudio)(http.StatusBadRequest,
+				[]byte(`{"error":"Engine protocol predict request failed: context length exceeded"}`))
+			assert.True(t, IsOverflow(err))
+			var ae *APIError
+			require.ErrorAs(t, err, &ae)
+			assert.False(t, ae.Retryable)
+		})
 	})
 }
 

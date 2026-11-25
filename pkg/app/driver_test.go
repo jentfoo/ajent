@@ -99,8 +99,6 @@ func mainToolTurn() []llm.Event {
 // always supplies.
 func noopSearching() (bool, time.Time) { return false, time.Time{} }
 
-// TestControlLoop covers the idle-editor quit gestures: one Ctrl+C arms the
-// window and only a second inside it quits, while Ctrl+D quits outright.
 func TestControlLoop(t *testing.T) {
 	t.Parallel()
 

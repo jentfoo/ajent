@@ -155,29 +155,18 @@ func TestDeleteOldSessions(t *testing.T) {
 	})
 
 	t.Run("declined_keeps_all", func(t *testing.T) {
-		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "")
+		for _, in := range []string{"n\n", ""} { // explicit no and EOF both decline
+			store, ws := deleteWorkspace(t)
+			writeDeletableSession(t, store, ws, "")
 
-		var buf bytes.Buffer
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader("n\n"), store, ws, future, nil))
+			var buf bytes.Buffer
+			require.NoError(t, DeleteOldSessions(&buf, strings.NewReader(in), store, ws, future, nil))
 
-		list, err := store.List(ws)
-		require.NoError(t, err)
-		assert.Len(t, list, 1)
-		assert.Contains(t, buf.String(), "Cancelled")
-	})
-
-	t.Run("eof_declines", func(t *testing.T) {
-		store, ws := deleteWorkspace(t)
-		writeDeletableSession(t, store, ws, "")
-
-		var buf bytes.Buffer
-		require.NoError(t, DeleteOldSessions(&buf, strings.NewReader(""), store, ws, future, nil))
-
-		list, err := store.List(ws)
-		require.NoError(t, err)
-		assert.Len(t, list, 1)
-		assert.Contains(t, buf.String(), "Cancelled")
+			list, err := store.List(ws)
+			require.NoError(t, err)
+			assert.Len(t, list, 1)
+			assert.Contains(t, buf.String(), "Cancelled")
+		}
 	})
 
 	t.Run("nothing_old_enough", func(t *testing.T) {

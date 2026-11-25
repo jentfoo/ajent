@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,34 +30,22 @@ func TestDispatchCancelledBatchSkipsLaunch(t *testing.T) {
 		"c": &stubTool{name: "c", result: "rc", parallel: true},
 	}
 
-	t.Run("parallel", func(t *testing.T) {
-		set := &mapSet{tools: tools}
-		a := newTestAgent(nil, nil, NopSink{})
-		a.opts.Tools = set
-		a.state.Model.Caps.ParallelTools = true
+	for _, parallel := range []bool{true, false} {
+		t.Run(fmt.Sprintf("parallel_%t", parallel), func(t *testing.T) {
+			set := &mapSet{tools: tools}
+			a := newTestAgent(nil, nil, NopSink{})
+			a.opts.Tools = set
+			a.state.Model.Caps.ParallelTools = parallel
 
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		a.dispatch(ctx, NopSink{}, blockedCalls())
+			ctx, cancel := context.WithCancel(t.Context())
+			cancel()
+			a.dispatch(ctx, NopSink{}, blockedCalls())
 
-		for _, name := range []string{"a", "b", "c"} {
-			assert.Zero(t, set.tools[name].(*stubTool).callCount())
-		}
-	})
-
-	t.Run("serial", func(t *testing.T) {
-		set := &mapSet{tools: tools}
-		a := newTestAgent(nil, nil, NopSink{})
-		a.opts.Tools = set
-
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		a.dispatch(ctx, NopSink{}, blockedCalls())
-
-		for _, name := range []string{"a", "b", "c"} {
-			assert.Zero(t, set.tools[name].(*stubTool).callCount())
-		}
-	})
+			for _, name := range []string{"a", "b", "c"} {
+				assert.Zero(t, set.tools[name].(*stubTool).callCount())
+			}
+		})
+	}
 }
 
 // ignoreCtxTool blocks on a channel without observing ctx, so an abort cannot
@@ -152,10 +141,8 @@ func TestDispatchParallelAppendsResultsInCallOrder(t *testing.T) {
 	assert.Equal(t, []string{"1", "2", "3"}, ids) // call order preserved
 }
 
-// Batch delivery sees calls in message order before anything launches, even
-// against a provider whose parallel calls finish streaming out of order (the
-// sub-agent id reservation reads this batch as message order, so completion
-// races upstream must not reorder it).
+// OnToolBatch sees the whole batch in message order before anything launches,
+// whatever order parallel ends stream (sub-agent id reservation reads this).
 func TestOnToolBatch(t *testing.T) {
 	t.Parallel()
 

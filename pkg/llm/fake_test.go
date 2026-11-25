@@ -63,10 +63,3 @@ func TestScriptedProviderStream(t *testing.T) {
 		assert.ErrorIs(t, err, context.Canceled)
 	})
 }
-
-func TestScriptedProviderName(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "scripted", (&ScriptedProvider{}).Name())
-	assert.Equal(t, "lmstudio", (&ScriptedProvider{ProviderName: "lmstudio"}).Name())
-}

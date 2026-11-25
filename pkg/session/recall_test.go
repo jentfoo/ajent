@@ -60,30 +60,28 @@ func TestRecallIndexLines(t *testing.T) {
 	})
 
 	t.Run("secret_prefix_excluded", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		h, err := NewEditorHistory(s, ws, "secret:")
-		require.NoError(t, err)
-		idx := NewRecallIndex(s, ws, "secret:", h)
+		for _, withHistory := range []bool{true, false} { // a nil history leaves no typed
+			// lines but must not drop the backfill filter either
+			s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+			ws := t.TempDir()
+			var h *EditorHistory
+			if withHistory {
+				var err error
+				h, err = NewEditorHistory(s, ws, "secret:")
+				require.NoError(t, err)
+			}
+			idx := NewRecallIndex(s, ws, "secret:", h)
 
-		// the transcript records a secret-prefixed prompt that editor history drops,
-		// so backfill must exclude it where typed recall cannot see it
-		recordPrompt(t, s, ws, "secret:hunter2")
-		recordPrompt(t, s, ws, "plain prompt")
-		h.Append("secret:typed") // also dropped by append before reaching the line file
+			// the transcript records a secret-prefixed prompt that editor history drops,
+			// so backfill must exclude it where typed recall cannot see it
+			recordPrompt(t, s, ws, "secret:hunter2")
+			recordPrompt(t, s, ws, "plain prompt")
+			if withHistory {
+				h.Append("secret:typed") // also dropped by append before reaching the line file
+			}
 
-		assert.Equal(t, []string{"plain prompt"}, recallTexts(idx.Lines()))
-	})
-	t.Run("secret_excluded_without_history", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		idx := NewRecallIndex(s, ws, "secret:", nil)
-
-		// a failed editor-history open leaves no typed lines but must not drop the
-		// backfill filter either
-		recordPrompt(t, s, ws, "secret:hunter2")
-		recordPrompt(t, s, ws, "plain prompt")
-		assert.Equal(t, []string{"plain prompt"}, recallTexts(idx.Lines()))
+			assert.Equal(t, []string{"plain prompt"}, recallTexts(idx.Lines()))
+		}
 	})
 	t.Run("empty_sources_is_empty", func(t *testing.T) {
 		s := StoreAt(filepath.Join(os.TempDir(), "no-such-store-"+t.Name()))

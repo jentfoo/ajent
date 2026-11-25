@@ -236,6 +236,14 @@ func TestCompletionNotification(t *testing.T) {
 		assert.Equal(t, StatusDone, j.Status)
 		m.Flush() // still no deliverer for an idle agent, nothing must start a turn
 	})
+
+	t.Run("notice_copy", func(t *testing.T) {
+		assert.Equal(t, "[tool] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.",
+			completionNotice([]string{"sub-1"}))
+		assert.Equal(t, "[tool] Sub-agents sub-1, sub-2 completed. Poll each for its summary.",
+			completionNotice([]string{"sub-1", "sub-2"}))
+		assert.Empty(t, completionNotice(nil))
+	})
 }
 
 func TestCompletionBatching(t *testing.T) {
@@ -397,34 +405,84 @@ func TestCompletionBatching(t *testing.T) {
 	})
 }
 
-func TestPollTimeoutThenComplete(t *testing.T) {
+func TestPoll(t *testing.T) {
 	t.Parallel()
 
-	d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}
-	m := New(wired(t, Options{
-		Provider:    func(llm.Model) (llm.Provider, error) { return d, nil },
-		PollTimeout: 30 * time.Millisecond,
-	}))
-	t.Cleanup(m.Close)
+	// a timeout payload reports progress, then the late completion still claims
+	t.Run("timeout_then_completes", func(t *testing.T) {
+		d := &delayedProvider{turn: summaryTurn("slow but done", llm.Usage{}), release: make(chan struct{})}
+		m := New(wired(t, Options{
+			Provider:    func(llm.Model) (llm.Provider, error) { return d, nil },
+			PollTimeout: 30 * time.Millisecond,
+		}))
+		t.Cleanup(m.Close)
 
-	id := m.start("slow", "", "")
-	j1, ok, _ := m.poll(t.Context(), id)
-	assert.False(t, ok)
-	assert.Equal(t, StatusRunning, j1.Status)
+		id := m.start("slow", "", "")
+		j1, ok, _ := m.poll(t.Context(), id)
+		assert.False(t, ok)
+		assert.Equal(t, StatusRunning, j1.Status)
 
-	m.mu.Lock()
-	var prog string
-	if jj := m.jobs[normalizeID(id)]; jj != nil {
-		prog = jj.pollProgress()
-	}
-	m.mu.Unlock()
-	assert.Contains(t, prog, "still running after")
+		m.mu.Lock()
+		var prog string
+		if jj := m.jobs[normalizeID(id)]; jj != nil {
+			prog = jj.pollProgress()
+		}
+		m.mu.Unlock()
+		assert.Contains(t, prog, "still running after")
 
-	close(d.release) // let the turn finish
-	j2, ok, _ := m.poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusDone, j2.Status)
-	assert.Contains(t, j2.Summary, "slow but done")
+		close(d.release) // let the turn finish
+		j2, ok, _ := m.poll(t.Context(), id)
+		require.True(t, ok)
+		assert.Equal(t, StatusDone, j2.Status)
+		assert.Contains(t, j2.Summary, "slow but done")
+	})
+
+	t.Run("prefers_result_over_timeout", func(t *testing.T) {
+		p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("done in time", llm.Usage{})}})
+		m := New(wired(t, Options{Provider: p, PollTimeout: time.Nanosecond})) // the timer is always ready
+		t.Cleanup(m.Close)
+
+		id := m.start("x", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
+		<-j.done // finished before the poll registers, both select cases are ready
+
+		got, complete, _ := m.poll(t.Context(), id)
+		require.True(t, complete)
+		assert.Equal(t, StatusDone, got.Status)
+		assert.Contains(t, got.Summary, "done in time")
+	})
+
+	t.Run("claims_status_before_closed", func(t *testing.T) {
+		release := make(chan struct{})
+		entered := make(chan struct{}) // terminal Activity clear reached: status done, channel not yet closed
+		var enteredOnce sync.Once
+		unblock := make(chan struct{})
+		m := New(wired(t, Options{
+			Provider: func(llm.Model) (llm.Provider, error) {
+				return &delayedProvider{release: release, turn: summaryTurn("done in time", llm.Usage{})}, nil
+			},
+			PollTimeout: time.Nanosecond, // timer always ready once the poll registers
+			Activity: func(_, text string, _ int) {
+				if text == "" { // spawn's terminal clear runs between finish and close(done)
+					enteredOnce.Do(func() { close(entered) })
+					<-unblock
+				}
+			},
+		}))
+		t.Cleanup(m.Close)
+
+		id := m.start("x", "", "")
+		close(release) // the provider turn returns, spawn reaches finish then blocks in Activity
+		<-entered      // status is done while close(done) has not yet run
+
+		j, ok, _ := m.poll(t.Context(), id) // timer fires inside the window and must claim
+		assert.True(t, ok)
+		assert.Equal(t, StatusDone, j.Status)
+		assert.Contains(t, j.Summary, "done in time")
+
+		close(unblock) // let spawn reach close(done), cleanup can proceed
+	})
 }
 
 func TestReserve(t *testing.T) {
@@ -533,103 +591,70 @@ func TestPollBatchDetection(t *testing.T) {
 	assert.False(t, m.leavePoll())
 }
 
-func TestPollPrefersResultOverTimeout(t *testing.T) {
+func TestOnComplete(t *testing.T) {
 	t.Parallel()
 
-	p, _ := scripted([]llm.ScriptedTurn{{Events: summaryTurn("done in time", llm.Usage{})}})
-	m := New(wired(t, Options{Provider: p, PollTimeout: time.Nanosecond})) // the timer is always ready
-	t.Cleanup(m.Close)
+	// a completion whose poller left empty-handed is re-armed, exactly once
+	t.Run("orphan_recovered", func(t *testing.T) {
+		c := newCapture()
+		release := make(chan struct{})
+		m := New(wired(t, Options{
+			Provider: func(llm.Model) (llm.Provider, error) {
+				return &delayedProvider{release: release, turn: summaryTurn("final", llm.Usage{})}, nil
+			},
+			Notice: func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
+		}))
+		t.Cleanup(m.Close)
 
-	id := m.start("x", "", "")
-	j, ok := m.lookup(id)
-	require.True(t, ok)
-	<-j.done // finished before the poll registers, both select cases are ready
+		id := m.start("x", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
 
-	got, complete, _ := m.poll(t.Context(), id)
-	require.True(t, complete)
-	assert.Equal(t, StatusDone, got.Status)
-	assert.Contains(t, got.Summary, "done in time")
-}
+		j.mu.Lock() // a poll registered and about to leave on its timeout
+		j.pollers++
+		j.mu.Unlock()
 
-func TestPollClaimsStatusBeforeChannelClosed(t *testing.T) {
-	t.Parallel()
+		close(release)
+		<-j.done // completes while the poller is still counted, onComplete stays silent
+		assert.Zero(t, c.noticeCount())
 
-	release := make(chan struct{})
-	entered := make(chan struct{}) // terminal Activity clear reached: status done, channel not yet closed
-	var enteredOnce sync.Once
-	unblock := make(chan struct{})
-	m := New(wired(t, Options{
-		Provider: func(llm.Model) (llm.Provider, error) {
-			return &delayedProvider{release: release, turn: summaryTurn("done in time", llm.Usage{})}, nil
-		},
-		PollTimeout: time.Nanosecond, // timer always ready once the poll registers
-		Activity: func(_, text string, _ int) {
-			if text == "" { // spawn's terminal clear runs between finish and close(done)
-				enteredOnce.Do(func() { close(entered) })
-				<-unblock
-			}
-		},
-	}))
-	t.Cleanup(m.Close)
+		j.mu.Lock() // the poll departs without the result, as Poll's defer does
+		j.pollers--
+		orphan := j.pollers == 0 && !j.consumed
+		j.mu.Unlock()
+		require.True(t, orphan)
+		m.onComplete(j)
+		m.onComplete(j) // a re-arm racing its own completion must not fire twice
 
-	id := m.start("x", "", "")
-	close(release) // the provider turn returns, spawn reaches finish then blocks in Activity
-	<-entered      // status is done while close(done) has not yet run
+		require.Equal(t, 1, c.noticeCount())
+		assert.Equal(t, "Sub-agent "+id+" completed", c.lastNotice())
+		ins := m.Boundary()
+		require.Len(t, ins, 1)
+		assert.Contains(t, ins[0].Text, id)
+	})
 
-	j, ok, _ := m.poll(t.Context(), id) // timer fires inside the window and must claim
-	assert.True(t, ok)
-	assert.Equal(t, StatusDone, j.Status)
-	assert.Contains(t, j.Summary, "done in time")
+	t.Run("running_job_ignored", func(t *testing.T) {
+		c := newCapture()
+		m := New(wired(t, Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
+		}))
+		t.Cleanup(m.Close)
 
-	close(unblock) // let spawn reach close(done), cleanup can proceed
-}
+		id := m.start("x", "", "")
+		j, ok := m.lookup(id)
+		require.True(t, ok)
 
-func TestOrphanedCompletionRecovered(t *testing.T) {
-	t.Parallel()
-
-	c := newCapture()
-	release := make(chan struct{})
-	m := New(wired(t, Options{
-		Provider: func(llm.Model) (llm.Provider, error) {
-			return &delayedProvider{release: release, turn: summaryTurn("final", llm.Usage{})}, nil
-		},
-		Notice: func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
-	}))
-	t.Cleanup(m.Close)
-
-	id := m.start("x", "", "")
-	j, ok := m.lookup(id)
-	require.True(t, ok)
-
-	j.mu.Lock() // a poll registered and about to leave on its timeout
-	j.pollers++
-	j.mu.Unlock()
-
-	close(release)
-	<-j.done // completes while the poller is still counted, onComplete stays silent
-	assert.Zero(t, c.noticeCount())
-
-	j.mu.Lock() // the poll departs without the result, as Poll's defer does
-	j.pollers--
-	orphan := j.pollers == 0 && !j.consumed
-	j.mu.Unlock()
-	require.True(t, orphan)
-	m.onComplete(j)
-	m.onComplete(j) // a re-arm racing its own completion must not fire twice
-
-	require.Equal(t, 1, c.noticeCount())
-	assert.Equal(t, "Sub-agent "+id+" completed", c.lastNotice())
-	ins := m.Boundary()
-	require.Len(t, ins, 1)
-	assert.Contains(t, ins[0].Text, id)
+		m.onComplete(j) // the job has not finished, nothing to deliver
+		assert.Zero(t, c.noticeCount())
+		assert.Empty(t, m.Boundary())
+	})
 }
 
 func TestEnqueueSerializesNotices(t *testing.T) {
 	t.Parallel()
 
-	// two near-simultaneous completions must publish in append order: while one
-	// notice is still mid-publish, a second enqueue may not complete and let the
-	// stale smaller batch land after the full one
+	// publishes serialize, so near-simultaneous completions land in append order
 	c := newCapture()
 	var mu sync.Mutex // guards held, written from the Notice callback goroutine
 	held := false     // the first notice's publish is paused mid-flight
@@ -685,25 +710,6 @@ func TestEnqueueSerializesNotices(t *testing.T) {
 	unblock.Do(func() { close(release) })
 	wg.Wait()
 	assert.Equal(t, "Sub-agents sub-1, sub-2 completed", c.lastNotice())
-}
-
-func TestOnCompleteIgnoresRunningJob(t *testing.T) {
-	t.Parallel()
-
-	c := newCapture()
-	m := New(wired(t, Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
-		Notice:   func(msg string) { c.mu.Lock(); c.notices = append(c.notices, msg); c.mu.Unlock() },
-	}))
-	t.Cleanup(m.Close)
-
-	id := m.start("x", "", "")
-	j, ok := m.lookup(id)
-	require.True(t, ok)
-
-	m.onComplete(j) // the job has not finished, nothing to deliver
-	assert.Zero(t, c.noticeCount())
-	assert.Empty(t, m.Boundary())
 }
 
 func TestConcurrencyBoundedBySemaphore(t *testing.T) {
@@ -827,47 +833,48 @@ func (m *Manager) grantedOf(id string) bool {
 	return m.jobs[id].granted
 }
 
-func TestClaimHoldKeepsActivationInIdOrder(t *testing.T) {
+func TestClaimHold(t *testing.T) {
 	t.Parallel()
 
-	m := New(wired(t, Options{
-		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
-		MaxConcurrent: 2,
-	}))
-	t.Cleanup(m.Close)
-	m.claimHold = time.Hour // only a real claim moves the line in this test
+	// an unclaimed reservation holds back higher numbers while its hold is live
+	t.Run("keeps_activation_in_id_order", func(t *testing.T) {
+		m := New(wired(t, Options{
+			Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			MaxConcurrent: 2,
+		}))
+		t.Cleanup(m.Close)
+		m.claimHold = time.Hour // only a real claim moves the line in this test
 
-	m.Reserve([]agent.ToolCall{
-		{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+		m.Reserve([]agent.ToolCall{
+			{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+		})
+		// claims race registration and land sub-1, then sub-3, with sub-2 still unclaimed
+		id1 := m.start("a", "", "c1")
+		id3 := m.start("c", "", "c3")
+		assert.True(t, m.grantedOf(id1))  // no lower number is pending, sub-1 runs free
+		assert.False(t, m.grantedOf(id3)) // the unclaimed sub-2 holds it back
+
+		id2 := m.start("b", "", "c2") // the last sibling claims; activation follows ids
+		assert.True(t, m.grantedOf(id2))
+		assert.False(t, m.grantedOf(id3)) // the cap is reached: sub-2 runs before sub-3
 	})
-	// claims race registration and land sub-1, then sub-3, with sub-2 still unclaimed
-	id1 := m.start("a", "", "c1")
-	id3 := m.start("c", "", "c3")
-	assert.True(t, m.grantedOf(id1))  // no lower number is pending, sub-1 runs free
-	assert.False(t, m.grantedOf(id3)) // the unclaimed sub-2 holds it back
 
-	id2 := m.start("b", "", "c2") // the last sibling claims; activation follows ids
-	assert.True(t, m.grantedOf(id2))
-	assert.False(t, m.grantedOf(id3)) // the cap is reached: sub-2 runs before sub-3
-}
+	t.Run("expires_without_claim", func(t *testing.T) {
+		m := New(wired(t, Options{
+			Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			MaxConcurrent: 2,
+		}))
+		t.Cleanup(m.Close)
+		m.claimHold = 20 * time.Millisecond
 
-func TestClaimHoldExpiresWithoutClaim(t *testing.T) {
-	t.Parallel()
-
-	m := New(wired(t, Options{
-		Provider:      func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
-		MaxConcurrent: 2,
-	}))
-	t.Cleanup(m.Close)
-	m.claimHold = 20 * time.Millisecond
-
-	m.Reserve([]agent.ToolCall{
-		{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+		m.Reserve([]agent.ToolCall{
+			{ID: "c1", Name: startToolName}, {ID: "c2", Name: startToolName}, {ID: "c3", Name: startToolName},
+		})
+		id3 := m.start("c", "", "c3")       // c1 and c2 never claim
+		require.Eventually(t, func() bool { // the hold lapses and sub-3 runs alone
+			return m.grantedOf(id3)
+		}, time.Second, 5*time.Millisecond)
 	})
-	id3 := m.start("c", "", "c3")       // c1 and c2 never claim
-	require.Eventually(t, func() bool { // the hold lapses and sub-3 runs alone
-		return m.grantedOf(id3)
-	}, time.Second, 5*time.Millisecond)
 }
 
 func TestActivationFollowsJobOrder(t *testing.T) {
@@ -925,8 +932,7 @@ func TestShutdownCancelsRunningJobs(t *testing.T) {
 func TestActivityRow(t *testing.T) {
 	t.Parallel()
 
-	// a job is visible above the prompt as soon as it starts (even before its turn
-	// emits), and every terminal path clears the row.
+	// the row appears at start, before any child output
 	t.Run("start_publishes", func(t *testing.T) {
 		g := &gatedProvider{}
 		c := newCapture()
@@ -945,8 +951,7 @@ func TestActivityRow(t *testing.T) {
 		require.Eventually(t, func() bool { return c.rowText(id) == "" }, time.Second, 5*time.Millisecond)
 	})
 
-	// a job's row belongs to the job, not to one turn: a child that produced no
-	// summary is nudged into another turn, and the row must not blink out between them.
+	// the row spans nudge turns, owned by the job not one turn
 	t.Run("row_survives_nudge_turn", func(t *testing.T) {
 		toolTurn := []llm.Event{
 			{Type: llm.EventToolCallStart, Index: 0, ToolCallID: "c1", ToolName: "read"},
@@ -1048,113 +1053,111 @@ func TestTallyPublishesBesideStatus(t *testing.T) {
 	assert.Equal(t, map[string]int{"running": 0, "queued": 0, "done": 2}, last.Counts())
 }
 
-func TestStatusSegmentAndList(t *testing.T) {
+func TestPublishStatus(t *testing.T) {
 	t.Parallel()
-
-	g := &gatedProvider{}
-	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
-	var statuses []string
-	m := New(wired(t, Options{
-		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
-		MaxConcurrent: 2,
-		Status: func(text, short string) {
-			if text == "" {
-				return
-			}
-			mu.Lock()
-			statuses = append(statuses, text)
-			mu.Unlock()
-		},
-	}))
-	t.Cleanup(m.Close)
-
-	id1 := m.start("one", "", "")
-	m.start("two", "", "")
-	g.releaseAll()
-	m.poll(t.Context(), id1)
-
-	jobs := m.List()
-	assert.Len(t, jobs, 2)
-	assert.Contains(t, jobs[0].ID, "sub-")
 
 	// a status was published naming the live count, not just an opaque marker
-	mu.Lock()
-	found := slices.ContainsFunc(statuses, func(s string) bool {
-		return strings.HasPrefix(s, "subagents: ") && (strings.Contains(s, "running") || strings.Contains(s, "done"))
+	t.Run("segment_names_live_counts", func(t *testing.T) {
+		g := &gatedProvider{}
+		var mu sync.Mutex // publishStatus runs from concurrent job goroutines
+		var statuses []string
+		m := New(wired(t, Options{
+			Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
+			MaxConcurrent: 2,
+			Status: func(text, short string) {
+				if text == "" {
+					return
+				}
+				mu.Lock()
+				statuses = append(statuses, text)
+				mu.Unlock()
+			},
+		}))
+		t.Cleanup(m.Close)
+
+		id1 := m.start("one", "", "")
+		m.start("two", "", "")
+		g.releaseAll()
+		m.poll(t.Context(), id1)
+
+		// completed jobs stay listed alongside live ones
+		jobs := m.List()
+		assert.Len(t, jobs, 2)
+		assert.Contains(t, jobs[0].ID, "sub-")
+
+		mu.Lock()
+		found := slices.ContainsFunc(statuses, func(s string) bool {
+			return strings.HasPrefix(s, "subagents: ") && (strings.Contains(s, "running") || strings.Contains(s, "done"))
+		})
+		mu.Unlock()
+		assert.True(t, found)
 	})
-	mu.Unlock()
-	assert.True(t, found)
-}
 
-func TestStatusAgeIgnoresFinishedJobs(t *testing.T) {
-	t.Parallel()
+	// a finished job's stale age must not feed the oldest-live note
+	t.Run("age_ignores_finished_jobs", func(t *testing.T) {
+		var mu sync.Mutex // publishStatus runs from concurrent job goroutines
+		var last string
+		m := New(wired(t, Options{
+			Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
+			Status: func(text, _ string) {
+				if text == "" {
+					return
+				}
+				mu.Lock()
+				last = text
+				mu.Unlock()
+			},
+		}))
+		t.Cleanup(m.Close)
 
-	// a finished job keeps its transcript entry for the session: its long-gone
-	// age must never read as if it were still live in a fresh fan-out's note
-	var mu sync.Mutex // publishStatus runs from concurrent job goroutines
-	var last string
-	m := New(wired(t, Options{
-		Provider: func(llm.Model) (llm.Provider, error) { return &blockingProvider{}, nil },
-		Status: func(text, _ string) {
-			if text == "" {
-				return
-			}
-			mu.Lock()
-			last = text
-			mu.Unlock()
-		},
-	}))
-	t.Cleanup(m.Close)
+		id := m.start("stuck", "", "") // pinned running by the blocking provider
+		require.Eventually(t, func() bool {
+			s, ok := jobStatus(m, id)
+			return ok && s == StatusRunning
+		}, 2*time.Second, 5*time.Millisecond)
 
-	id := m.start("stuck", "", "") // pinned running by the blocking provider
-	require.Eventually(t, func() bool {
-		s, ok := jobStatus(m, id)
-		return ok && s == StatusRunning
-	}, 2*time.Second, 5*time.Millisecond)
+		// a finished job whose entry lingers far past its runtime
+		old := stubJob(m, 2)
+		m.mu.Lock()
+		m.jobs[old.id] = old
+		m.mu.Unlock()
+		t.Cleanup(old.cancel)
+		old.finish(StatusDone, "", nil)
+		old.mu.Lock()
+		old.started = time.Now().Add(-10 * time.Minute)
+		old.mu.Unlock()
 
-	// a finished job whose entry lingers far past its runtime
-	old := stubJob(m, 2)
-	m.mu.Lock()
-	m.jobs[old.id] = old
-	m.mu.Unlock()
-	t.Cleanup(old.cancel)
-	old.finish(StatusDone, "", nil)
-	old.mu.Lock()
-	old.started = time.Now().Add(-10 * time.Minute)
-	old.mu.Unlock()
-
-	m.publishStatus()
-	mu.Lock()
-	defer mu.Unlock()
-	assert.Contains(t, last, "1 running")
-	assert.Contains(t, last, "1 done")
-	assert.NotContains(t, last, "(oldest 10m")
-}
-
-func TestStatusPublishesOnActivation(t *testing.T) {
-	t.Parallel()
-
-	g := &gatedProvider{}
-	var mu sync.Mutex // Status runs from concurrent job goroutines
-	var last string
-	m := New(wired(t, Options{
-		Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
-		MaxConcurrent: 4,
-		Status: func(text, _ string) {
-			mu.Lock()
-			last = text
-			mu.Unlock()
-		},
-	}))
-	t.Cleanup(m.Close)
-
-	m.start("one", "", "")
-	m.start("two", "", "")
-	require.Eventually(t, func() bool {
+		m.publishStatus()
 		mu.Lock()
 		defer mu.Unlock()
-		return strings.Contains(last, "2 running")
-	}, 2*time.Second, 5*time.Millisecond)
+		assert.Contains(t, last, "1 running")
+		assert.Contains(t, last, "1 done")
+		assert.NotContains(t, last, "(oldest 10m")
+	})
+
+	t.Run("publishes_on_activation", func(t *testing.T) {
+		g := &gatedProvider{}
+		var mu sync.Mutex // Status runs from concurrent job goroutines
+		var last string
+		m := New(wired(t, Options{
+			Provider:      func(llm.Model) (llm.Provider, error) { return g, nil },
+			MaxConcurrent: 4,
+			Status: func(text, _ string) {
+				mu.Lock()
+				last = text
+				mu.Unlock()
+			},
+		}))
+		t.Cleanup(m.Close)
+
+		m.start("one", "", "")
+		m.start("two", "", "")
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return strings.Contains(last, "2 running")
+		}, 2*time.Second, 5*time.Millisecond)
+	})
 }
 
 func TestListOrdersByJobNumber(t *testing.T) {
@@ -1172,6 +1175,7 @@ func TestListOrdersByJobNumber(t *testing.T) {
 	}
 	jobs := m.List()
 	require.Len(t, jobs, len(want))
+	assert.Contains(t, jobs[0].ID, "sub-") // entries are snapshots carrying the sub- ids
 	got := make([]string, 0, len(jobs))
 	for _, j := range jobs {
 		got = append(got, j.ID)
@@ -1259,8 +1263,7 @@ func TestClose(t *testing.T) {
 		<-closed
 	})
 
-	// a job stuck past the bounded wait finishes after the clears: its tail and its
-	// child's sink must not repaint the status segment or an activity row
+	// a straggler finishing after the clears must not repaint the UI
 	t.Run("straggler_republishes_nothing", func(t *testing.T) {
 		p := &stuckProvider{entered: make(chan struct{}), release: make(chan struct{})}
 		var mu sync.Mutex // publishes land from the straggler's goroutine
@@ -1438,22 +1441,4 @@ func jobStatus(m *Manager, id string) (Status, bool) {
 		return 0, false
 	}
 	return j.statusOf(), true
-}
-
-func TestCompletionNotice(t *testing.T) {
-	t.Parallel()
-
-	t.Run("single_names_the_poll", func(t *testing.T) {
-		assert.Equal(t, "[tool] Sub-agent sub-1 completed. Call agent_poll with id sub-1 to retrieve the summary.",
-			completionNotice([]string{"sub-1"}))
-	})
-
-	t.Run("batch_names_each", func(t *testing.T) {
-		assert.Equal(t, "[tool] Sub-agents sub-1, sub-2 completed. Poll each for its summary.",
-			completionNotice([]string{"sub-1", "sub-2"}))
-	})
-
-	t.Run("empty_is_blank", func(t *testing.T) {
-		assert.Empty(t, completionNotice(nil))
-	})
 }

@@ -111,23 +111,6 @@ func TestSpillerWrite(t *testing.T) {
 		assert.NotEmpty(t, c.path) // the footer may point here
 	})
 
-	t.Run("write_failure_drops_partial", func(t *testing.T) {
-		sp := newSpiller("claim-test", "bash")
-		_, err := sp.Write([]byte("kept\n"))
-		require.NoError(t, err)
-		path := sp.path
-		require.NoError(t, sp.f.Close()) // force the next write to fail
-
-		_, err = sp.Write([]byte("more\n"))
-		require.ErrorIs(t, err, os.ErrClosed)
-
-		c := sp.claim()
-		assert.Equal(t, spillFailed, c.state)
-		assert.Empty(t, c.path) // the failed claim names no file
-		_, statErr := os.Stat(path)
-		assert.True(t, os.IsNotExist(statErr)) // nothing partial left to point at
-	})
-
 	t.Run("failed_write_stays_dead", func(t *testing.T) {
 		sp := newSpiller("claim-test", "bash")
 		_, err := sp.Write([]byte("kept\n"))
@@ -143,8 +126,9 @@ func TestSpillerWrite(t *testing.T) {
 		require.ErrorIs(t, err, os.ErrClosed)
 		c := sp.claim()
 		assert.Equal(t, spillFailed, c.state)
+		assert.Empty(t, c.path) // the failed claim names no file
 		_, statErr := os.Stat(path)
-		assert.True(t, os.IsNotExist(statErr))
+		assert.True(t, os.IsNotExist(statErr)) // nothing partial left to point at
 	})
 }
 

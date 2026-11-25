@@ -53,6 +53,31 @@ func fifoFence(t *testing.T, fn func()) {
 // fifoErr is the refusal every guarded site reports for a special file.
 var fifoErr = "not a regular file"
 
+func TestSpecialFile(t *testing.T) {
+	t.Parallel()
+
+	// the seven-way classification every open site leans on: regular/dir/symlink
+	// pass, anything with a blocking read (pipe, device, socket) is refused
+	cases := []struct {
+		name string
+		mode os.FileMode
+		want bool
+	}{
+		{"regular", 0o644, false},
+		{"dir", os.ModeDir | 0o755, false},
+		{"symlink", os.ModeSymlink, false},
+		{"fifo", os.ModeNamedPipe, true},
+		{"block_device", os.ModeDevice | 0o660, true},
+		{"char_device", os.ModeDevice | os.ModeCharDevice | 0o644, true},
+		{"socket", os.ModeSocket, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, specialFile(tc.mode))
+		})
+	}
+}
+
 func TestRefuseSpecial(t *testing.T) {
 	t.Parallel()
 
@@ -83,29 +108,6 @@ func TestStatRegularFifo(t *testing.T) {
 		assert.Equal(t, fifoErr, errors.Unwrap(err).Error())
 		assert.Nil(t, fi) // no FileInfo rides along with a refusal
 	})
-}
-
-func TestSpecialFile(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		mode os.FileMode
-		want bool
-	}{
-		{"regular", 0o644, false},
-		{"dir", os.ModeDir | 0o755, false},
-		{"symlink", os.ModeSymlink, false},
-		{"fifo", os.ModeNamedPipe, true},
-		{"block_device", os.ModeDevice | 0o660, true},
-		{"char_device", os.ModeDevice | os.ModeCharDevice | 0o644, true},
-		{"socket", os.ModeSocket, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, specialFile(tc.mode))
-		})
-	}
 }
 
 func TestReadRefusesFifo(t *testing.T) {
@@ -300,9 +302,10 @@ func TestGitDiffWorktreeFifo(t *testing.T) {
 	require.NoError(t, os.Remove(filepath.Join(dir, "pipe.txt")))
 	mkfifo(t, filepath.Join(dir, "pipe.txt"))
 
+	d := newGitDiffOut("fifo-test", "git_diff")
+	t.Cleanup(func() { _ = d.close() }) // the fence's goroutine may not touch t
+
 	fifoFence(t, func() {
-		d := newGitDiffOut("fifo-test", "git_diff")
-		defer func() { _ = d.close() }()
 		require.NoError(t, gitDiffText(t.Context(), r, "", "worktree", "", submoduleRender{}, d))
 		out := d.Text("")
 		assert.Contains(t, out, "diff --git a/pipe.txt b/pipe.txt")

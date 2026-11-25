@@ -21,19 +21,10 @@ func callMsgs(ids ...string) []llm.Message {
 	return msgs
 }
 
-func TestNext(t *testing.T) {
-	t.Parallel()
-
-	s := NewRunSequencer("t-")
-	assert.Equal(t, int64(1), s.Next())
-	assert.Equal(t, int64(2), s.Next())
-}
-
 func TestSeed(t *testing.T) {
 	t.Parallel()
 
-	// Seed lifts the counter to exactly the highest run already in context, so a
-	// later Next continues rather than skips or repeats the recorded ids
+	// Seed lifts the counter to the highest run seen, Next continues from there
 	t.Run("raises_to_max_not_past", func(t *testing.T) {
 		s := NewRunSequencer("t-")
 		s.Seed(callMsgs("t-3-read-1", "call_9", "t-7-poll-x-2"))
@@ -60,8 +51,7 @@ func TestSeed(t *testing.T) {
 		assert.Equal(t, int64(0), s.run.Load())
 	})
 
-	// Seed racing Next must only ever raise: the CAS keeps a seed from dragging
-	// freshly minted ids back into reuse
+	// Seed never lowers the counter even while racing Next
 	t.Run("concurrent_with_next", func(t *testing.T) {
 		s := NewRunSequencer("t-")
 		const workers, per = 4, 50
@@ -88,11 +78,21 @@ func TestCallID(t *testing.T) {
 	t.Parallel()
 
 	s := NewRunSequencer("t-")
-	assert.Equal(t, "t-42-r-7-x", s.CallID(42, "r-7-x"))
 
 	// a digits-led rest must not read as a second run number: parsing stops at
 	// the first dash after the run
 	t.Run("run_survives_digit_led_rest", func(t *testing.T) {
 		require.Equal(t, int64(42), s.runOf(s.CallID(42, "7-x")))
+	})
+
+	t.Run("call_id_format", func(t *testing.T) {
+		assert.Equal(t, "t-42-r-7-x", s.CallID(42, "r-7-x"))
+	})
+
+	// a fresh sequencer starts at run 1, never 0
+	t.Run("next_starts_at_one", func(t *testing.T) {
+		fresh := NewRunSequencer("t-")
+		assert.Equal(t, int64(1), fresh.Next())
+		assert.Equal(t, int64(2), fresh.Next())
 	})
 }

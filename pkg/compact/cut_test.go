@@ -25,6 +25,19 @@ func stepBranch(t *testing.T, n, filler int) []session.Entry {
 	return branch
 }
 
+// thinkingBranch builds six steps whose deliberation far outweighs the visible text.
+func thinkingBranch() []session.Entry {
+	out := []session.Entry{userText("u1", "start")}
+	for i := 1; i <= 6; i++ {
+		s := strconv.Itoa(i)
+		out = append(out, msg("a"+s, llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
+			llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
+			llm.TextBlock{Text: "step " + s},
+		}}))
+	}
+	return out
+}
+
 func TestVerbatimCut(t *testing.T) {
 	t.Parallel()
 
@@ -62,6 +75,20 @@ func TestVerbatimCut(t *testing.T) {
 		assert.Greater(t, newBranchView(branch).spanTokens(cut, len(branch)), 1)
 	})
 
+	t.Run("dropped_thinking_extends_the_band", func(t *testing.T) {
+		// with thinking dropped by the policy the same ceiling affords more steps, so
+		// the band extends further back than a raw estimate would allow
+		branch := thinkingBranch()
+		raw := newBranchView(branch)
+		sent := newBranchView(branch)
+		sent.setRetain(llm.RetainNone)
+		one := raw.spanTokens(6, len(branch)) // one step's full weight, thinking included
+
+		cut := raw.verbatimCut(0, 2, one*4)
+		assert.Equal(t, 3, cut)                           // raw thinking consumes the ceiling after four steps
+		assert.Equal(t, 0, sent.verbatimCut(0, 2, one*4)) // sent-size steps all fit
+	})
+
 	t.Run("never_reaches_past_the_prior_cut", func(t *testing.T) {
 		branch := stepBranch(t, 6, 5)
 		assert.Equal(t, 5, newBranchView(branch).verbatimCut(5, 4, 1<<20))
@@ -91,18 +118,7 @@ func TestVerbatimCut(t *testing.T) {
 func TestSentTokens(t *testing.T) {
 	t.Parallel()
 
-	// thinking-heavy steps: each assistant message carries deliberation far heavier
-	// than its visible text
-	branch := func() []session.Entry {
-		out := []session.Entry{userText("u1", "start")}
-		for i := 1; i <= 6; i++ {
-			out = append(out, msg("a"+strconv.Itoa(i), llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
-				llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
-				llm.TextBlock{Text: "step " + strconv.Itoa(i)},
-			}}))
-		}
-		return out
-	}()
+	branch := thinkingBranch()
 
 	t.Run("retain_none_drops_thinking", func(t *testing.T) {
 		v := newBranchView(branch)
@@ -121,29 +137,6 @@ func TestSentTokens(t *testing.T) {
 		assert.Less(t, v.sentTokens(1), v.tokens(1))
 		assert.Equal(t, v.tokens(6), v.sentTokens(6))
 	})
-}
-
-func TestVerbatimCutRetain(t *testing.T) {
-	t.Parallel()
-
-	// with thinking dropped by the policy the same ceiling affords more steps, so
-	// the band extends further back than a raw estimate would allow
-	branch := []session.Entry{userText("u1", "start")}
-	for i := 1; i <= 6; i++ {
-		branch = append(branch, msg("a"+strconv.Itoa(i), llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{
-			llm.ThinkingBlock{Text: strings.Repeat("deliberating ", 300)},
-			llm.TextBlock{Text: "step " + strconv.Itoa(i)},
-		}}))
-	}
-
-	raw := newBranchView(branch)
-	sent := newBranchView(branch)
-	sent.setRetain(llm.RetainNone)
-	one := raw.spanTokens(6, len(branch)) // one step's full weight, thinking included
-
-	cut := raw.verbatimCut(0, 2, one*4)
-	assert.Equal(t, 3, cut)                           // raw thinking consumes the ceiling after four steps
-	assert.Equal(t, 0, sent.verbatimCut(0, 2, one*4)) // sent-size steps all fit
 }
 
 func TestChooseCut(t *testing.T) {

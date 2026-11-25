@@ -18,17 +18,8 @@ import (
 	"golang.org/x/term"
 )
 
-// The vt emulator approximates reflow. A real pty is the reference for the
-// terminal lifecycle. The kernel owns the size reports and the line discipline
-// owns the bytes, so raw mode, keystroke transport, size and teardown are all
-// real here. Only the origin of SIGWINCH is not: the slave is not a controlling
-// terminal, so the kernel delivers nothing and the test raises the signal on
-// itself, which drives the whole real watchSignals chain. Keep this rig to the
-// cases the emulator cannot reach, since the emulator carries the broad coverage.
-//
-// None of these tests may call t.Parallel: signal.Notify is process wide, so two
-// live UIs would answer each other's SIGWINCH. Only a UI built through New runs
-// watchSignals, and every such test lives in this file.
+// A real pty backs every test here, kept to cases the vt emulator cannot reach.
+// None of these tests may call t.Parallel: signal.Notify is process wide.
 
 func openPTY(t *testing.T) (*os.File, *os.File) {
 	t.Helper()

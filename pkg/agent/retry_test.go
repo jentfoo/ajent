@@ -75,85 +75,98 @@ func TestStreamRetryRecovers(t *testing.T) {
 	assert.Equal(t, 1, answered)
 }
 
-func TestStreamRetryClosesOpenThinking(t *testing.T) {
+// a retry close honors the Hide gate: visible thinking ends before the notice,
+// hidden thinking never leaks onto the sink
+func TestStreamRetryClosesThinking(t *testing.T) {
 	t.Parallel()
 
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		failTurn(retryableErr(), []llm.Event{
-			{Type: llm.EventThinkingStart, Index: 0},
-			{Type: llm.EventThinkingDelta, Index: 0, Text: "hmm"},
-		}),
-		{Events: textOnly("done")},
-	}}
-	sink := &recordingSink{}
-	a := newTestAgent(nil, p, sink)
-	noWaitAgent(a)
+	for _, tc := range []struct {
+		name string
+		hide bool
+	}{
+		{"closes_open_thinking", false},
+		{"hidden_never_leaks", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+				failTurn(retryableErr(), []llm.Event{
+					{Type: llm.EventThinkingStart, Index: 0},
+					{Type: llm.EventThinkingDelta, Index: 0, Text: "hmm"},
+				}),
+				{Events: textOnly("done")},
+			}}
+			sink := &recordingSink{}
+			a := newTestAgent(&State{
+				Model:     llm.Model{ID: "test"},
+				Reasoning: llm.ReasoningConfig{Hide: tc.hide},
+				Tokens:    tokens.New(llm.Model{ID: "test"}),
+			}, p, sink)
+			noWaitAgent(a)
 
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.NoError(t, err)
+			require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
 
-	// the unterminated thinking block is closed ahead of the retry
-	endIdx, noticeIdx := -1, -1
-	for i, c := range sink.calls {
-		if c == "end_thinking" && endIdx < 0 {
-			endIdx = i
-		}
-		if strings.HasPrefix(c, "notice:stream failed") && noticeIdx < 0 {
-			noticeIdx = i
-		}
+			var endIdx, noticeIdx = -1, -1
+			for i, c := range sink.calls {
+				switch {
+				case c == "end_thinking" && endIdx < 0:
+					endIdx = i
+				case strings.HasPrefix(c, "notice:stream failed") && noticeIdx < 0:
+					noticeIdx = i
+				}
+			}
+			if tc.hide {
+				assert.Equal(t, -1, endIdx) // no EndThinking leaks past the Hide gate
+				for _, c := range sink.calls {
+					assert.NotEqual(t, "thinking", c)
+				}
+				assert.Contains(t, sink.calls, "text") // the retry still streams its answer
+				return
+			}
+			require.NotEqual(t, -1, endIdx)
+			require.NotEqual(t, -1, noticeIdx)
+			assert.Less(t, endIdx, noticeIdx) // closed ahead of the retry notice
+		})
 	}
-	require.NotEqual(t, -1, endIdx)
-	require.NotEqual(t, -1, noticeIdx)
-	assert.Less(t, endIdx, noticeIdx)
-
-	// a hidden region never reaches the sink, so the retry close must not
-	// leak an EndThinking, the only path that bypassed the Hide gate
-	t.Run("hidden_stays_hidden", func(t *testing.T) {
-		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			failTurn(retryableErr(), []llm.Event{
-				{Type: llm.EventThinkingStart, Index: 0},
-				{Type: llm.EventThinkingDelta, Index: 0, Text: "hmm"},
-			}),
-			{Events: textOnly("done")},
-		}}
-		sink := &recordingSink{}
-		a := newTestAgent(&State{
-			Model:     llm.Model{ID: "test"},
-			Reasoning: llm.ReasoningConfig{Hide: true},
-			Tokens:    tokens.New(llm.Model{ID: "test"}),
-		}, p, sink)
-		noWaitAgent(a)
-
-		require.NoError(t, a.Prompt(t.Context(), Input{Text: "x"}))
-
-		for _, c := range sink.calls {
-			assert.NotEqual(t, "thinking", c)
-			assert.NotEqual(t, "end_thinking", c)
-		}
-		assert.Contains(t, sink.calls, "text") // the retry still streams its answer
-	})
 }
 
 func TestStreamRetryExhausts(t *testing.T) {
 	t.Parallel()
 
-	// default retries (4) plus the first call: five identical failures
-	turns := make([]llm.ScriptedTurn, 5)
-	for i := range turns {
-		turns[i] = llm.ScriptedTurn{Err: retryableErr()}
-	}
-	sentinel := retryableErr()
-	turns[4] = llm.ScriptedTurn{Err: sentinel}
+	t.Run("default_budget", func(t *testing.T) {
+		// default retries (4) plus the first call: five identical failures
+		turns := make([]llm.ScriptedTurn, 5)
+		for i := range turns {
+			turns[i] = llm.ScriptedTurn{Err: retryableErr()}
+		}
+		sentinel := retryableErr()
+		turns[4] = llm.ScriptedTurn{Err: sentinel}
 
-	p := &llm.ScriptedProvider{Turns: turns}
-	catch := &resultCatcher{}
-	a := newTestAgent(nil, p, catch)
-	noWaitAgent(a)
+		p := &llm.ScriptedProvider{Turns: turns}
+		catch := &resultCatcher{}
+		a := newTestAgent(nil, p, catch)
+		noWaitAgent(a)
 
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.Error(t, err)
-	assert.Len(t, p.Requests(), 5)
-	assert.Equal(t, sentinel, catch.result.Err)
+		err := a.Prompt(t.Context(), Input{Text: "x"})
+		require.Error(t, err)
+		assert.Len(t, p.Requests(), 5)
+		assert.Equal(t, sentinel, catch.result.Err)
+	})
+
+	t.Run("turn_retries_option", func(t *testing.T) {
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Err: retryableErr()},
+			failTurn(retryableErr(), nil),
+			{Events: textOnly("done")},
+		}}
+		catch := &resultCatcher{}
+		a := newTestAgent(nil, p, catch)
+		a.opts.TurnRetries = 1
+		noWaitAgent(a)
+
+		err := a.Prompt(t.Context(), Input{Text: "x"})
+		require.Error(t, err)          // budget 1: first call plus one retry
+		assert.Len(t, p.Requests(), 2) // the third turn never runs
+	})
 }
 
 func TestStreamRetrySkipsPermanent(t *testing.T) {
@@ -189,22 +202,4 @@ func TestStreamRetryInterruptInBackoff(t *testing.T) {
 	err := a.Prompt(t.Context(), Input{Text: "x"})
 	require.NoError(t, err) // an interrupted retry is a clean abort
 	assert.Equal(t, llm.StopAborted, catch.result.Stop)
-}
-
-func TestStreamRetryTurnRetriesOption(t *testing.T) {
-	t.Parallel()
-
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Err: retryableErr()},
-		failTurn(retryableErr(), nil),
-		{Events: textOnly("done")},
-	}}
-	sink := &recordingSink{}
-	a := newTestAgent(nil, p, sink)
-	a.opts.TurnRetries = 1
-	noWaitAgent(a)
-
-	err := a.Prompt(t.Context(), Input{Text: "x"})
-	require.Error(t, err)          // budget 1: first call plus one retry
-	assert.Len(t, p.Requests(), 2) // the third turn never runs
 }

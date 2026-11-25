@@ -96,99 +96,95 @@ func TestApplyThinking(t *testing.T) {
 			assert.JSONEq(t, tc.wantOffJSON, reasoningFragment(encodeThinking(t, m, LevelOff)))
 		})
 	}
-}
 
-func TestApplyThinkingRegressionPins(t *testing.T) {
-	t.Parallel()
+	t.Run("regression_pins", func(t *testing.T) {
+		t.Run("off_null_omits_thinking_key", func(t *testing.T) {
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
+			v := "on"
+			caps.LevelMap = map[Level]*string{LevelHigh: &v, LevelOff: nil}
+			m := thinkingModel(caps)
+			assert.NotContains(t, encodeThinking(t, m, LevelOff), "thinking")
+		})
 
-	t.Run("off_null_omits_thinking_key", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
-		v := "on"
-		caps.LevelMap = map[Level]*string{LevelHigh: &v, LevelOff: nil}
-		m := thinkingModel(caps)
-		assert.NotContains(t, encodeThinking(t, m, LevelOff), "thinking")
+		t.Run("empty_reasoning_content_when_level_on", func(t *testing.T) {
+			// detection sets ReplayReasoning for deepseek, which drives the empty echo
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek, ReplayReasoning: true}
+			m := thinkingModel(caps)
+			body, err := buildCompatBody(Request{
+				Model:     m,
+				System:    BlockList{TextBlock{Text: "sys"}},
+				Messages:  []Message{Text(RoleUser, "q"), Text(RoleAssistant, "reply")},
+				Reasoning: ReasoningConfig{Level: LevelHigh, Retain: RetainAll},
+			}, compatProfile{})
+			require.NoError(t, err)
+			assert.Contains(t, string(body), `"reasoning_content":""`)
+		})
+
+		t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
+			m := thinkingModel(caps)
+			body, err := buildCompatBody(Request{
+				Model:     m,
+				System:    BlockList{TextBlock{Text: "sys"}},
+				Messages:  []Message{Text(RoleUser, "q"), Text(RoleAssistant, "reply")},
+				Reasoning: ReasoningConfig{Retain: RetainAll}, // level defaults to off
+			}, compatProfile{})
+			require.NoError(t, err)
+			assert.NotContains(t, string(body), `reasoning_content`)
+		})
+
+		t.Run("no_reasoning_capability_sends_nothing", func(t *testing.T) {
+			caps := Capabilities{Thinking: ThinkingDeepSeek} // Reasoning false
+			m := thinkingModel(caps)
+			assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelHigh)))
+		})
+
+		t.Run("max_clamps_to_mapped_xhigh_not_bare_high", func(t *testing.T) {
+			// a provider that genuinely accepts xhigh gets its mapped value when max
+			// is requested, never falling through to an unmapped bare "high"
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
+				SupportsReasoningEffort: true}
+			v := "deep"
+			caps.LevelMap = map[Level]*string{LevelXHigh: &v}
+			m := thinkingModel(caps)
+			assert.JSONEq(t, `{"reasoning_effort":"deep"}`,
+				reasoningFragment(encodeThinking(t, m, LevelMax)))
+		})
 	})
 
-	t.Run("empty_reasoning_content_when_level_on", func(t *testing.T) {
-		// detection sets ReplayReasoning for deepseek, which drives the empty echo
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek, ReplayReasoning: true}
-		m := thinkingModel(caps)
-		body, err := buildCompatBody(Request{
-			Model:     m,
-			System:    BlockList{TextBlock{Text: "sys"}},
-			Messages:  []Message{Text(RoleUser, "q"), Text(RoleAssistant, "reply")},
-			Reasoning: ReasoningConfig{Level: LevelHigh, Retain: RetainAll},
-		}, compatProfile{})
-		require.NoError(t, err)
-		assert.Contains(t, string(body), `"reasoning_content":""`)
-	})
+	t.Run("budget_gates", func(t *testing.T) {
+		t.Run("effort_omitted_without_capability", func(t *testing.T) {
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingZAI}
+			m := thinkingModel(caps)
+			assert.NotContains(t, encodeThinking(t, m, LevelHigh), "reasoning_effort")
+		})
 
-	t.Run("no_empty_reasoning_when_level_off", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingDeepSeek}
-		m := thinkingModel(caps)
-		body, err := buildCompatBody(Request{
-			Model:     m,
-			System:    BlockList{TextBlock{Text: "sys"}},
-			Messages:  []Message{Text(RoleUser, "q"), Text(RoleAssistant, "reply")},
-			Reasoning: ReasoningConfig{Retain: RetainAll}, // level defaults to off
-		}, compatProfile{})
-		require.NoError(t, err)
-		assert.NotContains(t, string(body), `reasoning_content`)
-	})
+		t.Run("baseten_sends_effort_while_on", func(t *testing.T) {
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
+				SupportsReasoningEffort: true}
+			m := thinkingModel(caps)
+			assert.JSONEq(t, `{"reasoning_effort":"high"}`,
+				reasoningFragment(encodeThinking(t, m, LevelHigh)))
+		})
 
-	t.Run("no_reasoning_capability_sends_nothing", func(t *testing.T) {
-		caps := Capabilities{Thinking: ThinkingDeepSeek} // Reasoning false
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelHigh)))
-	})
+		t.Run("baseten_off_sends_no_spurious_effort", func(t *testing.T) {
+			// no map entry: off must not emit a bare reasoning_effort:"off"
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
+				SupportsReasoningEffort: true}
+			m := thinkingModel(caps)
+			assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelOff)))
+		})
 
-	t.Run("max_clamps_to_mapped_xhigh_not_bare_high", func(t *testing.T) {
-		// a provider that genuinely accepts xhigh gets its mapped value when max
-		// is requested, never falling through to an unmapped bare "high"
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
-			SupportsReasoningEffort: true}
-		v := "deep"
-		caps.LevelMap = map[Level]*string{LevelXHigh: &v}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{"reasoning_effort":"deep"}`,
-			reasoningFragment(encodeThinking(t, m, LevelMax)))
-	})
-}
-
-func TestApplyThinkingBudgetGates(t *testing.T) {
-	t.Parallel()
-
-	t.Run("effort_omitted_without_capability", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingZAI}
-		m := thinkingModel(caps)
-		assert.NotContains(t, encodeThinking(t, m, LevelHigh), "reasoning_effort")
-	})
-
-	t.Run("baseten_sends_effort_while_on", func(t *testing.T) {
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
-			SupportsReasoningEffort: true}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{"reasoning_effort":"high"}`,
-			reasoningFragment(encodeThinking(t, m, LevelHigh)))
-	})
-
-	t.Run("baseten_off_sends_no_spurious_effort", func(t *testing.T) {
-		// no map entry: off must not emit a bare reasoning_effort:"off"
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingBaseten,
-			SupportsReasoningEffort: true}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{}`, reasoningFragment(encodeThinking(t, m, LevelOff)))
-	})
-
-	t.Run("explicit_empty_off_value_reaches_wire", func(t *testing.T) {
-		// an explicit empty string is sent rather than omitting the key
-		var v string
-		caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
-			SupportsReasoningEffort: true}
-		caps.LevelMap = map[Level]*string{LevelOff: &v}
-		m := thinkingModel(caps)
-		assert.JSONEq(t, `{"reasoning_effort":""}`,
-			reasoningFragment(encodeThinking(t, m, LevelOff)))
+		t.Run("explicit_empty_off_value_reaches_wire", func(t *testing.T) {
+			// an explicit empty string is sent rather than omitting the key
+			var v string
+			caps := Capabilities{Reasoning: true, Thinking: ThinkingOpenAI,
+				SupportsReasoningEffort: true}
+			caps.LevelMap = map[Level]*string{LevelOff: &v}
+			m := thinkingModel(caps)
+			assert.JSONEq(t, `{"reasoning_effort":""}`,
+				reasoningFragment(encodeThinking(t, m, LevelOff)))
+		})
 	})
 }
 

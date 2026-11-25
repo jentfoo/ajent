@@ -18,10 +18,9 @@ import (
 // compatModel is a chat-completions model with the given capability overrides.
 func compatModel(fn func(*Capabilities)) Model {
 	caps := flavorDefaults[FlavorLMStudio].caps
-	// deepseek is the common case: detection would set both of these together,
-	// and ReplayReasoning drives the empty reasoning_content echo on replies
-	caps.Thinking = ThinkingDeepSeek // the common case, not inline tags
-	caps.ReplayReasoning = true
+	// deepseek is the common detection pairing
+	caps.Thinking = ThinkingDeepSeek
+	caps.ReplayReasoning = true // drives the empty reasoning_content echo on replies
 	if fn != nil {
 		fn(&caps)
 	}
@@ -256,13 +255,22 @@ func TestCompatProviderStream(t *testing.T) {
 
 		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = s.Close() })
 
-		msg, _, err := Accumulate(s)
-		require.NoError(t, err)
+		events := collect(t, s)
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		require.NoError(t, acc.Err())
+
+		msg := acc.Message()
 		require.Len(t, msg.Content, 2)
 		assert.Equal(t, "call_1", msg.Content[0].(ToolCallBlock).ID)
 		assert.Equal(t, "call_2", msg.Content[1].(ToolCallBlock).ID)
+
+		done := events[len(events)-1]
+		assert.Equal(t, EventDone, done.Type)
+		assert.Equal(t, StopToolUse, done.StopReason)
 	})
 
 	t.Run("regions_opening_after_tool_calls", func(t *testing.T) {
@@ -391,19 +399,6 @@ func TestCompatProviderStream(t *testing.T) {
 
 		msg := acc.Message()
 		require.Len(t, msg.Content, 2) // both reach the agent for dispatch
-	})
-
-	t.Run("stop_reason_tool_use", func(t *testing.T) {
-		srv, _ := sseServer(t, "compat/parallel_tools.sse")
-		p := newCompatTestProvider(t, srv.URL)
-
-		s, err := p.Stream(t.Context(), Request{Model: compatModel(nil)})
-		require.NoError(t, err)
-		events := collect(t, s)
-
-		last := events[len(events)-1]
-		assert.Equal(t, EventDone, last.Type)
-		assert.Equal(t, StopToolUse, last.StopReason)
 	})
 
 	t.Run("usage_only_final_frame", func(t *testing.T) {

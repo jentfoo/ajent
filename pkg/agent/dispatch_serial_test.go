@@ -44,11 +44,7 @@ func (t *blockStub) Execute(ctx context.Context, call ToolCall, out Output) (Too
 	return t.stubTool.Execute(ctx, call, out)
 }
 
-// TestDispatchHonorsSerializer asserts a ToolSet that reports it must serialize is
-// dispatched one call at a time even when every tool is ModeParallel and the model
-// supports parallel tools. The second call cannot start while the first is in
-// flight. Only serial dispatch satisfies this, which keeps approval dialogs open in
-// submission order.
+// Serial dispatch keeps approval dialogs open in submission order.
 func TestDispatchHonorsSerializer(t *testing.T) {
 	t.Parallel()
 

@@ -263,34 +263,199 @@ func TestStoreList(t *testing.T) {
 	})
 }
 
-func TestStoreFindAmbiguousAndMissing(t *testing.T) {
-	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+func TestStoreFind(t *testing.T) {
+	// several cases pin the package clock via setClock, so this is sequential
 
-	ws := t.TempDir()
-	t.Cleanup(setClock(time.UnixMilli(1_900_000_001).UTC()))
+	t.Run("ambiguous_and_missing", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 
-	// two sessions at the same millisecond share a timestamp prefix
-	w1, cerr := s.Create(ws, SessionData{Version: sessionVersion})
-	require.NoError(t, cerr)
-	idA := w1.Head()
-	require.NoError(t, w1.Close())
-	w2, cerr := s.Create(ws, SessionData{Version: sessionVersion})
-	require.NoError(t, cerr)
-	idB := w2.Head()
-	require.NoError(t, w2.Close())
+		ws := t.TempDir()
+		t.Cleanup(setClock(time.UnixMilli(1_900_000_001).UTC()))
 
-	_, ferr := s.Find(ws, "no-such-id")
-	require.ErrorIs(t, ferr, ErrNotFound)
+		// two sessions at the same millisecond share a timestamp prefix
+		w1, cerr := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, cerr)
+		idA := w1.Head()
+		require.NoError(t, w1.Close())
+		w2, cerr := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, cerr)
+		idB := w2.Head()
+		require.NoError(t, w2.Close())
 
-	// a short prefix covering both sessions is ambiguous
-	_, ferr = s.Find(ws, idA[:8])
-	require.EqualError(t, ferr, fmt.Sprintf("ambiguous session id %q", idA[:8]))
+		_, ferr := s.Find(ws, "no-such-id")
+		require.ErrorIs(t, ferr, ErrNotFound)
 
-	// exact and unique-prefix lookups resolve. The ids differ in their random
-	// tail, so a long enough prefix is unique.
-	found, ferr := s.Find(ws, idB)
-	require.NoError(t, ferr)
-	assert.Equal(t, idB, found.ID)
+		// a short prefix covering both sessions is ambiguous
+		_, ferr = s.Find(ws, idA[:8])
+		require.EqualError(t, ferr, fmt.Sprintf("ambiguous session id %q", idA[:8]))
+
+		// exact and unique-prefix lookups resolve. The ids differ in their random
+		// tail, so a long enough prefix is unique.
+		found, ferr := s.Find(ws, idB)
+		require.NoError(t, ferr)
+		assert.Equal(t, idB, found.ID)
+	})
+
+	t.Run("by_name", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		t.Cleanup(setClock(time.UnixMilli(2_100_000_001).UTC()))
+
+		named, err := s.Create(ws, SessionData{Version: sessionVersion, Name: "fix-parser"})
+		require.NoError(t, err)
+		namedID := named.Head()
+		require.NoError(t, named.Close())
+
+		plain, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		plainID := plain.Head()
+		require.NoError(t, plain.Close())
+
+		t.Run("exact_name_match", func(t *testing.T) {
+			got, ferr := s.Find(ws, "fix-parser")
+			require.NoError(t, ferr)
+			assert.Equal(t, namedID, got.ID)
+			assert.Equal(t, "fix-parser", got.Name)
+		})
+
+		t.Run("name_match_is_case_insensitive", func(t *testing.T) {
+			got, ferr := s.Find(ws, "FIX-PARSER")
+			require.NoError(t, ferr)
+			assert.Equal(t, namedID, got.ID)
+		})
+
+		t.Run("id_prefix_still_works", func(t *testing.T) {
+			got, ferr := s.Find(ws, plainID)
+			require.NoError(t, ferr)
+			assert.Equal(t, plainID, got.ID)
+		})
+
+		t.Run("unknown_name_not_found", func(t *testing.T) {
+			_, ferr := s.Find(ws, "no-such-name")
+			assert.ErrorIs(t, ferr, ErrNotFound)
+		})
+
+		// a name that also prefixes another session's id resolves to the named one
+		t.Run("name_beats_id_prefix", func(t *testing.T) {
+			w, cerr := s.Create(ws, SessionData{Version: sessionVersion, Name: plainID[:4]})
+			require.NoError(t, cerr)
+			collidingID := w.Head()
+			require.NoError(t, w.Close())
+
+			got, ferr := s.Find(ws, plainID[:4])
+			require.NoError(t, ferr)
+			assert.Equal(t, collidingID, got.ID)
+		})
+	})
+
+	t.Run("by_path_healthy", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		id := w.Head()
+		require.NoError(t, w.Close())
+
+		info, ferr := s.Find(ws, w.Path()) // a full path stands in for the id
+		require.NoError(t, ferr)
+
+		assert.Equal(t, id, info.ID)
+		assert.False(t, info.Damaged)
+	})
+
+	t.Run("blocked_by_name_id_or_path", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		blocked := writeNewer(t, s, ws, "future-work")
+
+		for _, target := range []string{"future-work", "newer-root", "newer-ro", blocked.Path} { // name, id, prefix, path
+			info, err := s.Find(ws, target)
+			require.NoError(t, err)
+			assert.True(t, info.Blocked)
+			assert.Equal(t, "newer-root", info.ID)
+		}
+
+		found, exists, ferr := s.FindNamed(ws, "future-work")
+		require.NoError(t, ferr)
+		assert.True(t, exists) // --session sees it instead of re-minting the name
+		assert.True(t, found.Blocked)
+	})
+
+	t.Run("sidecars_unaddressable", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		w, err := s.Create(ws, SessionData{Version: sessionVersion})
+		require.NoError(t, err)
+		require.NoError(t, w.Close())
+
+		for _, p := range []string{tornPath(w.Path()), w.Path() + ".head"} {
+			_, ferr := s.Find(ws, p) // only .jsonl transcripts resolve by path
+			assert.ErrorIs(t, ferr, ErrNotFound)
+		}
+	})
+
+	t.Run("missing_file_not_found", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+
+		_, ferr := s.Find(t.TempDir(), filepath.Join(s.root, "nowhere", "gone.jsonl"))
+		assert.ErrorIs(t, ferr, ErrNotFound)
+	})
+
+	t.Run("by_path_damaged", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "fix-parser")
+
+		for _, target := range []string{damaged.Path, filepath.Base(damaged.Path)} { // full path, basename
+			info, ferr := s.Find(ws, target)
+			require.NoError(t, ferr)
+
+			assert.True(t, info.Damaged)
+			assert.Equal(t, damaged.Path, info.Path)
+			assert.Equal(t, "fix-parser", info.Name) // a rename entry still identifies the file
+		}
+	})
+
+	// the rename is not a listed row to match, so a name for a damaged transcript
+	// still misses; the miss then names the file instead of reading as absence
+	t.Run("name_still_misses_loudly", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "fix-parser")
+
+		_, ferr := s.Find(ws, "fix-parser")
+		require.ErrorIs(t, ferr, ErrNotFound)
+		assert.Contains(t, ferr.Error(), damaged.Path)
+	})
+
+	t.Run("miss_error_names_it", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws := t.TempDir()
+		damaged := writeDamaged(t, s, ws, "")
+
+		_, ferr := s.Find(ws, "no-such-target")
+		require.ErrorIs(t, ferr, ErrNotFound)
+		assert.Contains(t, ferr.Error(), `no session matches "no-such-target"`)
+		assert.Contains(t, ferr.Error(), damaged.Path)
+	})
+
+	t.Run("path_outside_dir_refused", func(t *testing.T) {
+		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
+		ws, other := t.TempDir(), t.TempDir()
+		writeDamaged(t, s, ws, "")
+		lost := writeDamaged(t, s, other, "")
+
+		info, ferr := s.Find(other, lost.Path) // its own workspace resolves it
+		require.NoError(t, ferr)
+		assert.True(t, info.Damaged)
+
+		wsDir, derr := s.Dir(ws)
+		require.NoError(t, derr)
+		rel, rerr := filepath.Rel(wsDir, lost.Path) // a ../ escape across workspaces
+		require.NoError(t, rerr)
+		_, ferr = s.Find(ws, rel)
+		assert.ErrorIs(t, ferr, ErrNotFound)
+	})
 }
 
 func TestStoreRemoveDeletesOneSession(t *testing.T) {
@@ -735,58 +900,6 @@ func TestValidateName(t *testing.T) {
 	}
 }
 
-func TestStoreFindByName(t *testing.T) {
-	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-	ws := t.TempDir()
-	t.Cleanup(setClock(time.UnixMilli(2_100_000_001).UTC()))
-
-	named, err := s.Create(ws, SessionData{Version: sessionVersion, Name: "fix-parser"})
-	require.NoError(t, err)
-	namedID := named.Head()
-	require.NoError(t, named.Close())
-
-	plain, err := s.Create(ws, SessionData{Version: sessionVersion})
-	require.NoError(t, err)
-	plainID := plain.Head()
-	require.NoError(t, plain.Close())
-
-	t.Run("exact_name_match", func(t *testing.T) {
-		got, ferr := s.Find(ws, "fix-parser")
-		require.NoError(t, ferr)
-		assert.Equal(t, namedID, got.ID)
-		assert.Equal(t, "fix-parser", got.Name)
-	})
-
-	t.Run("name_match_is_case_insensitive", func(t *testing.T) {
-		got, ferr := s.Find(ws, "FIX-PARSER")
-		require.NoError(t, ferr)
-		assert.Equal(t, namedID, got.ID)
-	})
-
-	t.Run("id_prefix_still_works", func(t *testing.T) {
-		got, ferr := s.Find(ws, plainID)
-		require.NoError(t, ferr)
-		assert.Equal(t, plainID, got.ID)
-	})
-
-	t.Run("unknown_name_not_found", func(t *testing.T) {
-		_, ferr := s.Find(ws, "no-such-name")
-		assert.ErrorIs(t, ferr, ErrNotFound)
-	})
-
-	// a name that also prefixes another session's id resolves to the named one
-	t.Run("name_beats_id_prefix", func(t *testing.T) {
-		w, cerr := s.Create(ws, SessionData{Version: sessionVersion, Name: plainID[:4]})
-		require.NoError(t, cerr)
-		collidingID := w.Head()
-		require.NoError(t, w.Close())
-
-		got, ferr := s.Find(ws, plainID[:4])
-		require.NoError(t, ferr)
-		assert.Equal(t, collidingID, got.ID)
-	})
-}
-
 func TestStoreFindNamed(t *testing.T) {
 	s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 	ws := t.TempDir()
@@ -923,24 +1036,6 @@ func TestStoreNewerFormat(t *testing.T) {
 		assert.False(t, row(readable.Path()).Blocked)
 	})
 
-	t.Run("find_resolves_blocked", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		writeNewer(t, s, ws, "future-work")
-
-		for _, target := range []string{"future-work", "newer-root", "newer-ro"} { // name, id, prefix
-			info, err := s.Find(ws, target)
-			require.NoError(t, err)
-			assert.True(t, info.Blocked)
-			assert.Equal(t, "newer-root", info.ID)
-		}
-
-		found, exists, ferr := s.FindNamed(ws, "future-work")
-		require.NoError(t, ferr)
-		assert.True(t, exists) // --session sees it instead of re-minting the name
-		assert.True(t, found.Blocked)
-	})
-
 	t.Run("name_conflict_guards_held_name", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -1020,62 +1115,6 @@ func TestStoreDamaged(t *testing.T) {
 		require.NoError(t, serr) // and the file survived untouched
 	})
 
-	t.Run("find_resolves_by_path", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		damaged := writeDamaged(t, s, ws, "fix-parser")
-
-		for _, target := range []string{damaged.Path, filepath.Base(damaged.Path)} { // full path, basename
-			info, ferr := s.Find(ws, target)
-			require.NoError(t, ferr)
-
-			assert.True(t, info.Damaged)
-			assert.Equal(t, damaged.Path, info.Path)
-			assert.Equal(t, "fix-parser", info.Name) // a rename entry still identifies the file
-		}
-	})
-
-	// the rename is not a listed row to match, so a name for a damaged transcript
-	// still misses; the miss then names the file instead of reading as absence
-	t.Run("name_still_misses_loudly", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		damaged := writeDamaged(t, s, ws, "fix-parser")
-
-		_, ferr := s.Find(ws, "fix-parser")
-		require.ErrorIs(t, ferr, ErrNotFound)
-		assert.Contains(t, ferr.Error(), damaged.Path)
-	})
-
-	t.Run("miss_error_names_it", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		damaged := writeDamaged(t, s, ws, "")
-
-		_, ferr := s.Find(ws, "no-such-target")
-		require.ErrorIs(t, ferr, ErrNotFound)
-		assert.Contains(t, ferr.Error(), `no session matches "no-such-target"`)
-		assert.Contains(t, ferr.Error(), damaged.Path)
-	})
-
-	t.Run("path_outside_dir_refused", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws, other := t.TempDir(), t.TempDir()
-		writeDamaged(t, s, ws, "")
-		lost := writeDamaged(t, s, other, "")
-
-		info, ferr := s.Find(other, lost.Path) // its own workspace resolves it
-		require.NoError(t, ferr)
-		assert.True(t, info.Damaged)
-
-		wsDir, derr := s.Dir(ws)
-		require.NoError(t, derr)
-		rel, rerr := filepath.Rel(wsDir, lost.Path) // a ../ escape across workspaces
-		require.NoError(t, rerr)
-		_, ferr = s.Find(ws, rel)
-		assert.ErrorIs(t, ferr, ErrNotFound)
-	})
-
 	t.Run("stale_never_sweeps", func(t *testing.T) {
 		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
 		ws := t.TempDir()
@@ -1088,56 +1127,6 @@ func TestStoreDamaged(t *testing.T) {
 
 		_, serr := os.Stat(damaged.Path)
 		require.NoError(t, serr)
-	})
-}
-
-func TestStoreFindByPath(t *testing.T) {
-	t.Run("healthy_resolves", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		w, err := s.Create(ws, SessionData{Version: sessionVersion})
-		require.NoError(t, err)
-		id := w.Head()
-		require.NoError(t, w.Close())
-
-		info, ferr := s.Find(ws, w.Path()) // a full path stands in for the id
-		require.NoError(t, ferr)
-
-		assert.Equal(t, id, info.ID)
-		assert.False(t, info.Damaged)
-	})
-
-	// path resolution is uniform: a newer-format transcript resolves Blocked by
-	// path exactly as its listed row does
-	t.Run("newer_format_resolves_blocked", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		blocked := writeNewer(t, s, ws, "")
-
-		info, ferr := s.Find(ws, blocked.Path)
-		require.NoError(t, ferr)
-
-		assert.True(t, info.Blocked)
-	})
-
-	t.Run("sidecars_unaddressable", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-		ws := t.TempDir()
-		w, err := s.Create(ws, SessionData{Version: sessionVersion})
-		require.NoError(t, err)
-		require.NoError(t, w.Close())
-
-		for _, p := range []string{tornPath(w.Path()), w.Path() + ".head"} {
-			_, ferr := s.Find(ws, p) // only .jsonl transcripts resolve by path
-			assert.ErrorIs(t, ferr, ErrNotFound)
-		}
-	})
-
-	t.Run("missing_file_not_found", func(t *testing.T) {
-		s := StoreAt(filepath.Join(t.TempDir(), "sessions"))
-
-		_, ferr := s.Find(t.TempDir(), filepath.Join(s.root, "nowhere", "gone.jsonl"))
-		assert.ErrorIs(t, ferr, ErrNotFound)
 	})
 }
 

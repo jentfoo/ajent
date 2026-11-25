@@ -9,8 +9,7 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
-// wellFormed reports whether every ToolCallBlock in messages has a matching
-// ToolResultBlock, which is what keeps the next Anthropic request valid.
+// wellFormed reports whether every tool call in messages carries a matching result.
 func wellFormed(msgs []llm.Message) bool {
 	var calls int
 	for _, m := range msgs {
@@ -104,8 +103,7 @@ func TestInterrupt(t *testing.T) {
 		assert.True(t, wellFormed(a.state.Messages)) // every tool call has a matching result
 	})
 
-	// duplicate ids land already repaired, so the interrupt fill answers each
-	// slot under its own id instead of emitting one result twice
+	// duplicate ids: the interrupt fill answers each slot under its own id
 	t.Run("duplicate_call_ids", func(t *testing.T) {
 		block := make(chan struct{})
 		set := &mapSet{tools: map[string]Tool{
@@ -140,8 +138,7 @@ func TestInterrupt(t *testing.T) {
 		assert.NotEqual(t, "c1", ids[1])
 	})
 
-	// an interrupt landing after the head's pop but before the turn claims pends
-	// against that claim, so the turn aborts before anything streams
+	// an interrupt in the pop-before-claim window aborts the next turn unstreamed
 	t.Run("claim_window_pends", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("recovered")}}}
 		catch := &resultCatcher{}
@@ -178,8 +175,7 @@ func TestInterrupt(t *testing.T) {
 		assert.Equal(t, []string{"recovered"}, assistantTexts(a.state.Messages))
 	})
 
-	// an interrupt with nothing claimed or running is ignored, it must not
-	// poison the next turn
+	// an idle interrupt is ignored, not pended onto the next turn
 	t.Run("idle_not_pended", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
 		a := newTestAgent(nil, p, nil)

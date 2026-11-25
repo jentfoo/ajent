@@ -195,7 +195,7 @@ func TestEditorHistoryRecent(t *testing.T) {
 		h := newTestHistory(t, t.TempDir())
 		h.Append("git status")       // typed by the user
 		h.AppendHidden("git status") // a later hidden copy reuses the same text
-		assert.Contains(t, h.Recent(), "git status", "a hidden copy must not hide a real typed line")
+		assert.Contains(t, h.Recent(), "git status")
 	})
 
 	t.Run("missing_file_is_empty", func(t *testing.T) {
@@ -277,7 +277,7 @@ func TestEditorHistoryCompact(t *testing.T) {
 		h.Append("git status")       // typed by the user
 		h.AppendHidden("git status") // a hidden copy reuses the text
 		h.Compact()
-		assert.Equal(t, []string{"git status"}, storedMessages(h.path), "a hidden copy must not erase a typed line on disk")
+		assert.Equal(t, []string{"git status"}, storedMessages(h.path))
 	})
 
 	// a failed rewrite must not drop the queued appends: the next compaction retries

@@ -32,10 +32,12 @@ func TestModeParse(t *testing.T) {
 	}
 }
 
-func TestModeStrings(t *testing.T) {
+// String() must pin the exact user-visible spelling and round-trip through
+// ParseMode for every valid mode
+func TestModeStringRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	for _, c := range []struct {
 		m     Mode
 		str   string
 		short string
@@ -45,52 +47,42 @@ func TestModeStrings(t *testing.T) {
 		{ModeAuto, "auto", "auto"},
 		{ModeAutoWrite, "auto+write", "auto+w"},
 		{ModeBlockAll, "block-all", "block"},
-	}
-	for _, c := range cases {
+	} {
 		assert.Equal(t, c.str, c.m.String(), c.m)
 		assert.Equal(t, c.short, c.m.Short(), c.m)
-	}
-}
 
-func TestModeNextCyclesInOrder(t *testing.T) {
-	t.Parallel()
-
-	want := []Mode{ModeAuto, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}
-	m := ModeAllowRead
-	for _, w := range want {
-		assert.Equal(t, w, m.Next())
-		m = w
-	}
-}
-
-func TestModePrevCyclesInOrder(t *testing.T) {
-	t.Parallel()
-
-	want := []Mode{ModeBlockAll, ModeAllowAll, ModeAutoWrite, ModeAuto, ModeAllowRead}
-	m := ModeAllowRead
-	for _, w := range want {
-		assert.Equal(t, w, m.Prev())
-		m = w
-	}
-}
-
-func TestModeNextPrevRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	// Prev is the exact inverse of Next over the whole cycle
-	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
-		assert.Equal(t, m, m.Next().Prev())
-		assert.Equal(t, m, m.Prev().Next())
-	}
-}
-
-func TestModeStringRoundTrip(t *testing.T) {
-	t.Parallel()
-
-	// String() must round-trip through ParseMode for every valid mode
-	for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
-		got, ok := ParseMode(m.String())
+		got, ok := ParseMode(c.m.String())
 		assert.True(t, ok)
-		assert.Equal(t, m, got)
+		assert.Equal(t, c.m, got)
 	}
+}
+
+func TestModeCycles(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		step func(Mode) Mode // the cycle direction under test
+		want []Mode          // every step from ModeAllowRead back around to itself
+	}{
+		{"next", Mode.Next, []Mode{ModeAuto, ModeAutoWrite, ModeAllowAll, ModeBlockAll, ModeAllowRead}},
+		{"prev", Mode.Prev, []Mode{ModeBlockAll, ModeAllowAll, ModeAutoWrite, ModeAuto, ModeAllowRead}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := ModeAllowRead
+			for _, w := range c.want {
+				assert.Equal(t, w, c.step(m))
+				m = w
+			}
+		})
+	}
+
+	t.Run("round_trip", func(t *testing.T) {
+		// Prev is the exact inverse of Next over the whole cycle
+		for _, m := range []Mode{ModeAllowAll, ModeAllowRead, ModeAuto, ModeAutoWrite, ModeBlockAll} {
+			assert.Equal(t, m, m.Next().Prev())
+			assert.Equal(t, m, m.Prev().Next())
+		}
+	})
 }

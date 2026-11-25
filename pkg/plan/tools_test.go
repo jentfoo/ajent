@@ -3,10 +3,26 @@ package plan
 import (
 	"testing"
 
+	"github.com/jentfoo/ajent/pkg/agent"
 	"github.com/jentfoo/ajent/pkg/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestControlToolsSchemas(t *testing.T) {
+	t.Parallel()
+
+	c := New(newFakeHost().host())
+	names := make([]string, 0, 4)
+	for _, tool := range controlTools(c) {
+		names = append(names, tool.Name())
+		assert.NotEmpty(t, tool.Description())
+		assert.NotEmpty(t, tool.Schema().Parameters)
+		assert.NotEmpty(t, tool.Label(agent.ToolCall{}))
+	}
+	assert.Equal(t,
+		[]string{DevImplementTool, DevReviewTool, DevReviseTool, DevCompleteTool}, names)
+}
 
 func TestControlToolExecute(t *testing.T) {
 	t.Parallel()
@@ -21,20 +37,19 @@ func TestControlToolExecute(t *testing.T) {
 	})
 
 	// the v1 regression: a rejected call must leave the planner free to retry.
-	t.Run("empty_payload_keeps_turn", func(t *testing.T) {
-		c, _ := started(t)
-		res := call(t, c, DevImplementTool, `{"plan":"  "}`)
-		assert.True(t, res.IsError)
-		assert.False(t, res.EndTurn)
-		assert.Nil(t, c.pending)
-	})
-
-	t.Run("bad_args_keeps_turn", func(t *testing.T) {
-		c, _ := started(t)
-		res := call(t, c, DevImplementTool, `not json`)
-		assert.True(t, res.IsError)
-		assert.False(t, res.EndTurn)
-		assert.Nil(t, c.pending)
+	t.Run("invalid_args_keep_turn", func(t *testing.T) {
+		for _, tc := range []struct{ name, args string }{
+			{"blank_payload", `{"plan":"  "}`},
+			{"malformed_json", `not json`},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c, _ := started(t)
+				res := call(t, c, DevImplementTool, tc.args)
+				assert.True(t, res.IsError)
+				assert.False(t, res.EndTurn)
+				assert.Nil(t, c.pending)
+			})
+		}
 	})
 
 	t.Run("wrong_phase_keeps_turn", func(t *testing.T) {
@@ -75,19 +90,4 @@ func TestControlToolExecute(t *testing.T) {
 		assert.True(t, res.EndTurn)
 		assert.Equal(t, PhaseReviewing, c.pending.to)
 	})
-}
-
-func TestControlToolsSchemas(t *testing.T) {
-	t.Parallel()
-
-	c := New(newFakeHost().host())
-	names := make([]string, 0, 4)
-	for _, tool := range controlTools(c) {
-		names = append(names, tool.Name())
-		assert.NotEmpty(t, tool.Description())
-		assert.NotEmpty(t, tool.Schema().Parameters)
-		assert.NotEmpty(t, tool.Label(agentCall(tool.Name())))
-	}
-	assert.Equal(t,
-		[]string{DevImplementTool, DevReviewTool, DevReviseTool, DevCompleteTool}, names)
 }

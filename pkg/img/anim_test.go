@@ -51,8 +51,7 @@ func TestAPNGFrames(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, 1, n2)
 
-	// every truncation of a valid file must fail closed without panicking: exact
-	// capacity slices, so a read past len cannot hide in spare capacity
+	// every truncation fails closed: exact-capacity slices deny reads past len
 	anim := apngBytes(t, m, 5)
 	for i := range anim {
 		frames, animated := apngFrames(append(make([]byte, 0, i), anim[:i]...))
@@ -104,8 +103,7 @@ func TestScanGIF(t *testing.T) {
 		assert.True(t, ok)
 	})
 
-	// every truncation of a valid file must fail closed without panicking: the
-	// unwalkable tail may hide more frames than were counted
+	// every truncation fails closed without panicking
 	t.Run("truncated_prefixes", func(t *testing.T) {
 		anim := gifFrames(t, 8, 6, 2)
 		for i := range anim {
@@ -221,74 +219,64 @@ func TestWebPAnimation(t *testing.T) {
 	assert.Nil(t, s)
 }
 
-func TestPrepareFlattensAnimatedWebP(t *testing.T) {
+func TestPrepareWebP(t *testing.T) {
 	t.Parallel()
 
-	src, _ := animatedWebPFixture(t)
+	src, still := animatedWebPFixture(t)
 
-	// animation never rides through: the still is re-encoded like any other
-	// fitting image that cannot pass verbatim
-	res, err := Prepare(src)
-	require.NoError(t, err)
-	assert.Equal(t, typePNG, res.MediaType)
-	assert.True(t, res.Flattened)
-	assert.Equal(t, 2, res.Frames)
-	assert.Contains(t, res.Note(), "flattened a 2-frame animation to its first frame")
-}
-
-func TestPrepareAnimatedWebPOversizeCanvas(t *testing.T) {
-	t.Parallel()
-
-	// a canvas over the pixel ceiling does not refuse the file: only the
-	// extracted still has to fit
-	_, still := animatedWebPFixture(t)
-	res, err := Prepare(buildAnimatedWebP(t, 2100, 10, anmfPayload(still), anmfPayload(still)))
-	require.NoError(t, err)
-	assert.Equal(t, typePNG, res.MediaType)
-	assert.True(t, res.Flattened)
-	assert.Equal(t, 2, res.Frames)
-}
-
-func TestPrepareAnimatedWebPOversizeFrame(t *testing.T) {
-	t.Parallel()
-
-	// the VP8L header tops out at 16383 per axis: ~268M pixels claimed on a tiny
-	// file, over the decode budget and refused before any memory is promised
-	const w, h = 16383, 16383
-
-	t.Run("bare_still_refused", func(t *testing.T) {
-		// no canvas to hide behind: the outer guard sees the claim itself
-		_, err := Prepare(vp8lStill(w, h))
-		require.ErrorIs(t, err, ErrTooLarge)
+	t.Run("flattens_animation", func(t *testing.T) {
+		// animation never rides through
+		res, err := Prepare(src)
+		require.NoError(t, err)
+		assert.Equal(t, typePNG, res.MediaType)
+		assert.True(t, res.Flattened)
+		assert.Equal(t, 2, res.Frames)
+		assert.Contains(t, res.Note(), "flattened a 2-frame animation to its first frame")
 	})
 
-	// a tiny VP8X canvas must not launder an oversized frame header: the
-	// extraction re-sniff faces the same pixel budget as any other input
-	t.Run("frame_inside_anmf", func(t *testing.T) {
-		src := buildAnimatedWebP(t, 100, 50, anmfPayload(vp8lStill(w, h)))
-		_, err := Prepare(src)
-		require.ErrorIs(t, err, ErrTooLarge)
+	t.Run("oversize_canvas", func(t *testing.T) {
+		// a canvas over the pixel ceiling does not refuse the file: only the
+		// extracted still has to fit
+		res, err := Prepare(buildAnimatedWebP(t, 2100, 10, anmfPayload(still), anmfPayload(still)))
+		require.NoError(t, err)
+		assert.Equal(t, typePNG, res.MediaType)
+		assert.True(t, res.Flattened)
+		assert.Equal(t, 2, res.Frames)
 	})
-}
 
-func TestPrepareAnimatedWebPUnreadable(t *testing.T) {
-	t.Parallel()
+	t.Run("oversize_frame", func(t *testing.T) {
+		// the VP8L header tops out at 16383 per axis: ~268M pixels claimed on a tiny
+		// file, over the decode budget and refused before any memory is promised
+		const w, h = 16383, 16383
 
-	// the flag promises animation nothing decodable shows: refused, since a
-	// fitting one must not ride through as an animation either
-	_, err := Prepare(buildAnimatedWebP(t, 8, 6))
-	assert.ErrorIs(t, err, ErrUnsupported)
-}
+		t.Run("bare_still_refused", func(t *testing.T) {
+			// no canvas to hide behind: the outer guard sees the claim itself
+			_, err := Prepare(vp8lStill(w, h))
+			require.ErrorIs(t, err, ErrTooLarge)
+		})
 
-func TestPrepareStaticWebPPassthrough(t *testing.T) {
-	t.Parallel()
+		// a tiny VP8X canvas must not launder an oversized frame header: the
+		// extraction re-sniff faces the same pixel budget as any other input
+		t.Run("frame_inside_anmf", func(t *testing.T) {
+			frame := buildAnimatedWebP(t, 100, 50, anmfPayload(vp8lStill(w, h)))
+			_, err := Prepare(frame)
+			require.ErrorIs(t, err, ErrTooLarge)
+		})
+	})
 
-	// the extracted still is a plain webp: it rides through verbatim, no note
-	_, still := animatedWebPFixture(t)
-	res, err := Prepare(still)
-	require.NoError(t, err)
-	assert.Equal(t, typeWebP, res.MediaType)
-	assert.Equal(t, still, res.Data)
-	assert.False(t, res.Flattened)
-	assert.Empty(t, res.Note())
+	t.Run("unreadable", func(t *testing.T) {
+		// promised animation with no decodable frame must refuse
+		_, err := Prepare(buildAnimatedWebP(t, 8, 6))
+		assert.ErrorIs(t, err, ErrUnsupported)
+	})
+
+	t.Run("still_passthrough", func(t *testing.T) {
+		// the extracted still is a plain webp: it rides through verbatim, no note
+		res, err := Prepare(still)
+		require.NoError(t, err)
+		assert.Equal(t, typeWebP, res.MediaType)
+		assert.Equal(t, still, res.Data)
+		assert.False(t, res.Flattened)
+		assert.Empty(t, res.Note())
+	})
 }

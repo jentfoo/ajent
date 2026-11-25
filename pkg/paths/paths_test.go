@@ -64,7 +64,9 @@ func TestSubDir(t *testing.T) {
 	})
 
 	t.Run("clean_directory_stays_silent", func(t *testing.T) {
-		_, warn, err := SubDir("fresh")
+		require.NoError(t, os.Mkdir(filepath.Join(root, "quiet"), DirPerm))
+
+		_, warn, err := SubDir("quiet") // re-run must stay silent too
 		require.NoError(t, err)
 		assert.Empty(t, warn)
 	})

@@ -26,8 +26,7 @@ func TestIdleReaderRead(t *testing.T) {
 		pr, pw := io.Pipe()
 		t.Cleanup(func() { _ = pw.Close() })
 
-		// the channel hands the armed timer to the firing goroutine, so the
-		// expiry is ordered against Read with no polling
+		// the channel orders the expiry against Read with no polling
 		armed := make(chan *fakeTimer, 1)
 		r := &idleReader{rc: pr, d: time.Minute, afterFunc: func(_ time.Duration, fn func()) stopper {
 			ft := &fakeTimer{fn: fn}

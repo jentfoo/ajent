@@ -38,10 +38,12 @@ func TestStateRebuildAppliesInOrder(t *testing.T) {
 func TestStateAppliesToolsSetting(t *testing.T) {
 	t.Parallel()
 
-	branch := []Entry{settingChange("tools", `["read","bash"]`)}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	assert.Equal(t, []string{"read", "bash"}, st.Tools)
+	for _, key := range []string{"tools", "tools.enabled"} { // flat and dotted spellings
+		branch := []Entry{settingChange(key, `["read","bash"]`)}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Equal(t, []string{"read", "bash"}, st.Tools)
+	}
 }
 
 func TestStateCompactionRebuild(t *testing.T) {
@@ -181,15 +183,9 @@ func TestStateCorruptCompactionWarns(t *testing.T) {
 		require.Len(t, st.Messages, 2) // summary dropped with the cut
 		assert.Equal(t, "first", textOf(st.Messages[0]))
 	})
-}
 
-func TestStateCorruptCompactionLedger(t *testing.T) {
-	t.Parallel()
-
-	// rows recorded after an older compaction's cut describe the compacted requests
-	// the live session sent, while a corrupt newest checkpoint rebuilds the whole
-	// branch. Replaying them under-reports until the next response, so the degraded
-	// rebuild measures its context from the assembled messages instead.
+	// a corrupt newest checkpoint rebuilds the whole branch: usage rows for the
+	// compacted requests go stale, so context is re-measured from the rebuilt messages
 	t.Run("degraded_checkpoint_remeasures", func(t *testing.T) {
 		branch := []Entry{
 			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
@@ -214,47 +210,39 @@ func TestStateCorruptCompactionLedger(t *testing.T) {
 	})
 }
 
-func TestStateUnresolvableModelWarns(t *testing.T) {
+func TestStateWarnings(t *testing.T) {
 	t.Parallel()
 
-	branch := []Entry{
-		modelChange("ghost"), // resolve fails on this key
-		msgWithID("m1", llm.Text(llm.RoleUser, "hi")),
-	}
-	resolve := func(key string) (llm.Model, error) {
-		return llm.Model{}, fmt.Errorf("no such model %s", key)
-	}
-	st, warns := State(branch, resolve)
-	require.Len(t, st.Messages, 1) // the message still rebuilds
-	assert.NotEmpty(t, warns)
-}
+	// an unresolvable model key still rebuilds the message history
+	t.Run("unresolvable_model_warns", func(t *testing.T) {
+		branch := []Entry{
+			modelChange("ghost"), // resolve fails on this key
+			msgWithID("m1", llm.Text(llm.RoleUser, "hi")),
+		}
+		resolve := func(key string) (llm.Model, error) {
+			return llm.Model{}, fmt.Errorf("no such model %s", key)
+		}
+		st, warns := State(branch, resolve)
+		require.Len(t, st.Messages, 1) // the message still rebuilds
+		assert.NotEmpty(t, warns)
+	})
 
-func TestStateWarnsOnDanglingToolCall(t *testing.T) {
-	t.Parallel()
+	// a tool call left without its result warns but keeps rebuilding
+	t.Run("dangling_tool_call_warns", func(t *testing.T) {
+		assistantWithCall := MessageData{Message: llm.Message{Role: llm.RoleAssistant,
+			Content: llm.BlockList{llm.ToolCallBlock{ID: "c1", Name: "bash"}}}}
+		st, warns := State([]Entry{{ID: "a1", Type: TypeMessage, Data: mustJSON(assistantWithCall)}}, resolveModel)
+		require.Len(t, st.Messages, 1) // the tool-call message rebuilds
+		assert.NotEmpty(t, warns)
+	})
 
-	assistantWithCall := MessageData{Message: llm.Message{Role: llm.RoleAssistant,
-		Content: llm.BlockList{llm.ToolCallBlock{ID: "c1", Name: "bash"}}}}
-	st, warns := State([]Entry{{ID: "a1", Type: TypeMessage, Data: mustJSON(assistantWithCall)}}, resolveModel)
-	require.Len(t, st.Messages, 1) // the tool-call message rebuilds
-	assert.NotEmpty(t, warns)
-}
-
-func TestStateUnknownSettingIgnored(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{settingChange("bogus", `1`)}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	assert.Nil(t, st.Tools)
-}
-
-func TestStateAppliesDottedToolsKey(t *testing.T) {
-	t.Parallel()
-
-	branch := []Entry{settingChange("tools.enabled", `["read","bash"]`)}
-	st, warns := State(branch, resolveModel)
-	assert.Empty(t, warns)
-	assert.Equal(t, []string{"read", "bash"}, st.Tools)
+	// unknown settings are ignored, not warnings
+	t.Run("unknown_setting_ignored", func(t *testing.T) {
+		branch := []Entry{settingChange("bogus", `1`)}
+		st, warns := State(branch, resolveModel)
+		assert.Empty(t, warns)
+		assert.Nil(t, st.Tools)
+	})
 }
 
 func TestSettingOverridesLastWriteWins(t *testing.T) {
@@ -305,9 +293,7 @@ func TestStateLedger(t *testing.T) {
 		assert.False(t, cs.Estimated)
 	})
 
-	// after a compaction, the rebuilt ledger's context terms reflect only surviving
-	// messages, never the entries dropped by a cut. A reported turn before the cut must not inflate Used on
-	// resume/rewind, or threshold auto-compaction would fire immediately even though context was just reduced.
+	// summarized-away usage must not inflate Used or auto-compaction would re-fire
 	t.Run("ignores_summarized_away_messages", func(t *testing.T) {
 		branch := append([]Entry(nil),
 			entry(TypeSession, SessionData{Model: "p/m1"}),
@@ -409,10 +395,8 @@ func TestStateContextPrecision(t *testing.T) {
 
 	// a cut that rewrote the branch re-measures, so the bar wears its ~
 	t.Run("compacted_rebuild_remeasures", func(t *testing.T) {
-		// the cut keeps only m4, so the next request is a short summary plus that message.
-		// m4's recorded prompt describes the 150k request it was sent with, which no
-		// longer exists: replaying it reported the pre-compaction size as exact, and the
-		// next turn would immediately compact again.
+		// the cut keeps only m4; its recorded usage describes the pre-cut request,
+		// which no longer exists, so replaying it must not read as an exact count
 		branch := []Entry{
 			msgUsage("m1", llm.Text(llm.RoleUser, "first"), llm.Usage{}),
 			msgUsage("m2", llm.Text(llm.RoleAssistant, "second"), llm.Usage{Input: 50000, Output: 400}),
@@ -495,9 +479,7 @@ func msgUsage(id string, m llm.Message, u llm.Usage) Entry {
 func TestStateTurnCountIgnoresCompaction(t *testing.T) {
 	t.Parallel()
 
-	// the recorder persists every appended message, user echoes and tool results
-	// included, so a rebuild that counted each entry as a turn reported a two-response
-	// session as four the moment it was compacted, two of them as unreported turns.
+	// echo/result messages are not turns: compaction must not change the count
 	msgs := []Entry{
 		msgUsage("m1", llm.Text(llm.RoleUser, "do a thing"), llm.Usage{}),
 		msgUsage("m2", llm.Text(llm.RoleAssistant, "calling"), llm.Usage{Input: 1000, Output: 50}),

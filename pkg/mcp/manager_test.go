@@ -279,9 +279,7 @@ func TestConfigDisabledServer(t *testing.T) {
 		}
 	})
 
-	// an explicit session enablement survives resume: a tool the user turned on via
-	// /tools (persisted to tools.enabled and fed back as Restore) must come back enabled even when its
-	// server is config-disabled. The config flag is only a default, never a veto.
+	// restore beats the config-off default
 	t.Run("honours_restored_enablement", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		var disabled bool
@@ -513,9 +511,7 @@ func TestFailedDialReconnects(t *testing.T) {
 		assert.False(t, down)
 	})
 
-	// a disconnect must survive a dial failure pinned to the pre-disconnect
-	// snapshot: the stale check and the down flag are one critical section, so
-	// retryDial can never flip a just-disconnected server back to down
+	// a disconnect survives a dial failure pinned to the pre-disconnect snapshot
 	t.Run("disconnect_survives_stale_dial_failure", func(t *testing.T) {
 		srv := buildFakeServer(t)
 		missing := filepath.Join(t.TempDir(), "not-yet")
@@ -548,9 +544,7 @@ func TestFailedDialReconnects(t *testing.T) {
 		}, 400*time.Millisecond, 10*time.Millisecond)
 	})
 
-	// a superseded loop generation must exit on wake without dialing: a disconnect
-	// clears down underneath a loop parked in backoff, so a failed dial after it
-	// spawns a second loop and only the newest generation may keep retrying
+	// a superseded loop generation must exit on wake without dialing
 	t.Run("superseded_loop_exits", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
@@ -579,9 +573,7 @@ func TestFailedDialReconnects(t *testing.T) {
 			400*time.Millisecond, 10*time.Millisecond)
 	})
 
-	// the full interleaving that once stacked loops: disconnect lands between two
-	// failed dials, parking the first loop while down is clear, and the second
-	// failure spawns a replacement. Only one backoff chain may dial from there.
+	// the once-loop-stacking interleave; only one chain keeps dialing from there
 	t.Run("disconnect_between_failed_dials_keeps_one_loop", func(t *testing.T) {
 		fr := newFakeRegistrar()
 		mgr := New(map[string]ServerConfig{
@@ -710,71 +702,68 @@ func TestRepeatedBadSchemaStaysQuiet(t *testing.T) {
 	assert.Len(t, notices, 2) // fresh defect state, fresh notice
 }
 
-func TestRegisterMarksReadOnlyTools(t *testing.T) {
+func TestRegister(t *testing.T) {
 	t.Parallel()
 
-	fr := newFakeRegistrar()
-	mgr := New(nil, wired(Options{Registrar: fr}))
-	s := mgr.newTestServer("srv")
+	t.Run("marks_read_only_tools", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(nil, wired(Options{Registrar: fr}))
+		s := mgr.newTestServer("srv")
 
-	defs := []ToolDef{
-		{Name: "read1", InputSchema: jsonRawObject, ReadOnly: true},
-		{Name: "write1", InputSchema: jsonRawObject},
-	}
-	mgr.register(s, nil, defs, nil) // all enabled
+		defs := []ToolDef{
+			{Name: "read1", InputSchema: jsonRawObject, ReadOnly: true},
+			{Name: "write1", InputSchema: jsonRawObject},
+		}
+		mgr.register(s, nil, defs, nil) // all enabled
 
-	assert.Contains(t, fr.readonly(), "srv__read1")
-	assert.NotContains(t, fr.readonly(), "srv__write1") // not annotated read-only
-}
-
-func TestRegisterPreservesLiveDisabled(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	mgr := New(nil, wired(Options{Registrar: fr}))
-	s := mgr.newTestServer("srv")
-	defs := []ToolDef{
-		{Name: "a", InputSchema: jsonRawObject},
-		{Name: "b", InputSchema: jsonRawObject},
-	}
-
-	// first registration exposes everything, the user then turns b off via /tools
-	mgr.register(s, nil, defs, nil)
-	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
-	fr.set("srv__b", StateDisabled)
-
-	// capture the live split and re-register as a refresh would (unregister first)
-	keep := mgr.captureLive(s, ServerConfig{})
-	fr.Unregister(s.source)
-	mgr.register(s, nil, defs, keep)
-
-	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))  // live enablement kept
-	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // explicit off survives re-registration
-}
-
-func TestRegisterLiveDisabledBeatsRestore(t *testing.T) {
-	t.Parallel()
-
-	fr := newFakeRegistrar()
-	mgr := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a", "srv__b"}}))
-	s := mgr.newTestServer("srv")
-	defs := []ToolDef{
-		{Name: "a", InputSchema: jsonRawObject},
-		{Name: "b", InputSchema: jsonRawObject},
-	}
-
-	// a prior registration enabled both, then the user disabled b, and Restore still names it
-	mgr.register(s, nil, defs, &toolState{
-		enabled:  map[string]struct{}{"srv__a": {}},
-		disabled: map[string]struct{}{"srv__b": {}},
+		assert.Contains(t, fr.readonly(), "srv__read1")
+		assert.NotContains(t, fr.readonly(), "srv__write1") // not annotated read-only
 	})
 
-	assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
-	assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // live off wins over Restore
+	t.Run("preserves_live_disabled", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(nil, wired(Options{Registrar: fr}))
+		s := mgr.newTestServer("srv")
+		defs := []ToolDef{
+			{Name: "a", InputSchema: jsonRawObject},
+			{Name: "b", InputSchema: jsonRawObject},
+		}
+
+		// first registration exposes everything, the user then turns b off via /tools
+		mgr.register(s, nil, defs, nil)
+		assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
+		fr.set("srv__b", StateDisabled)
+
+		// capture the live split and re-register as a refresh would (unregister first)
+		keep := mgr.captureLive(s, ServerConfig{})
+		fr.Unregister(s.source)
+		mgr.register(s, nil, defs, keep)
+
+		assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))  // live enablement kept
+		assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // explicit off survives re-registration
+	})
+
+	t.Run("live_disabled_beats_restore", func(t *testing.T) {
+		fr := newFakeRegistrar()
+		mgr := New(nil, wired(Options{Registrar: fr, Restore: []string{"srv__a", "srv__b"}}))
+		s := mgr.newTestServer("srv")
+		defs := []ToolDef{
+			{Name: "a", InputSchema: jsonRawObject},
+			{Name: "b", InputSchema: jsonRawObject},
+		}
+
+		// a prior registration enabled both, then the user disabled b, and Restore still names it
+		mgr.register(s, nil, defs, &toolState{
+			enabled:  map[string]struct{}{"srv__a": {}},
+			disabled: map[string]struct{}{"srv__b": {}},
+		})
+
+		assert.Equal(t, StateEnabled, mustState(fr, "srv__a"))
+		assert.Equal(t, StateDisabled, mustState(fr, "srv__b")) // live off wins over Restore
+	})
 }
 
-// A reshaped set replaces the resume snapshot, so a server registering after the
-// reshape (a late connect) honors the run's latest selection, not startup state.
+// a late connect must honor the run's latest selection, not startup state
 func TestSetRestoreRefreshesLateRegistration(t *testing.T) {
 	t.Parallel()
 
@@ -812,12 +801,12 @@ func TestImpliedEnabled(t *testing.T) {
 		tool    string
 		want    bool
 	}{
-		{name: "config enabled default", cfg: ServerConfig{}, tool: "srv__a", want: true},
-		{name: "config disabled default", cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: false},
-		{name: "restore member wins", restore: []string{"srv__a"}, cfg: ServerConfig{}, tool: "srv__a", want: true},
-		{name: "restore non-member off", restore: []string{"srv__b"}, cfg: ServerConfig{}, tool: "srv__a", want: false},
-		{name: "restore empty all off", restore: []string{}, cfg: ServerConfig{}, tool: "srv__a", want: false},
-		{name: "restore beats config off", restore: []string{"srv__a"}, cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: true},
+		{name: "config_enabled_default", cfg: ServerConfig{}, tool: "srv__a", want: true},
+		{name: "config_disabled_default", cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: false},
+		{name: "restore_member_wins", restore: []string{"srv__a"}, cfg: ServerConfig{}, tool: "srv__a", want: true},
+		{name: "restore_non_member_off", restore: []string{"srv__b"}, cfg: ServerConfig{}, tool: "srv__a", want: false},
+		{name: "restore_empty_all_off", restore: []string{}, cfg: ServerConfig{}, tool: "srv__a", want: false},
+		{name: "restore_beats_config_off", restore: []string{"srv__a"}, cfg: ServerConfig{Enabled: &off}, tool: "srv__a", want: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -897,6 +886,8 @@ func mustState(fr *fakeRegistrar, name string) State {
 }
 
 func TestManagerRediscoverAfterListChanged(t *testing.T) {
+	t.Parallel()
+
 	fr := newFakeRegistrar()
 	mgr := New(map[string]ServerConfig{
 		"fake": stdioConfig(t, "-notify-list-changed"),
@@ -1076,9 +1067,9 @@ func TestReportScanError(t *testing.T) {
 		canceled     bool // the caller's context is already done
 		wantWarn     bool // whether history sees a warning
 	}{
-		{name: "real failure warns", wantWarn: true},
-		{name: "disconnect stays quiet", disconnected: true},
-		{name: "canceled scan stays quiet", canceled: true},
+		{name: "real_failure_warns", wantWarn: true},
+		{name: "disconnect_stays_quiet", disconnected: true},
+		{name: "canceled_scan_stays_quiet", canceled: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1250,9 +1241,7 @@ func TestReload(t *testing.T) {
 			fr.DisabledNames("mcp: fake"))
 	})
 
-	// a deliberate /tools enable on a reload-added server must survive a reconnect
-	// like it does on a startup server: the recorded set is explicit enablement, so
-	// it outranks the reload-add default
+	// explicit /tools enablement outranks the reload-add default
 	t.Run("added_server_keeps_tools_enable", func(t *testing.T) {
 		mgr, fr, ws := setup(t, `{"servers":{}}`)
 		mkFile(t, ws+"/.ajent/mcp.json", cfgJSON(""))
@@ -1428,10 +1417,7 @@ func TestReconnectCaptureEra(t *testing.T) {
 		t.Fatal("reload re-registration never reached its swap")
 	}
 
-	// the child dies inside the pass's window: the death's capture takes the
-	// same registration lock, so it must stay parked behind the pass. A
-	// successor install landing inside the window is exactly what a source-wide
-	// revert could wipe
+	// death capture parks behind the swap; a successor registration must survive
 	dead := s.client()
 	go mgr.reconnect(s, dead)
 	require.Never(t, func() bool {
@@ -1441,11 +1427,7 @@ func TestReconnectCaptureEra(t *testing.T) {
 	}, 400*time.Millisecond, 10*time.Millisecond)
 	close(pr.release)
 
-	// the death then unregisters the pass's fresh registration (bound to the
-	// client it closes) and the loop re-registers under era B: everything off,
-	// nothing pinned from era A, and the successor's registration stands. The
-	// new-client gate matters: while the death sits parked the pass's own swap
-	// would satisfy every other condition
+	// only the loop's fresh client passes the new-client gate; era B re-registration stands
 	require.Eventually(t, func() bool {
 		s.mu.Lock()
 		defer s.mu.Unlock()

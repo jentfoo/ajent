@@ -11,10 +11,11 @@ import (
 func TestReadOnlyCommandsContents(t *testing.T) {
 	t.Parallel()
 
+	// the shipped reader heads, exactly: an entry added here is auto-allowed
+	// without any checker, so the list size is part of the safety contract
 	want := []string{
 		"ls", "find", "grep", "diff", "which", "ps", "jq",
-		"cat", "cut", "echo", "head", "tail", "wc", "cd", "pwd", "du",
-		"od",
+		"cat", "cut", "echo", "head", "tail", "wc", "cd", "pwd", "du", "od",
 	}
 	assert.Len(t, readOnlyCommands, len(want))
 	for _, cmd := range want {
@@ -23,19 +24,15 @@ func TestReadOnlyCommandsContents(t *testing.T) {
 	}
 }
 
-func TestNetworkNeverReadOnly(t *testing.T) {
+func TestReadOnlyListExclusions(t *testing.T) {
 	t.Parallel()
 
+	// network heads are never auto-allowed, in any spelling
 	for _, cmd := range []string{"curl", "wget", "nc"} {
 		_, ok := readOnlyCommands[cmd]
 		assert.False(t, ok, "%q must not be auto-allowed", cmd)
 	}
-}
-
-// bare heads with a write form stay off the list, gated by their own checkers
-func TestWriteFormHeadsNeverBare(t *testing.T) {
-	t.Parallel()
-
+	// bare heads with a write form stay off the list, gated by their own checkers
 	for _, cmd := range []string{"sed", "git", "awk", "rg", "sort", "date", "file"} {
 		_, ok := readOnlyCommands[cmd]
 		assert.False(t, ok, "%q must not be bare-allowed", cmd)

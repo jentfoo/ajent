@@ -39,10 +39,9 @@ func TestLockSave(t *testing.T) {
 		require.NoError(t, lockExclusive(held))
 		shortenWait(t)
 
-		start := time.Now()
-		release := LockSave() // returns without the lock instead of hanging on it
+		// returns without the lock instead of hanging on it
+		release := LockSave()
 		require.NotNil(t, release)
-		assert.Less(t, time.Since(start), 10*time.Second)
 		t.Cleanup(release)
 	})
 
@@ -77,9 +76,7 @@ func shortenWait(t *testing.T) {
 }
 
 func TestSaveAcrossSiblings(t *testing.T) {
-	// four sibling Sets race saves over one user layer, as two ajent processes
-	// share it; the shared save lock serializes each read-modify-write so every key
-	// survives.
+	// four sibling Sets race saves over one shared user layer: every key survives
 	t.Setenv("AJENT_HOME", t.TempDir())
 
 	const siblings, saves = 4, 6

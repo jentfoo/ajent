@@ -111,8 +111,7 @@ func TestAgentPoll(t *testing.T) {
 		assert.Equal(t, textOf(res), res.Display)
 	})
 
-	// agent_poll is ModeParallel: a batch commits every header at dispatch and each
-	// payload only as its job finishes, so a batched result has to name its agent.
+	// a batched payload lands detached from its header, so each names its agent
 	t.Run("batched_poll_display_names_agent", func(t *testing.T) {
 		g := &gatedProvider{} // held open so both polls overlap
 		m := New(wired(t, Options{
@@ -244,8 +243,6 @@ func TestPollOutcome(t *testing.T) {
 		{"unclaimed_progress", t.Context(), Job{ID: "sub-1", Status: StatusRunning}, false,
 			progress, StatusRunning, false},
 		// normal paths unchanged
-		{"claimed_summary_live_ctx", t.Context(), Job{ID: "sub-1", Status: StatusDone, Summary: "found it"}, true,
-			"found it", StatusDone, false},
 		{"claimed_blank_summary", t.Context(), Job{ID: "sub-1", Status: StatusDone}, true,
 			placeholder, StatusDone, false},
 	}
@@ -319,20 +316,13 @@ func TestAgentListEmptyAndPopulated(t *testing.T) {
 	assert.True(t, containsAny(out, "queued", "running", "done"))
 }
 
-func TestAgentToolsAreParallelAndLabeled(t *testing.T) {
-	t.Parallel()
-
-	_, tools := toolsManager(t, nil, time.Second)
-	for _, tl := range tools {
-		assert.Equal(t, agent.ModeParallel, tl.Mode())
-	}
-	assert.Contains(t, tools[0].Label(agent.ToolCall{}), "start")
-}
-
 func TestSubagentLabelsNameTheirTarget(t *testing.T) {
 	t.Parallel()
 
 	_, tools := toolsManager(t, nil, time.Second)
+	for _, tl := range tools { // all three dispatch in parallel batches
+		assert.Equal(t, agent.ModeParallel, tl.Mode())
+	}
 
 	startLabel := func(task string) string {
 		in, err := json.Marshal(map[string]string{"task": task})

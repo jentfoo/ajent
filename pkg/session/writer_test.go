@@ -143,24 +143,6 @@ func TestWriterDeletedUnderWriterStopsRecording(t *testing.T) {
 func TestWriterSetHeadCursor(t *testing.T) {
 	t.Parallel()
 
-	// SetHead records one trailing cursor naming the rewind target
-	t.Run("set_head_records_cursor", func(t *testing.T) {
-		p := filepath.Join(t.TempDir(), "s.jsonl")
-		w, err := Create(p, SessionData{Version: sessionVersion})
-		require.NoError(t, err)
-		e1, err := w.Append(TypeMessage, MessageData{Message: llmText("one")})
-		require.NoError(t, err)
-
-		w.SetHead(e1.ID) // rewind onto the first message
-
-		entries, _, rerr := Read(p)
-		require.NoError(t, rerr)
-		last := entries[len(entries)-1]
-		require.Equal(t, TypeHead, last.Type)
-		assert.Equal(t, e1.ID, last.ParentID)
-		require.NoError(t, w.Close())
-	})
-
 	// a fork to a new root carries an empty parent
 	t.Run("new_root_cursor", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")

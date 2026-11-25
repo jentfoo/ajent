@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/go-analyze/bulk"
 	"github.com/jentfoo/ajent/pkg/llm"
@@ -117,7 +116,7 @@ func TestRecoverTool(t *testing.T) {
 			mu.Lock()
 			defer mu.Unlock()
 			return ended
-		}, time.Second, time.Millisecond)
+		}, defaultTimeout, pollInterval)
 		mu.Lock()
 		defer mu.Unlock()
 		assert.False(t, recovered) // Goexit was preserved, not converted

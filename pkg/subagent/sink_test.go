@@ -48,6 +48,25 @@ func TestToolStart(t *testing.T) {
 			assert.Equal(t, tc.id+"  thinking…", c.rowText(tc.id)) // done falls back to the idle line
 		})
 	}
+
+	t.Run("parallel_calls", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-2", 2, c.recordRow)
+		s.set(thinkingRow(s.id), true)
+
+		doneA := s.ToolStart(agent.ToolCall{ID: "c1", Name: "read",
+			Input: json.RawMessage(`{"path":"a.go"}`)}, "read", false)
+		assert.Equal(t, "sub-2  read a.go", c.rowText("sub-2"))
+
+		doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`, false)
+		assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
+
+		doneA(agent.ToolResult{}) // b still runs, its label stays on the row
+		assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
+
+		doneB(agent.ToolResult{}) // the last one out restores the idle line
+		assert.Equal(t, "sub-2  thinking…", c.rowText("sub-2"))
+	})
 }
 
 func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
@@ -63,43 +82,31 @@ func TestSinkTurnEndFallsBackToIdle(t *testing.T) {
 	assert.NotContains(t, c.rows, "sub-3|", "a live job's row is never cleared by a turn ending")
 }
 
-func TestToolStartParallelCalls(t *testing.T) {
+func TestSinkThinking(t *testing.T) {
 	t.Parallel()
 
-	c := newCapture()
-	s := newChildSink("sub-2", 2, c.recordRow)
-	s.set(thinkingRow(s.id), true)
+	t.Run("coalesces_deltas", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-4", 4, c.recordRow)
+		for i := 0; i < 50; i++ { // all within the flush window -> one coalesced row
+			s.set(thinkingRow(s.id), false)
+		}
+		assert.Equal(t, "sub-4  thinking…", c.rowText("sub-4"))
+	})
 
-	doneA := s.ToolStart(agent.ToolCall{ID: "c1", Name: "read",
-		Input: json.RawMessage(`{"path":"a.go"}`)}, "read", false)
-	assert.Equal(t, "sub-2  read a.go", c.rowText("sub-2"))
+	t.Run("shows_reasoning", func(t *testing.T) {
+		c := newCapture()
+		s := newChildSink("sub-6", 6, c.recordRow)
 
-	doneB := s.ToolStart(agent.ToolCall{ID: "c2", Name: "grep"}, `grep "New" pkg`, false)
-	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
-
-	doneA(agent.ToolResult{}) // b still runs, its label stays on the row
-	assert.Equal(t, `sub-2  grep "New" pkg`, c.rowText("sub-2"))
-
-	doneB(agent.ToolResult{}) // the last one out restores the idle line
-	assert.Equal(t, "sub-2  thinking…", c.rowText("sub-2"))
-}
-
-func TestSinkThinkingCoalesces(t *testing.T) {
-	t.Parallel()
-
-	c := newCapture()
-	s := newChildSink("sub-4", 4, c.recordRow)
-	for i := 0; i < 50; i++ { // all within the flush window -> one coalesced row
-		s.set(thinkingRow(s.id), false)
-	}
-	assert.Equal(t, "sub-4  thinking…", c.rowText("sub-4"))
+		s.Thinking("look at pkg/tui\nthen decide")
+		assert.Equal(t, "sub-6  then decide", c.rowText("sub-6"))
+	})
 }
 
 func TestSinkText(t *testing.T) {
 	t.Parallel()
 
-	// Text passes the child's output through rather than collapsing to the static
-	// thinking placeholder: a multi-line delta scrolls past completed lines, showing only the current one.
+	// streams the child's output instead of the static thinking placeholder
 	t.Run("shows_latest_output", func(t *testing.T) {
 		c := newCapture()
 		s := newChildSink("sub-5", 5, c.recordRow)
@@ -136,16 +143,6 @@ func TestSinkText(t *testing.T) {
 	})
 }
 
-func TestSinkThinkingShowsReasoning(t *testing.T) {
-	t.Parallel()
-
-	c := newCapture()
-	s := newChildSink("sub-6", 6, c.recordRow)
-
-	s.Thinking("look at pkg/tui\nthen decide")
-	assert.Equal(t, "sub-6  then decide", c.rowText("sub-6"))
-}
-
 func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 	t.Parallel()
 
@@ -160,8 +157,7 @@ func TestSinkStreamSwitchStartsFresh(t *testing.T) {
 func TestSinkClipsHugeLine(t *testing.T) {
 	t.Parallel()
 
-	// a line longer than maxBuf keeps only its head: the cut must stay rune-aligned
-	// so the row never publishes invalid UTF-8 until the next delta replaces it
+	// cut must stay rune-aligned
 	c := newCapture()
 	s := newChildSink("sub-14", 14, c.recordRow)
 

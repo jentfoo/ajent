@@ -93,22 +93,13 @@ func TestBound(t *testing.T) {
 	})
 
 	// a byte bound must cut by rune budget, whether or not the next line survives
-	tests := []struct {
-		name string
-		in   string
-	}{
-		{"single_long_line_cut_at_rune_budget", strings.Repeat("\u4e2d", MaxLineRunes+100) + "\n"},
-		{"first_line_alone_cut_when_nothing_fits", strings.Repeat("\u4e2d", MaxLineRunes+100) + "\nrest\n"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			b := Bound(tc.in, Limit{Bytes: 100})
-			assert.True(t, b.Truncated)
-			runes := []rune(b.Text)
-			// cut to the rune budget, not bytes, a byte-bound cut stopping at ~667
-			assert.Len(t, runes, MaxLineRunes)
-		})
-	}
+	t.Run("first_line_alone_cut_when_nothing_fits", func(t *testing.T) {
+		in := strings.Repeat("\u4e2d", MaxLineRunes+100) + "\nrest\n"
+		b := Bound(in, Limit{Bytes: 100})
+		assert.True(t, b.Truncated)
+		// cut to the rune budget, not bytes, a byte-bound cut stopping at ~667
+		assert.Len(t, []rune(b.Text), MaxLineRunes)
+	})
 
 	t.Run("truncation_note_names_totals", func(t *testing.T) {
 		b := Bound(longLines(50), Limit{Lines: 5})

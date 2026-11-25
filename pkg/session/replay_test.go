@@ -322,9 +322,7 @@ func TestReplay(t *testing.T) {
 	})
 }
 
-// echoSink records only the standalone shapes EchoEntry may paint, ignoring
-// the turn machinery and real tool headers Replay folds, so a parity run
-// compares like with like.
+// echoSink records just the standalone shapes EchoEntry paints, for parity checks.
 type echoSink struct {
 	agent.NopSink
 	calls []string
@@ -379,10 +377,8 @@ func TestEchoEntry(t *testing.T) {
 	}
 }
 
-// EchoEntry paints exactly the standalone calls Replay draws for that entry,
-// in order, for every branch entry carrying all message shapes. Replay may
-// change how it folds turns and tools; this coupling is what forces the live
-// echo rule to follow.
+// EchoEntry must paint exactly the standalone calls Replay draws per entry,
+// in order.
 func TestEchoEntryMatchesReplay(t *testing.T) {
 	t.Parallel()
 

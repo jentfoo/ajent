@@ -9,11 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestStreamingCommitKeepsOutput guards against premature-scroll corruption in
-// inline mode. Committing a completed markdown block mid-stream used to redraw the
-// stale live preview (still holding those just-committed rows) below the new history.
-// On a small terminal that ghost overflowed and pushed freshly committed lines into
-// scrollback before they had been read.
+// TestStreamingCommitKeepsOutput guards premature-scroll corruption from a stale
+// live preview at commit.
 func TestStreamingCommitKeepsOutput(t *testing.T) {
 	t.Parallel()
 

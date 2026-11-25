@@ -254,6 +254,8 @@ func mustJSON(v any) json.RawMessage {
 }
 
 func TestDial(t *testing.T) {
+	t.Parallel()
+
 	t.Run("reads_hello", func(t *testing.T) {
 		f := newFakeSession(t)
 
@@ -346,48 +348,50 @@ func TestCloseWakesCallers(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestErrMidServeKeepsFinishArmed(t *testing.T) {
+func TestErrAndDone(t *testing.T) {
 	t.Parallel()
-	f := newFakeSession(t)
-	conn, _, _ := f.dial(t)
 
-	require.NoError(t, conn.Err())
+	t.Run("early_err_arms_done", func(t *testing.T) {
+		f := newFakeSession(t)
+		conn, _, _ := f.dial(t)
 
-	conn.Close() // Serve's read fails into finish
+		require.NoError(t, conn.Err())
 
-	select {
-	case <-conn.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("Done() never closed after an early Err() call")
-	}
-	assert.Error(t, conn.Err())
-}
+		conn.Close() // Serve's read fails into finish
 
-func TestErrConcurrentWithFinish(t *testing.T) {
-	t.Parallel()
-	c := &Conn{done: make(chan struct{})}
+		select {
+		case <-conn.Done():
+		case <-time.After(2 * time.Second):
+			t.Fatal("Done() never closed after an early Err() call")
+		}
+		assert.Error(t, conn.Err())
+	})
 
-	var wg sync.WaitGroup
-	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				select {
-				case <-c.Done():
-					return
-				default:
-					_ = c.Err()
+	t.Run("concurrent_finish_idempotent", func(t *testing.T) {
+		c := &Conn{done: make(chan struct{})}
+
+		var wg sync.WaitGroup
+		for range 8 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for {
+					select {
+					case <-c.Done():
+						return
+					default:
+						_ = c.Err()
+					}
 				}
-			}
-		}()
-	}
+			}()
+		}
 
-	c.finish(io.EOF)
-	wg.Wait()
+		c.finish(io.EOF)
+		wg.Wait()
 
-	c.finish(errors.New("second")) // a late finish never re-closes or overwrites
-	assert.ErrorIs(t, c.Err(), io.EOF)
+		c.finish(errors.New("second")) // a late finish never re-closes or overwrites
+		assert.ErrorIs(t, c.Err(), io.EOF)
+	})
 }
 
 func TestQueueRecall(t *testing.T) {
@@ -544,6 +548,8 @@ func recordTo(t *testing.T, f *fakeSession) (first, second session.Entry) {
 }
 
 func TestBackfill(t *testing.T) {
+	t.Parallel()
+
 	t.Run("reads_recorded_branch", func(t *testing.T) {
 		f := newFakeSession(t)
 		first, second := recordTo(t, f)
@@ -571,6 +577,8 @@ func TestBackfill(t *testing.T) {
 }
 
 func TestReadBranchSkipsTornTail(t *testing.T) {
+	t.Parallel()
+
 	f := newFakeSession(t)
 	first, second := recordTo(t, f)
 	path := filepath.Join(f.home, "torn.jsonl")

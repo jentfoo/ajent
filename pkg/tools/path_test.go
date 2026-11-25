@@ -141,32 +141,33 @@ func TestResolve(t *testing.T) {
 		cwd, _ := os.Getwd()
 		assert.Equal(t, filepath.Join(cwd, "somefile.txt"), abs)
 	})
-}
 
-func TestResolveTildeNotExpanded(t *testing.T) {
-	home := t.TempDir()
-	restore := setTestUserHome(home)
-	t.Cleanup(restore)
+	// ~ stays literal for every relative spelling that is not a home expansion
+	t.Run("tilde_not_expanded", func(t *testing.T) {
+		home := t.TempDir()
+		restore := setTestUserHome(home)
+		t.Cleanup(restore)
 
-	p := PathPolicy{Cwd: home}
+		p := PathPolicy{Cwd: home}
 
-	cases := []struct {
-		name string
-		rel  string
-	}{
-		{"relative_dotted_subdir", "./f.txt"},
-		{"multi_segment_relative", "a/b/c.txt"},
-		{"subdir_relative", "x/y"},
-		{"user_prefixed_tilde", "~user/x"},
-		{"double_tilde", "~~/y"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			abs, err := p.Resolve(tc.rel)
-			require.NoError(t, err)
-			assert.Equal(t, filepath.Join(home, tc.rel), abs)
-		})
-	}
+		cases := []struct {
+			name string
+			rel  string
+		}{
+			{"relative_dotted_subdir", "./f.txt"},
+			{"multi_segment_relative", "a/b/c.txt"},
+			{"subdir_relative", "x/y"},
+			{"user_prefixed_tilde", "~user/x"},
+			{"double_tilde", "~~/y"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				abs, err := p.Resolve(tc.rel)
+				require.NoError(t, err)
+				assert.Equal(t, filepath.Join(home, tc.rel), abs)
+			})
+		}
+	})
 }
 
 // setTestUserHome swaps userHome for the duration of a test and returns a restore func.

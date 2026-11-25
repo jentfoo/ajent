@@ -187,10 +187,15 @@ func TestAnthropicProviderStream(t *testing.T) {
 
 		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = s.Close() })
 
-		msg, usage, err := Accumulate(s)
-		require.NoError(t, err)
+		events := collect(t, s)
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		require.NoError(t, acc.Err())
+
+		msg, usage := acc.Message(), acc.Usage()
 		require.Len(t, msg.Content, 2)
 
 		call, ok := msg.Content[1].(ToolCallBlock)
@@ -199,18 +204,10 @@ func TestAnthropicProviderStream(t *testing.T) {
 		assert.Equal(t, "read", call.Name)
 		assert.JSONEq(t, `{"path":"main.go"}`, string(call.Input))
 		assert.Equal(t, Usage{Input: 412, Output: 37, CacheRead: 8}, usage)
-	})
 
-	t.Run("stop_reason_tool_use", func(t *testing.T) {
-		srv, _ := sseServer(t, "anthropic/tool_args_split.sse")
-		p := newAnthropicTestProvider(t, srv.URL)
-
-		s, err := p.Stream(t.Context(), Request{Model: anthropicModel(nil)})
-		require.NoError(t, err)
-		events := collect(t, s)
-
-		last := events[len(events)-1]
-		assert.Equal(t, StopToolUse, last.StopReason)
+		done := events[len(events)-1]
+		assert.Equal(t, EventDone, done.Type)
+		assert.Equal(t, StopToolUse, done.StopReason)
 	})
 
 	t.Run("mid_stream_error_surfaces_the_partial", func(t *testing.T) {
@@ -329,6 +326,7 @@ func TestBuildAnthropicBody(t *testing.T) {
 			MaxTokens: 16000,
 		}
 	}
+
 	decode := func(t *testing.T, body []byte) map[string]any {
 		t.Helper()
 
@@ -337,501 +335,646 @@ func TestBuildAnthropicBody(t *testing.T) {
 		return m
 	}
 
-	t.Run("system_is_a_top_level_field", func(t *testing.T) {
-		body, err := buildAnthropicBody(baseReq())
-		require.NoError(t, err)
-		assert.JSONEq(t, `{
-			"model": "claude-opus-4-5",
-			"max_tokens": 16000,
-			"stream": true,
-			"system": [{"type": "text", "text": "be terse"}],
-			"thinking": {"type": "disabled"},
-			"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-		}`, string(body))
-	})
-
-	t.Run("max_tokens_falls_back_to_the_model", func(t *testing.T) {
-		req := baseReq()
-		req.MaxTokens = 0
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		assert.InDelta(t, 64000, decode(t, body)["max_tokens"], 0.001)
-	})
-
-	t.Run("thinking_budget_from_the_level", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		thinking := decode(t, body)["thinking"].(map[string]any)
-		assert.Equal(t, "enabled", thinking["type"])
-		assert.InDelta(t, 8192, thinking["budget_tokens"], 0.001)
-	})
-
-	t.Run("explicit_budget_overrides_the_level", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelLow, Budget: 5000}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		thinking := decode(t, body)["thinking"].(map[string]any)
-		assert.InDelta(t, 5000, thinking["budget_tokens"], 0.001)
-	})
-
-	t.Run("temperature_dropped_when_thinking", func(t *testing.T) {
-		// the API rejects any temperature but the default alongside thinking
-		req := baseReq()
-		temp := 0.7
-		req.Temperature = &temp
-		req.Reasoning = ReasoningConfig{Level: LevelHigh}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		m := decode(t, body)
-		assert.NotContains(t, m, "temperature")
-		assert.Contains(t, m, "thinking")
-	})
-
-	t.Run("temperature_kept_without_thinking", func(t *testing.T) {
-		req := baseReq()
-		temp := 0.7
-		req.Temperature = &temp
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		assert.InDelta(t, 0.7, decode(t, body)["temperature"], 0.001)
-	})
-
-	t.Run("small_max_tokens_is_inflated_for_thinking", func(t *testing.T) {
-		// part C inflates max_tokens by the budget so a small request still leaves
-		// room for both reasoning and a full answer
-		req := baseReq()
-		req.MaxTokens = 1000
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		m := decode(t, body)
-		thinking := m["thinking"].(map[string]any)
-		assert.Equal(t, "enabled", thinking["type"])
-	})
-
-	t.Run("off_emits_the_disabled_shape", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelOff}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		m := decode(t, body)
-		assert.Contains(t, m, "thinking")
-		assert.Equal(t, "disabled", m["thinking"].(map[string]any)["type"])
-	})
-
-	t.Run("tool_results_ride_on_a_user_message", func(t *testing.T) {
-		req := baseReq()
-		req.Messages = []Message{
-			Text(RoleUser, "read it"),
-			{Role: RoleAssistant, Content: BlockList{
-				ToolCallBlock{ID: "toolu_1", Name: "read", Input: json.RawMessage(`{"p":1}`)},
-			}},
-			{Role: RoleTool, Content: BlockList{
-				ToolResultBlock{CallID: "toolu_1", Content: BlockList{TextBlock{Text: "body"}}},
-			}},
-		}
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		msgs := decode(t, body)["messages"].([]any)
-		require.Len(t, msgs, 3)
-		last := msgs[2].(map[string]any)
-		assert.Equal(t, "user", last["role"]) // never a tool role
-
-		blocks := last["content"].([]any)
-		assert.Equal(t, "tool_result", blocks[0].(map[string]any)["type"])
-		assert.Equal(t, "toolu_1", blocks[0].(map[string]any)["tool_use_id"])
-	})
-
-	t.Run("consecutive_same_role_messages_merge", func(t *testing.T) {
-		req := baseReq()
-		req.Messages = []Message{
-			Text(RoleUser, "one"),
-			Text(RoleUser, "two"),
-		}
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		msgs := decode(t, body)["messages"].([]any)
-		require.Len(t, msgs, 1)
-		assert.Len(t, msgs[0].(map[string]any)["content"].([]any), 2)
-	})
-
-	t.Run("thinking_replayed_with_its_signature", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning.Retain = RetainAll
-		req.Messages = sameOrigin(req.Model, []Message{
-			Text(RoleUser, "q"),
-			{Role: RoleAssistant, Content: BlockList{
-				ThinkingBlock{Text: "because", Signature: "sig"},
-				TextBlock{Text: "answer"},
-			}},
-		})
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), `"signature":"sig"`)
-		assert.Contains(t, string(body), `"thinking":"because"`)
-	})
-
-	t.Run("unsigned_thinking_is_not_replayed", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning.Retain = RetainAll
-		req.Messages = sameOrigin(req.Model, []Message{
-			Text(RoleUser, "q"),
-			{Role: RoleAssistant, Content: BlockList{
-				ThinkingBlock{Text: "no signature"},
-				TextBlock{Text: "answer"},
-			}},
-		})
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		assert.NotContains(t, string(body), "no signature")
-	})
-
-	t.Run("cache_breakpoints_on_system_and_tools", func(t *testing.T) {
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true}
-		req.Tools = []ToolSchema{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		m := decode(t, body)
-		system := m["system"].([]any)[0].(map[string]any)
-		assert.Equal(t, "ephemeral", system["cache_control"].(map[string]any)["type"])
-
-		tools := m["tools"].([]any)
-		last := tools[len(tools)-1].(map[string]any)
-		assert.Equal(t, "ephemeral", last["cache_control"].(map[string]any)["type"])
-	})
-
-	t.Run("cache_breakpoints_mark_the_newest_message", func(t *testing.T) {
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
-		req.Messages = []Message{Text(RoleUser, "one"), Text(RoleAssistant, "two"), Text(RoleUser, "three")}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-
-		msgs := decode(t, body)["messages"].([]any)
-		newest := msgs[len(msgs)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
-		assert.Equal(t, "ephemeral", newest["cache_control"].(map[string]any)["type"])
-	})
-
-	t.Run("cache_breakpoint_skips_a_thinking_tail", func(t *testing.T) {
-		// a lone thinking block cannot carry a marker, so it lands one message back
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
-		req.Reasoning.Retain = RetainAll
-		req.Messages = sameOrigin(req.Model, []Message{
-			Text(RoleUser, "q"),
-			{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "hmm", Signature: "sig"}}},
+	t.Run("shape", func(t *testing.T) {
+		t.Run("system_is_a_top_level_field", func(t *testing.T) {
+			body, err := buildAnthropicBody(baseReq())
+			require.NoError(t, err)
+			assert.JSONEq(t, `{
+				"model": "claude-opus-4-5",
+				"max_tokens": 16000,
+				"stream": true,
+				"system": [{"type": "text", "text": "be terse"}],
+				"thinking": {"type": "disabled"},
+				"messages": [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
+			}`, string(body))
 		})
 
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
+		t.Run("max_tokens_falls_back_to_the_model", func(t *testing.T) {
+			req := baseReq()
+			req.MaxTokens = 0
 
-		msgs := decode(t, body)["messages"].([]any)
-		thinking := msgs[1].(map[string]any)["content"].([]any)[0].(map[string]any)
-		require.Equal(t, "thinking", thinking["type"])
-		assert.NotContains(t, thinking, "cache_control")
-		user := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
-		assert.Equal(t, "ephemeral", user["cache_control"].(map[string]any)["type"])
-	})
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			assert.InDelta(t, 64000, decode(t, body)["max_tokens"], 0.001)
+		})
 
-	t.Run("long_retention_tier_when_supported", func(t *testing.T) {
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true}
-		req.Model.Caps.LongCache = true
+		t.Run("thinking_budget_from_the_level", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
 
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
 
-		system := decode(t, body)["system"].([]any)[0].(map[string]any)
-		assert.Equal(t, "1h", system["cache_control"].(map[string]any)["ttl"])
-	})
+			thinking := decode(t, body)["thinking"].(map[string]any)
+			assert.Equal(t, "enabled", thinking["type"])
+			assert.InDelta(t, 8192, thinking["budget_tokens"], 0.001)
+		})
 
-	t.Run("default_tier_omits_the_ttl", func(t *testing.T) {
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true}
+		t.Run("explicit_budget_overrides_the_level", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelLow, Budget: 5000}
 
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
 
-		system := decode(t, body)["system"].([]any)[0].(map[string]any)
-		assert.NotContains(t, system["cache_control"].(map[string]any), "ttl")
-	})
+			thinking := decode(t, body)["thinking"].(map[string]any)
+			assert.InDelta(t, 5000, thinking["budget_tokens"], 0.001)
+		})
 
-	t.Run("no_cache_control_when_disabled", func(t *testing.T) {
-		body, err := buildAnthropicBody(baseReq())
-		require.NoError(t, err)
-		assert.NotContains(t, string(body), "cache_control")
-	})
+		t.Run("temperature_dropped_when_thinking", func(t *testing.T) {
+			// the API rejects any temperature but the default alongside thinking
+			req := baseReq()
+			temp := 0.7
+			req.Temperature = &temp
+			req.Reasoning = ReasoningConfig{Level: LevelHigh}
 
-	t.Run("tool_choice_modes", func(t *testing.T) {
-		tests := []struct {
-			name     string
-			choice   ToolChoice
-			expected string
-		}{
-			{"auto_is_omitted", ToolChoice{Mode: ToolChoiceAuto}, ""},
-			{"required_is_any", ToolChoice{Mode: ToolChoiceRequired}, "any"},
-			{"none", ToolChoice{Mode: ToolChoiceNone}, "none"},
-			{"specific", ToolChoice{Mode: ToolChoiceSpecific, Name: "read"}, "tool"},
-		}
-		for _, tc := range tests {
-			t.Run(tc.name, func(t *testing.T) {
-				req := baseReq()
-				req.Tools = []ToolSchema{{Name: "read"}}
-				req.ToolChoice = tc.choice
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
 
-				body, err := buildAnthropicBody(req)
-				require.NoError(t, err)
+			m := decode(t, body)
+			assert.NotContains(t, m, "temperature")
+			assert.Contains(t, m, "thinking")
+		})
 
-				m := decode(t, body)
-				if tc.expected == "" {
-					assert.NotContains(t, m, "tool_choice")
-					return
-				}
-				assert.Equal(t, tc.expected, m["tool_choice"].(map[string]any)["type"])
+		t.Run("temperature_kept_without_thinking", func(t *testing.T) {
+			req := baseReq()
+			temp := 0.7
+			req.Temperature = &temp
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			assert.InDelta(t, 0.7, decode(t, body)["temperature"], 0.001)
+		})
+
+		t.Run("small_max_tokens_is_inflated_for_thinking", func(t *testing.T) {
+			// part C inflates max_tokens by the budget so a small request still leaves
+			// room for both reasoning and a full answer
+			req := baseReq()
+			req.MaxTokens = 1000
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			m := decode(t, body)
+			thinking := m["thinking"].(map[string]any)
+			assert.Equal(t, "enabled", thinking["type"])
+		})
+
+		t.Run("off_emits_the_disabled_shape", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelOff}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			m := decode(t, body)
+			assert.Contains(t, m, "thinking")
+			assert.Equal(t, "disabled", m["thinking"].(map[string]any)["type"])
+		})
+
+		t.Run("tool_results_ride_on_a_user_message", func(t *testing.T) {
+			req := baseReq()
+			req.Messages = []Message{
+				Text(RoleUser, "read it"),
+				{Role: RoleAssistant, Content: BlockList{
+					ToolCallBlock{ID: "toolu_1", Name: "read", Input: json.RawMessage(`{"p":1}`)},
+				}},
+				{Role: RoleTool, Content: BlockList{
+					ToolResultBlock{CallID: "toolu_1", Content: BlockList{TextBlock{Text: "body"}}},
+				}},
+			}
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			msgs := decode(t, body)["messages"].([]any)
+			require.Len(t, msgs, 3)
+			last := msgs[2].(map[string]any)
+			assert.Equal(t, "user", last["role"]) // never a tool role
+
+			blocks := last["content"].([]any)
+			assert.Equal(t, "tool_result", blocks[0].(map[string]any)["type"])
+			assert.Equal(t, "toolu_1", blocks[0].(map[string]any)["tool_use_id"])
+		})
+
+		t.Run("consecutive_same_role_messages_merge", func(t *testing.T) {
+			req := baseReq()
+			req.Messages = []Message{
+				Text(RoleUser, "one"),
+				Text(RoleUser, "two"),
+			}
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			msgs := decode(t, body)["messages"].([]any)
+			require.Len(t, msgs, 1)
+			assert.Len(t, msgs[0].(map[string]any)["content"].([]any), 2)
+		})
+
+		t.Run("thinking_replayed_with_its_signature", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning.Retain = RetainAll
+			req.Messages = sameOrigin(req.Model, []Message{
+				Text(RoleUser, "q"),
+				{Role: RoleAssistant, Content: BlockList{
+					ThinkingBlock{Text: "because", Signature: "sig"},
+					TextBlock{Text: "answer"},
+				}},
 			})
-		}
-	})
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), `"signature":"sig"`)
+			assert.Contains(t, string(body), `"thinking":"because"`)
+		})
 
-	t.Run("image_becomes_a_base64_source", func(t *testing.T) {
-		req := baseReq()
-		req.Messages = []Message{{Role: RoleUser, Content: BlockList{
-			ImageBlock{MediaType: "image/png", Data: []byte{1, 2, 3}},
-		}}}
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		assert.Contains(t, string(body), `"media_type":"image/png"`)
-		assert.Contains(t, string(body), `"data":"AQID"`)
-	})
-}
-
-func TestBuildAnthropicBodyInflation(t *testing.T) {
-	t.Parallel()
-
-	baseReq := func() Request {
-		return Request{
-			Model:    anthropicModel(nil),
-			Messages: []Message{Text(RoleUser, "hi")},
-		}
-	}
-	decode := func(t *testing.T, body []byte) map[string]any {
-		t.Helper()
-
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(body, &m))
-		return m
-	}
-
-	t.Run("max_tokens_inflates_by_the_budget", func(t *testing.T) {
-		// medium costs 8192, so a 16000 request asks for 24192 and the budget
-		// fits within the inflated ceiling
-		req := baseReq()
-		req.MaxTokens = 16000
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-
-		m := decode(t, buildBody(t, req))
-		assert.InDelta(t, 16000+8192, m["max_tokens"], 0.001)
-		assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
-	})
-
-	t.Run("inflation_clamps_at_the_model_cap", func(t *testing.T) {
-		// near the full window the cap bites, and the budget still leaves the floor
-		req := baseReq()
-		req.MaxTokens = 60000
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-
-		m := decode(t, buildBody(t, req))
-		assert.InDelta(t, 64000, m["max_tokens"], 0.001)
-		assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
-	})
-
-	t.Run("budget_keeps_the_answer_floor", func(t *testing.T) {
-		// a budget bigger than the remaining window clamps so the answer floor stays
-		req := baseReq()
-		req.MaxTokens = 60000
-		req.Reasoning = ReasoningConfig{Level: LevelMax, Budget: 65000}
-
-		m := decode(t, buildBody(t, req))
-		assert.InDelta(t, 64000-minAnswerTokens,
-			m["thinking"].(map[string]any)["budget_tokens"], 0.001)
-	})
-
-	t.Run("floor_drops_thinking_and_restores_temperature", func(t *testing.T) {
-		// a model cap too small to leave any room drops thinking entirely and
-		// temperature, rejected while thinking is on, comes back
-		req := baseReq()
-		temp := 0.7
-		req.Temperature = &temp
-		req.Model.MaxOutput = minAnswerTokens + minThinkingBudget - 1
-		req.Reasoning = ReasoningConfig{Level: LevelHigh}
-
-		m := decode(t, buildBody(t, req))
-		assert.NotContains(t, m, "thinking")
-		assert.InDelta(t, temp, m["temperature"], 0.001)
-	})
-
-	t.Run("no_inflation_on_adaptive_models", func(t *testing.T) {
-		req := baseReq()
-		req.MaxTokens = 16000
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-		req.Model.Caps.ForceAdaptiveThinking = true
-
-		m := decode(t, buildBody(t, req))
-		assert.InDelta(t, 16000, m["max_tokens"], 0.001)
-	})
-
-	t.Run("budget_stable_across_a_growing_session", func(t *testing.T) {
-		// MaxTokens tracks the live ledger, budget_tokens is a cache key and
-		// must not move with it
-		m := anthropicModel(nil)
-		m.ContextWindow = 128000
-		m.MaxOutput = 64000
-		build := func(maxTokens int) map[string]any {
-			return decode(t, buildBody(t, Request{
-				Model: m, Messages: []Message{Text(RoleUser, "hi")},
-				MaxTokens: maxTokens, Reasoning: ReasoningConfig{Level: LevelMedium},
-			}))
-		}
-		assert.Equal(t, build(22000)["thinking"], build(3000)["thinking"])
-		assert.InDelta(t, 8192,
-			build(3000)["thinking"].(map[string]any)["budget_tokens"], 0.001)
-	})
-
-	t.Run("tiny_budget_keeps_max_tokens_above_the_budget", func(t *testing.T) {
-		// a sub-minimum budget is raised, and inflation keeps the request valid
-		// even near a full window
-		req := baseReq()
-		req.MaxTokens = 3000
-		req.Reasoning = ReasoningConfig{Level: LevelHigh, Budget: 512}
-
-		m := decode(t, buildBody(t, req))
-		thinking := m["thinking"].(map[string]any)
-		assert.InDelta(t, minThinkingBudget, thinking["budget_tokens"], 0.001)
-		assert.Greater(t, m["max_tokens"], thinking["budget_tokens"])
-	})
-}
-
-func TestBuildAnthropicBodyThinkingShape(t *testing.T) {
-	t.Parallel()
-
-	baseReq := func() Request {
-		return Request{
-			Model:     anthropicModel(nil),
-			Messages:  []Message{Text(RoleUser, "hi")},
-			MaxTokens: 16000,
-		}
-	}
-	decode := func(t *testing.T, body []byte) map[string]any {
-		t.Helper()
-
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(body, &m))
-		return m
-	}
-
-	t.Run("adaptive_shape_per_level", func(t *testing.T) {
-		tests := []struct {
-			level  Level
-			effort string
-		}{
-			{LevelMinimal, "low"},
-			{LevelLow, "low"},
-			{LevelMedium, "medium"},
-			{LevelHigh, "high"},
-			{LevelXHigh, "high"},
-			{LevelMax, "high"},
-		}
-		for _, tc := range tests {
-			t.Run(tc.level.String(), func(t *testing.T) {
-				req := baseReq()
-				req.Reasoning = ReasoningConfig{Level: tc.level}
-				req.Model.Caps.ForceAdaptiveThinking = true
-				if tc.level >= LevelXHigh { // xhigh and max are opt-in levels
-					high := "high"
-					req.Model.Caps.LevelMap = map[Level]*string{tc.level: &high}
-				}
-
-				m := decode(t, buildBody(t, req))
-				think := m["thinking"].(map[string]any)
-				assert.Equal(t, "adaptive", think["type"])
-				assert.NotContains(t, think, "budget_tokens")
-				assert.Equal(t, "summarized", think["display"])
-				assert.Equal(t, tc.effort, m["output_config"].(map[string]any)["effort"])
+		t.Run("unsigned_thinking_is_not_replayed", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning.Retain = RetainAll
+			req.Messages = sameOrigin(req.Model, []Message{
+				Text(RoleUser, "q"),
+				{Role: RoleAssistant, Content: BlockList{
+					ThinkingBlock{Text: "no signature"},
+					TextBlock{Text: "answer"},
+				}},
 			})
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			assert.NotContains(t, string(body), "no signature")
+		})
+
+		t.Run("cache_breakpoints_on_system_and_tools", func(t *testing.T) {
+			req := baseReq()
+			req.Cache = CachePolicy{Enabled: true}
+			req.Tools = []ToolSchema{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			m := decode(t, body)
+			system := m["system"].([]any)[0].(map[string]any)
+			assert.Equal(t, "ephemeral", system["cache_control"].(map[string]any)["type"])
+
+			tools := m["tools"].([]any)
+			last := tools[len(tools)-1].(map[string]any)
+			assert.Equal(t, "ephemeral", last["cache_control"].(map[string]any)["type"])
+		})
+
+		t.Run("cache_breakpoints_mark_the_newest_message", func(t *testing.T) {
+			req := baseReq()
+			req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
+			req.Messages = []Message{Text(RoleUser, "one"), Text(RoleAssistant, "two"), Text(RoleUser, "three")}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			msgs := decode(t, body)["messages"].([]any)
+			newest := msgs[len(msgs)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
+			assert.Equal(t, "ephemeral", newest["cache_control"].(map[string]any)["type"])
+		})
+
+		t.Run("cache_breakpoint_skips_a_thinking_tail", func(t *testing.T) {
+			// a lone thinking block cannot carry a marker, so it lands one message back
+			req := baseReq()
+			req.Cache = CachePolicy{Enabled: true, KeepLast: 1}
+			req.Reasoning.Retain = RetainAll
+			req.Messages = sameOrigin(req.Model, []Message{
+				Text(RoleUser, "q"),
+				{Role: RoleAssistant, Content: BlockList{ThinkingBlock{Text: "hmm", Signature: "sig"}}},
+			})
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			msgs := decode(t, body)["messages"].([]any)
+			thinking := msgs[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+			require.Equal(t, "thinking", thinking["type"])
+			assert.NotContains(t, thinking, "cache_control")
+			user := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+			assert.Equal(t, "ephemeral", user["cache_control"].(map[string]any)["type"])
+		})
+
+		t.Run("long_retention_tier_when_supported", func(t *testing.T) {
+			req := baseReq()
+			req.Cache = CachePolicy{Enabled: true}
+			req.Model.Caps.LongCache = true
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			system := decode(t, body)["system"].([]any)[0].(map[string]any)
+			assert.Equal(t, "1h", system["cache_control"].(map[string]any)["ttl"])
+		})
+
+		t.Run("default_tier_omits_the_ttl", func(t *testing.T) {
+			req := baseReq()
+			req.Cache = CachePolicy{Enabled: true}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+
+			system := decode(t, body)["system"].([]any)[0].(map[string]any)
+			assert.NotContains(t, system["cache_control"].(map[string]any), "ttl")
+		})
+
+		t.Run("no_cache_control_when_disabled", func(t *testing.T) {
+			body, err := buildAnthropicBody(baseReq())
+			require.NoError(t, err)
+			assert.NotContains(t, string(body), "cache_control")
+		})
+
+		t.Run("tool_choice_modes", func(t *testing.T) {
+			tests := []struct {
+				name     string
+				choice   ToolChoice
+				expected string
+			}{
+				{"auto_is_omitted", ToolChoice{Mode: ToolChoiceAuto}, ""},
+				{"required_is_any", ToolChoice{Mode: ToolChoiceRequired}, "any"},
+				{"none", ToolChoice{Mode: ToolChoiceNone}, "none"},
+				{"specific", ToolChoice{Mode: ToolChoiceSpecific, Name: "read"}, "tool"},
+			}
+			for _, tc := range tests {
+				t.Run(tc.name, func(t *testing.T) {
+					req := baseReq()
+					req.Tools = []ToolSchema{{Name: "read"}}
+					req.ToolChoice = tc.choice
+
+					body, err := buildAnthropicBody(req)
+					require.NoError(t, err)
+
+					m := decode(t, body)
+					if tc.expected == "" {
+						assert.NotContains(t, m, "tool_choice")
+						return
+					}
+					assert.Equal(t, tc.expected, m["tool_choice"].(map[string]any)["type"])
+				})
+			}
+		})
+
+		t.Run("image_becomes_a_base64_source", func(t *testing.T) {
+			req := baseReq()
+			req.Messages = []Message{{Role: RoleUser, Content: BlockList{
+				ImageBlock{MediaType: "image/png", Data: []byte{1, 2, 3}},
+			}}}
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			assert.Contains(t, string(body), `"media_type":"image/png"`)
+			assert.Contains(t, string(body), `"data":"AQID"`)
+		})
+	})
+
+	t.Run("inflation", func(t *testing.T) {
+		t.Run("max_tokens_inflates_by_the_budget", func(t *testing.T) {
+			// medium costs 8192, so a 16000 request asks for 24192 and the budget
+			// fits within the inflated ceiling
+			req := baseReq()
+			req.MaxTokens = 16000
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+
+			m := decode(t, buildBody(t, req))
+			assert.InDelta(t, 16000+8192, m["max_tokens"], 0.001)
+			assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
+		})
+
+		t.Run("inflation_clamps_at_the_model_cap", func(t *testing.T) {
+			// near the full window the cap bites, and the budget still leaves the floor
+			req := baseReq()
+			req.MaxTokens = 60000
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+
+			m := decode(t, buildBody(t, req))
+			assert.InDelta(t, 64000, m["max_tokens"], 0.001)
+			assert.InDelta(t, 8192, m["thinking"].(map[string]any)["budget_tokens"], 0.001)
+		})
+
+		t.Run("budget_keeps_the_answer_floor", func(t *testing.T) {
+			// a budget bigger than the remaining window clamps so the answer floor stays
+			req := baseReq()
+			req.MaxTokens = 60000
+			req.Reasoning = ReasoningConfig{Level: LevelMax, Budget: 65000}
+
+			m := decode(t, buildBody(t, req))
+			assert.InDelta(t, 64000-minAnswerTokens,
+				m["thinking"].(map[string]any)["budget_tokens"], 0.001)
+		})
+
+		t.Run("floor_drops_thinking_and_restores_temperature", func(t *testing.T) {
+			// a model cap too small to leave any room drops thinking entirely and
+			// temperature, rejected while thinking is on, comes back
+			req := baseReq()
+			temp := 0.7
+			req.Temperature = &temp
+			req.Model.MaxOutput = minAnswerTokens + minThinkingBudget - 1
+			req.Reasoning = ReasoningConfig{Level: LevelHigh}
+
+			m := decode(t, buildBody(t, req))
+			assert.NotContains(t, m, "thinking")
+			assert.InDelta(t, temp, m["temperature"], 0.001)
+		})
+
+		t.Run("no_inflation_on_adaptive_models", func(t *testing.T) {
+			req := baseReq()
+			req.MaxTokens = 16000
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+			req.Model.Caps.ForceAdaptiveThinking = true
+
+			m := decode(t, buildBody(t, req))
+			assert.InDelta(t, 16000, m["max_tokens"], 0.001)
+		})
+
+		t.Run("budget_stable_across_a_growing_session", func(t *testing.T) {
+			// MaxTokens tracks the live ledger, budget_tokens is a cache key and
+			// must not move with it
+			m := anthropicModel(nil)
+			m.ContextWindow = 128000
+			m.MaxOutput = 64000
+			build := func(maxTokens int) map[string]any {
+				return decode(t, buildBody(t, Request{
+					Model: m, Messages: []Message{Text(RoleUser, "hi")},
+					MaxTokens: maxTokens, Reasoning: ReasoningConfig{Level: LevelMedium},
+				}))
+			}
+			assert.Equal(t, build(22000)["thinking"], build(3000)["thinking"])
+			assert.InDelta(t, 8192,
+				build(3000)["thinking"].(map[string]any)["budget_tokens"], 0.001)
+		})
+
+		t.Run("tiny_budget_keeps_max_tokens_above_the_budget", func(t *testing.T) {
+			// a sub-minimum budget is raised, and inflation keeps the request valid
+			// even near a full window
+			req := baseReq()
+			req.MaxTokens = 3000
+			req.Reasoning = ReasoningConfig{Level: LevelHigh, Budget: 512}
+
+			m := decode(t, buildBody(t, req))
+			thinking := m["thinking"].(map[string]any)
+			assert.InDelta(t, minThinkingBudget, thinking["budget_tokens"], 0.001)
+			assert.Greater(t, m["max_tokens"], thinking["budget_tokens"])
+		})
+	})
+
+	t.Run("thinking_shape", func(t *testing.T) {
+		t.Run("adaptive_shape_per_level", func(t *testing.T) {
+			tests := []struct {
+				level  Level
+				effort string
+			}{
+				{LevelMinimal, "low"},
+				{LevelLow, "low"},
+				{LevelMedium, "medium"},
+				{LevelHigh, "high"},
+				{LevelXHigh, "high"},
+				{LevelMax, "high"},
+			}
+			for _, tc := range tests {
+				t.Run(tc.level.String(), func(t *testing.T) {
+					req := baseReq()
+					req.Reasoning = ReasoningConfig{Level: tc.level}
+					req.Model.Caps.ForceAdaptiveThinking = true
+					if tc.level >= LevelXHigh { // xhigh and max are opt-in levels
+						high := "high"
+						req.Model.Caps.LevelMap = map[Level]*string{tc.level: &high}
+					}
+
+					m := decode(t, buildBody(t, req))
+					think := m["thinking"].(map[string]any)
+					assert.Equal(t, "adaptive", think["type"])
+					assert.NotContains(t, think, "budget_tokens")
+					assert.Equal(t, "summarized", think["display"])
+					assert.Equal(t, tc.effort, m["output_config"].(map[string]any)["effort"])
+				})
+			}
+		})
+
+		t.Run("level_map_overrides_the_default_effort", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+			req.Model.Caps.ForceAdaptiveThinking = true
+			max := "max"
+			req.Model.Caps.LevelMap = map[Level]*string{LevelMedium: &max}
+
+			m := decode(t, buildBody(t, req))
+			assert.Equal(t, "max", m["output_config"].(map[string]any)["effort"])
+		})
+
+		t.Run("temperature_dropped_on_adaptive", func(t *testing.T) {
+			req := baseReq()
+			temp := 0.7
+			req.Temperature = &temp
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+			req.Model.Caps.ForceAdaptiveThinking = true
+
+			m := decode(t, buildBody(t, req))
+			assert.NotContains(t, m, "temperature")
+			think := m["thinking"].(map[string]any)
+			assert.Equal(t, "adaptive", think["type"])
+			assert.Equal(t, "summarized", think["display"])
+		})
+
+		t.Run("off_null_suppresses_the_thinking_key", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelOff}
+			req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil}
+
+			m := decode(t, buildBody(t, req))
+			assert.NotContains(t, m, "thinking")
+		})
+
+		t.Run("budget_shape_sends_summarized_display", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelMedium}
+
+			m := decode(t, buildBody(t, req))
+			think := m["thinking"].(map[string]any)
+			assert.Equal(t, "enabled", think["type"])
+			assert.Equal(t, "summarized", think["display"])
+		})
+
+		t.Run("non_reasoning_models_emit_no_thinking", func(t *testing.T) {
+			req := baseReq()
+			req.Reasoning = ReasoningConfig{Level: LevelOff}
+			req.Model.Caps.Reasoning = false
+
+			m := decode(t, buildBody(t, req))
+			assert.NotContains(t, m, "thinking")
+		})
+	})
+
+	t.Run("tools_and_cache", func(t *testing.T) {
+		toolReq := func() Request {
+			r := baseReq()
+			r.Tools = []ToolSchema{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}}
+			return r
 		}
-	})
 
-	t.Run("level_map_overrides_the_default_effort", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-		req.Model.Caps.ForceAdaptiveThinking = true
-		max := "max"
-		req.Model.Caps.LevelMap = map[Level]*string{LevelMedium: &max}
+		t.Run("eager_streaming_emitted_by_default", func(t *testing.T) {
+			tools := decode(t, buildBody(t, toolReq()))["tools"].([]any)
+			assert.Equal(t, true, tools[0].(map[string]any)["eager_input_streaming"])
+		})
 
-		m := decode(t, buildBody(t, req))
-		assert.Equal(t, "max", m["output_config"].(map[string]any)["effort"])
-	})
+		t.Run("eager_streaming_absent_when_cleared", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.EagerToolInputStreaming = false
 
-	t.Run("temperature_dropped_on_adaptive", func(t *testing.T) {
-		req := baseReq()
-		temp := 0.7
-		req.Temperature = &temp
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
-		req.Model.Caps.ForceAdaptiveThinking = true
+			tools := decode(t, buildBody(t, req))["tools"].([]any)
+			assert.NotContains(t, tools[0].(map[string]any), "eager_input_streaming")
+		})
 
-		m := decode(t, buildBody(t, req))
-		assert.NotContains(t, m, "temperature")
-		think := m["thinking"].(map[string]any)
-		assert.Equal(t, "adaptive", think["type"])
-		assert.Equal(t, "summarized", think["display"])
-	})
+		t.Run("tool_cache_marker_gated_on_capability", func(t *testing.T) {
+			req := toolReq()
+			req.Cache = CachePolicy{Enabled: true}
+			req.Model.Caps.CacheControlOnTools = false
 
-	t.Run("off_null_suppresses_the_thinking_key", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelOff}
-		req.Model.Caps.LevelMap = map[Level]*string{LevelOff: nil}
+			m := decode(t, buildBody(t, req))
+			tools := m["tools"].([]any)
+			assert.NotContains(t, tools[0].(map[string]any), "cache_control")
+			// the system breakpoint still lands
+			system := m["system"].([]any)[0].(map[string]any)
+			assert.Equal(t, "ephemeral", system["cache_control"].(map[string]any)["type"])
+		})
 
-		m := decode(t, buildBody(t, req))
-		assert.NotContains(t, m, "thinking")
-	})
+		t.Run("strict_schema_when_capable", func(t *testing.T) {
+			req := toolReq()
+			schema := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)
+			req.Model.Caps.SupportsStrictTools = true
+			req.Tools[0].Parameters = schema
 
-	t.Run("budget_shape_sends_summarized_display", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelMedium}
+			tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+			assert.Equal(t, true, tool["strict"])
+			// the rewrite makes every property required and closes the object
+			input := tool["input_schema"].(map[string]any)
+			assert.Equal(t, []any{"path"}, input["required"])
+			assert.Equal(t, false, input["additionalProperties"])
+		})
 
-		m := decode(t, buildBody(t, req))
-		think := m["thinking"].(map[string]any)
-		assert.Equal(t, "enabled", think["type"])
-		assert.Equal(t, "summarized", think["display"])
-	})
+		t.Run("strict_zero_arg_tool_required_array", func(t *testing.T) {
+			// the property-less shape must stay a valid schema: required [] not null
+			req := toolReq()
+			req.Model.Caps.SupportsStrictTools = true
+			req.Tools[0].Parameters = json.RawMessage(`{"type":"object","properties":{}}`)
 
-	t.Run("non_reasoning_models_emit_no_thinking", func(t *testing.T) {
-		req := baseReq()
-		req.Reasoning = ReasoningConfig{Level: LevelOff}
-		req.Model.Caps.Reasoning = false
+			tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+			assert.Equal(t, true, tool["strict"])
+			input := tool["input_schema"].(map[string]any)
+			assert.Equal(t, []any{}, input["required"])
+			assert.Equal(t, false, input["additionalProperties"])
+		})
 
-		m := decode(t, buildBody(t, req))
-		assert.NotContains(t, m, "thinking")
+		t.Run("strict_flag_absent_without_capability", func(t *testing.T) {
+			// the default caps leave SupportsStrictTools off and schemas untouched
+			tool := decode(t, buildBody(t, toolReq()))["tools"].([]any)[0].(map[string]any)
+			assert.NotContains(t, tool, "strict")
+		})
+
+		t.Run("deferred_tool_offers_defer_loading", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.ToolReferences = true
+			req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+
+			var immediate, deferred map[string]any
+			for _, tool := range decode(t, buildBody(t, req))["tools"].([]any) {
+				switch m := tool.(map[string]any); m["name"] {
+				case "read":
+					immediate = m
+				case "read2":
+					deferred = m
+				}
+			}
+			assert.NotContains(t, immediate, "defer_loading")
+			assert.Equal(t, true, deferred["defer_loading"])
+		})
+
+		t.Run("all_deferred_promotes_to_immediate", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.ToolReferences = true
+			req.Tools[0].Deferred = true // the only tool, so nothing to reference later
+
+			tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+			assert.NotContains(t, tool, "defer_loading")
+		})
+
+		t.Run("no_defer_loading_without_references", func(t *testing.T) {
+			req := toolReq()
+			req.Tools[0].Deferred = true // capable flag off, so nothing is offered deferred
+
+			tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
+			assert.NotContains(t, tool, "defer_loading")
+		})
+
+		t.Run("added_tools_become_message_references", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.ToolReferences = true
+			req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+			req.Messages = []Message{
+				{Role: RoleUser, Content: BlockList{ToolResultBlock{
+					CallID: "call_1", ToolName: "read2",
+					Content:        BlockList{TextBlock{Text: "ok"}},
+					AddedToolNames: []string{"read2"},
+				}}},
+			}
+
+			body := string(buildBody(t, req))
+			assert.Contains(t, body, `"type":"tool_reference","tool_name":"read2"`)
+		})
+
+		t.Run("non_deferred_tool_not_referenced", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.ToolReferences = true
+			req.Messages = []Message{
+				{Role: RoleUser, Content: BlockList{ToolResultBlock{
+					CallID: "call_1", ToolName: "read", // read is not offered defer_loading
+					Content:        BlockList{TextBlock{Text: "ok"}},
+					AddedToolNames: []string{"read"},
+				}}},
+			}
+
+			body := string(buildBody(t, req))
+			assert.NotContains(t, body, "tool_reference")
+		})
+
+		t.Run("displaced_content_follows_references", func(t *testing.T) {
+			req := toolReq()
+			req.Model.Caps.ToolReferences = true
+			req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
+			req.Messages = []Message{
+				{Role: RoleUser, Content: BlockList{ToolResultBlock{
+					CallID: "call_1", ToolName: "read2",
+					Content:        BlockList{TextBlock{Text: "payload"}},
+					AddedToolNames: []string{"read2"},
+				}}},
+			}
+
+			msgs, err := anthropicMessages(req, req.Model.Caps,
+				anthropicDeferredNames(req.Tools, req.Model.Caps))
+			require.NoError(t, err)
+			order := make([]string, 0, len(msgs[0].Content))
+			for _, b := range msgs[0].Content {
+				order = append(order, b.Type)
+			}
+			assert.Equal(t, []string{"tool_result", "text"}, order) // references in result, content after
+		})
+
+		t.Run("malformed_tool_input_still_builds", func(t *testing.T) {
+			// a local model's never-valid argument JSON failed the whole body marshal,
+			// breaking every later request of the live session
+			req := toolReq()
+			req.Messages = []Message{
+				{Role: RoleAssistant, Content: BlockList{
+					ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
+				}},
+				{Role: RoleUser, Content: BlockList{
+					ToolResultBlock{CallID: "c1", IsError: true,
+						Content: BlockList{TextBlock{Text: "malformed tool arguments"}}},
+				}},
+			}
+
+			body, err := buildAnthropicBody(req)
+			require.NoError(t, err)
+			msgs := decode(t, body)["messages"].([]any)
+			block := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+			assert.Equal(t, map[string]any{}, block["input"])
+		})
 	})
 }
 
@@ -900,195 +1043,6 @@ func TestAnthropicHeaders(t *testing.T) {
 		events := collect(t, s)
 		require.NotEmpty(t, events)
 		assert.Equal(t, betaInterleavedThinking, req.Header.Get("anthropic-beta"))
-	})
-}
-
-func TestBuildAnthropicBodyToolsAndCache(t *testing.T) {
-	t.Parallel()
-
-	baseReq := func() Request {
-		return Request{
-			Model:     anthropicModel(nil),
-			System:    BlockList{TextBlock{Text: "be terse"}},
-			Messages:  []Message{Text(RoleUser, "hi")},
-			MaxTokens: 16000,
-			Tools:     []ToolSchema{{Name: "read", Parameters: json.RawMessage(`{"type":"object"}`)}},
-		}
-	}
-	decode := func(t *testing.T, body []byte) map[string]any {
-		t.Helper()
-
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(body, &m))
-		return m
-	}
-
-	t.Run("eager_streaming_emitted_by_default", func(t *testing.T) {
-		tools := decode(t, buildBody(t, baseReq()))["tools"].([]any)
-		assert.Equal(t, true, tools[0].(map[string]any)["eager_input_streaming"])
-	})
-
-	t.Run("eager_streaming_absent_when_cleared", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.EagerToolInputStreaming = false
-
-		tools := decode(t, buildBody(t, req))["tools"].([]any)
-		assert.NotContains(t, tools[0].(map[string]any), "eager_input_streaming")
-	})
-
-	t.Run("tool_cache_marker_gated_on_capability", func(t *testing.T) {
-		req := baseReq()
-		req.Cache = CachePolicy{Enabled: true}
-		req.Model.Caps.CacheControlOnTools = false
-
-		m := decode(t, buildBody(t, req))
-		tools := m["tools"].([]any)
-		assert.NotContains(t, tools[0].(map[string]any), "cache_control")
-		// the system breakpoint still lands
-		system := m["system"].([]any)[0].(map[string]any)
-		assert.Equal(t, "ephemeral", system["cache_control"].(map[string]any)["type"])
-	})
-
-	t.Run("strict_schema_when_capable", func(t *testing.T) {
-		req := baseReq()
-		schema := json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)
-		req.Model.Caps.SupportsStrictTools = true
-		req.Tools[0].Parameters = schema
-
-		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
-		assert.Equal(t, true, tool["strict"])
-		// the rewrite makes every property required and closes the object
-		input := tool["input_schema"].(map[string]any)
-		assert.Equal(t, []any{"path"}, input["required"])
-		assert.Equal(t, false, input["additionalProperties"])
-	})
-
-	t.Run("strict_zero_arg_tool_required_array", func(t *testing.T) {
-		// the property-less shape must stay a valid schema: required [] not null
-		req := baseReq()
-		req.Model.Caps.SupportsStrictTools = true
-		req.Tools[0].Parameters = json.RawMessage(`{"type":"object","properties":{}}`)
-
-		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
-		assert.Equal(t, true, tool["strict"])
-		input := tool["input_schema"].(map[string]any)
-		assert.Equal(t, []any{}, input["required"])
-		assert.Equal(t, false, input["additionalProperties"])
-	})
-
-	t.Run("strict_flag_absent_without_capability", func(t *testing.T) {
-		// the default caps leave SupportsStrictTools off and schemas untouched
-		tool := decode(t, buildBody(t, baseReq()))["tools"].([]any)[0].(map[string]any)
-		assert.NotContains(t, tool, "strict")
-	})
-
-	t.Run("deferred_tool_offers_defer_loading", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.ToolReferences = true
-		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
-
-		var immediate, deferred map[string]any
-		for _, tool := range decode(t, buildBody(t, req))["tools"].([]any) {
-			switch m := tool.(map[string]any); m["name"] {
-			case "read":
-				immediate = m
-			case "read2":
-				deferred = m
-			}
-		}
-		assert.NotContains(t, immediate, "defer_loading")
-		assert.Equal(t, true, deferred["defer_loading"])
-	})
-
-	t.Run("all_deferred_promotes_to_immediate", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.ToolReferences = true
-		req.Tools[0].Deferred = true // the only tool, so nothing to reference later
-
-		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
-		assert.NotContains(t, tool, "defer_loading")
-	})
-
-	t.Run("no_defer_loading_without_references", func(t *testing.T) {
-		req := baseReq()
-		req.Tools[0].Deferred = true // capable flag off, so nothing is offered deferred
-
-		tool := decode(t, buildBody(t, req))["tools"].([]any)[0].(map[string]any)
-		assert.NotContains(t, tool, "defer_loading")
-	})
-
-	t.Run("added_tools_become_message_references", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.ToolReferences = true
-		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
-		req.Messages = []Message{
-			{Role: RoleUser, Content: BlockList{ToolResultBlock{
-				CallID: "call_1", ToolName: "read2",
-				Content:        BlockList{TextBlock{Text: "ok"}},
-				AddedToolNames: []string{"read2"},
-			}}},
-		}
-
-		body := string(buildBody(t, req))
-		assert.Contains(t, body, `"type":"tool_reference","tool_name":"read2"`)
-	})
-
-	t.Run("non_deferred_tool_not_referenced", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.ToolReferences = true
-		req.Messages = []Message{
-			{Role: RoleUser, Content: BlockList{ToolResultBlock{
-				CallID: "call_1", ToolName: "read", // read is not offered defer_loading
-				Content:        BlockList{TextBlock{Text: "ok"}},
-				AddedToolNames: []string{"read"},
-			}}},
-		}
-
-		body := string(buildBody(t, req))
-		assert.NotContains(t, body, "tool_reference")
-	})
-
-	t.Run("displaced_content_follows_references", func(t *testing.T) {
-		req := baseReq()
-		req.Model.Caps.ToolReferences = true
-		req.Tools = append(req.Tools, ToolSchema{Name: "read2", Deferred: true})
-		req.Messages = []Message{
-			{Role: RoleUser, Content: BlockList{ToolResultBlock{
-				CallID: "call_1", ToolName: "read2",
-				Content:        BlockList{TextBlock{Text: "payload"}},
-				AddedToolNames: []string{"read2"},
-			}}},
-		}
-
-		msgs, err := anthropicMessages(req, req.Model.Caps,
-			anthropicDeferredNames(req.Tools, req.Model.Caps))
-		require.NoError(t, err)
-		order := make([]string, 0, len(msgs[0].Content))
-		for _, b := range msgs[0].Content {
-			order = append(order, b.Type)
-		}
-		assert.Equal(t, []string{"tool_result", "text"}, order) // references in result, content after
-	})
-
-	t.Run("malformed_tool_input_still_builds", func(t *testing.T) {
-		// a local model's never-valid argument JSON failed the whole body marshal,
-		// breaking every later request of the live session
-		req := baseReq()
-		req.Messages = []Message{
-			{Role: RoleAssistant, Content: BlockList{
-				ToolCallBlock{ID: "c1", Name: "read", Input: json.RawMessage(`{"pa`)},
-			}},
-			{Role: RoleUser, Content: BlockList{
-				ToolResultBlock{CallID: "c1", IsError: true,
-					Content: BlockList{TextBlock{Text: "malformed tool arguments"}}},
-			}},
-		}
-
-		body, err := buildAnthropicBody(req)
-		require.NoError(t, err)
-		msgs := decode(t, body)["messages"].([]any)
-		block := msgs[0].(map[string]any)["content"].([]any)[0].(map[string]any)
-		assert.Equal(t, map[string]any{}, block["input"])
 	})
 }
 

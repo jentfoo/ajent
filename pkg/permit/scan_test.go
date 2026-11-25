@@ -30,87 +30,6 @@ func TestScanCommandSegmentsAndRawAligned(t *testing.T) {
 	}
 }
 
-func TestScanOperatorsInsideQuotesAreInert(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		in     string
-		split  bool
-		unsafe bool
-	}{
-		{`semicolon in double`, `echo "a;b"`, false, false},
-		{"redirect in single", "echo 'x > y'", false, false},
-		// $() inside double quotes expands and executes, unsafe but not a split
-		{"subst in double", `echo "$(pwd)"`, false, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := scanCommand(c.in)
-			assert.Equal(t, c.split, s.HasSplitOp)
-			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
-		})
-	}
-}
-
-func TestScanRedirects(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		in     string
-		split  bool
-		unsafe bool
-	}{
-		{`plain redirect`, "cat f > out", false, false},
-		{`dev null discards`, "ls > /dev/null", false, false},
-		{"amp dev null not split", "cmd &>/dev/null", false, false},
-		{"stderr merge", "cmd 2>&1", false, false},
-		// bare 2>&1 discards, the & in 2>&12 reading as a background operator
-		{"fd twelve is a real target", "cmd 2>&12", true, true},
-		{"word digit not eaten", "cat file1> /dev/null", false, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			s := scanCommand(c.in)
-			assert.Equal(t, c.split, s.HasSplitOp)
-			assert.Equal(t, c.unsafe, s.HasUnsafeOp)
-		})
-	}
-}
-
-func TestScanSplitOps(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ name, in string }{
-		{"double amp", "a && b"},
-		{"or op", "a || b"},
-		{"pipe", "a | b"},
-		{"semicolon", "a;b"},
-		{"background", "a & b"},
-		{"newline", "a\nb"},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.True(t, scanCommand(c.in).HasSplitOp)
-		})
-	}
-}
-
-func TestScanUnterminatedQuoteIsUnsafe(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ name, in string }{
-		{"double unclosed", `echo "unclosed`},
-		{"single unclosed", `echo 'oops`},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.True(t, scanCommand(c.in).HasUnsafeOp)
-		})
-	}
-}
-
 func TestMatchNullRedirect(t *testing.T) {
 	t.Parallel()
 
@@ -254,23 +173,32 @@ func TestScannerCorpus(t *testing.T) {
 		{"pipeline split", `grep foo f.txt | sort`, true, false},
 		// quoting
 		{`semicolon single quoted`, `echo 'a;b'`, false, false},
+		{`semicolon in double`, `echo "a;b"`, false, false},
+		{"redirect in single", "echo 'x > y'", false, false},
 		{`ampersand double quoted`, `echo "x & y"`, false, false},
 		{`pipe inside quotes`, `grep "|" f`, false, false},
+		// $() inside double quotes expands and executes, unsafe but not a split
 		{`subst in double unsafe`, `echo "$(date)"`, false, true},
+		{"subst pwd unsafe", `echo "$(pwd)"`, false, true},
 		{"backtick in double unsafe", "echo \"`pwd`\"", false, true},
-		{`unterminated single`, `cat 'oops`, false, true},
+		{`unterminated single cat`, `cat 'oops`, false, true},
+		{`unterminated single echo`, `echo 'oops`, false, true},
+		{"unterminated double", `echo "unclosed`, false, true},
 		{`escaped space outside quotes`, `ls a\ b`, false, false},
 		// redirects
 		{"append", "cmd >> log", false, false},
+		{"plain redirect", "cat f > out", false, false},
+		{"dev null discards", "ls > /dev/null", false, false},
 		{"stderr merge ok", "cmd 2>&1", false, false},
+		// bare 2>&1 discards, the & in 2>&12 reading as a background operator
 		{"fd twelve real target", "cmd 2>&12", true, true},
 		{"amp dev null inert", "ls &>/dev/null", false, false},
+		{"amp dev null cmd", "cmd &>/dev/null", false, false},
 		{"word digit not eaten", "cat file1> /dev/null", false, false},
 		{`dev null foo is a file`, `echo hi >/dev/nullfoo`, false, false},
 		{`backtick unsafe`, "cmd `id`", false, true},
-		// input redirect: an ordinary file target stays auto-allowable and never
-		// records as a write, the network pseudo-device flagging unsafe instead.
-		// Output and <> forms record and prompt through the write paths.
+		// input redirect: file targets stay safe, network pseudo-devices flag unsafe;
+		// output and <> forms record as writes through the write paths
 		{"input plain file", "cat < Makefile", false, false},
 		{"input network tcp", "cat < /dev/tcp/host/4444", false, true},
 		{"input network udp", "cat < /dev/udp/host/53", false, true},
@@ -287,8 +215,10 @@ func TestScannerCorpus(t *testing.T) {
 		// split operators
 		{"double amp", "a && b", true, false},
 		{"or op", "a || b", true, false},
+		{"pipe", "a | b", true, false},
 		{"semicolon", "a;b", true, false},
-		{"background", "sleep 5 &", true, false},
+		{"background sleep", "sleep 5 &", true, false},
+		{"bare background", "a & b", true, false},
 		{"newline", "a\nb", true, false},
 		// process substitution
 		{`process subst`, `grep -f <(cat x)`, false, true},
@@ -332,9 +262,8 @@ func TestScanHeredocs(t *testing.T) {
 		{"here string not heredoc", "grep -f <<< x", []string{"grep -f <<< x"}, false},
 		// << inside arithmetic is a shift, never a marker (the $( itself is unsafe)
 		{"shift inside arithmetic", "echo $((1<<2)) && rm -rf /", []string{"echo $((1<<2))", "rm -rf /"}, true},
-		// a delimiter the marker parser rejects leaves the second < reading as one
-		// input redirect: its target word drops, the body lines stay segments, and
-		// nothing may read a backwards index
+		// a rejected delimiter leaves the second < reading as an input redirect:
+		// no phantom target word, body lines stay segments
 		{"newline crossing delimiter quote", "cat <<\\'E\nbody\nE'\\'tail", []string{"cat <", "body", `E""tail`}, false},
 	}
 	for _, c := range cases {

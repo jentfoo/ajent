@@ -142,19 +142,14 @@ func TestOverlayJSON(t *testing.T) {
 		assert.NotContains(t, models[0].(map[string]any), "vendorHint")
 	})
 
-	t.Run("malformed_base_is_an_error", func(t *testing.T) {
-		_, err := OverlayJSON([]byte("{ nope"), []byte(over), ovFile{})
-		require.Error(t, err)
-	})
-
-	t.Run("base_trailing_bytes_error", func(t *testing.T) {
-		// grafted content would be lost past the top-level value, so refuse
-		_, err := OverlayJSON([]byte(over+" junk"), []byte(over), ovFile{})
-		require.Error(t, err)
-	})
-
-	t.Run("malformed_over_is_an_error", func(t *testing.T) {
-		_, err := OverlayJSON(nil, []byte("{ nope"), ovFile{})
-		require.Error(t, err)
+	t.Run("invalid_inputs_error", func(t *testing.T) {
+		for _, in := range []struct{ base, over string }{
+			{"{ nope", over},
+			{over + " junk", over}, // grafted content would be lost past the top-level value
+			{"", "{ nope"},
+		} {
+			_, err := OverlayJSON([]byte(in.base), []byte(in.over), ovFile{})
+			require.Error(t, err)
+		}
 	})
 }

@@ -41,30 +41,22 @@ func TestSpanStubs(t *testing.T) {
 		assert.NotContains(t, stubs[0].Text, "more detail", "only the first line survives")
 	})
 
-	t.Run("superseded_read", func(t *testing.T) {
-		branch := []session.Entry{
-			callMsg("a1", "c1", "read", "/tmp/f.go"),
-			resultMsg("r1", "c1", "old body", false),
-			callMsg("a2", "c2", "read", "/tmp/f.go"),
-			resultMsg("r2", "c2", "new body", false),
+	t.Run("newer_success_supersedes", func(t *testing.T) {
+		for _, tc := range []struct{ first, next, marker string }{
+			{"read", "read", supersededReadMarker},
+			{"edit", "write", supersededEditMarker},
+		} {
+			branch := []session.Entry{
+				callMsg("a1", "c1", tc.first, "/tmp/f.go"),
+				resultMsg("r1", "c1", "old body", false),
+				callMsg("a2", "c2", tc.next, "/tmp/f.go"),
+				resultMsg("r2", "c2", "new body", false),
+			}
+			stubs := all(branch)
+			require.Len(t, stubs, 1)
+			assert.Equal(t, "c1", stubs[0].CallID)
+			assert.Equal(t, tc.marker, stubs[0].Text)
 		}
-		stubs := all(branch)
-		require.Len(t, stubs, 1)
-		assert.Equal(t, "c1", stubs[0].CallID)
-		assert.Contains(t, stubs[0].Text, "superseded")
-	})
-
-	t.Run("edit_before_write_stubbed", func(t *testing.T) {
-		branch := []session.Entry{
-			callMsg("a1", "c1", "edit", "/tmp/f.go"),
-			resultMsg("r1", "c1", "edited", false),
-			callMsg("a2", "c2", "write", "/tmp/f.go"),
-			resultMsg("r2", "c2", "written", false),
-		}
-		stubs := all(branch)
-		require.Len(t, stubs, 1)
-		assert.Equal(t, "c1", stubs[0].CallID)
-		assert.Contains(t, stubs[0].Text, "superseded")
 	})
 
 	t.Run("edit_after_write_kept", func(t *testing.T) {
@@ -163,9 +155,7 @@ func TestSpanStubs(t *testing.T) {
 		}
 	})
 
-	// unreachable on the real paths (synthetic error results fill aborts and the
-	// cut only fires on fully answered steps), but absence of success must never
-	// count as success
+	// unreachable on real paths, but absence of success must never count as success
 	t.Run("unanswered_call_counts_absent", func(t *testing.T) {
 		branch := []session.Entry{
 			callMsg("a1", "c1", "read", "/tmp/f.go"),
@@ -208,45 +198,39 @@ func TestSpanStubs(t *testing.T) {
 		}
 		assert.Empty(t, all(branch))
 	})
-}
 
-// The band is what the agent continues from, so nothing in it may be replaced.
-// but the rules must still *see* it, or a read superseded by a band read would
-// look like the newest copy of that file.
-func TestSpanStubsBandScope(t *testing.T) {
-	t.Parallel()
-
-	body := strings.Repeat("file body ", 20)
-	branch := []session.Entry{
-		callMsg("a1", "c1", "read", "/tmp/f.go"),
-		resultMsg("r1", "c1", body, false),
-		callMsg("a2", "c2", "read", "/tmp/f.go"),
-		resultMsg("r2", "c2", body, false),
-	}
-
-	t.Run("emits_nothing_inside_the_band", func(t *testing.T) {
-		stubs := spanStubs(branch, 0, 2, "/tmp") // the band opens at the second step
-		for _, s := range stubs {
-			assert.NotEqual(t, "c2", s.CallID)
+	// band entries stay visible to the rules but are never replaced
+	t.Run("band_not_emitted_but_detected", func(t *testing.T) {
+		body := strings.Repeat("file body ", 20)
+		branch := []session.Entry{
+			callMsg("a1", "c1", "read", "/tmp/f.go"),
+			resultMsg("r1", "c1", body, false),
+			callMsg("a2", "c2", "read", "/tmp/f.go"),
+			resultMsg("r2", "c2", body, false),
 		}
-	})
 
-	t.Run("detects_across_the_band", func(t *testing.T) {
-		stubs := spanStubs(branch, 0, 2, "/tmp")
+		stubs := spanStubs(branch, 0, 2, "/tmp") // the band opens at the second step
 		require.Len(t, stubs, 1)
 		assert.Equal(t, "c1", stubs[0].CallID)
+		assert.NotContains(t, []string{stubs[0].CallID}, "c2")
 		assert.Equal(t, supersededReadMarker, stubs[0].Text)
 	})
 
-	t.Run("duplicate_keeper_survives_the_cut", func(t *testing.T) {
-		// the keeper is inside the band, so the span copy must stay whole rather
-		// than point at something the summariser cannot see
-		dup := []session.Entry{
-			callMsg("a1", "c1", "bash", ""),
-			resultMsg("r1", "c1", body, false),
+	// a long run of identical greps: everything after the first collapses
+	t.Run("scale_dedupes_identical_runs", func(t *testing.T) {
+		var branch []session.Entry
+		body := strings.Repeat("match ", 50)
+		for i := 1; i <= 8; i++ {
+			s := strconv.Itoa(i)
+			branch = append(branch,
+				callMsg("a"+s, "c"+s, "grep", ""),
+				resultMsg("r"+s, "c"+s, body, false))
 		}
-		stubs := spanStubs(dup, 0, len(dup), "/tmp")
-		assert.Empty(t, stubs)
+		stubs := spanStubs(branch, 0, len(branch), "/tmp")
+		assert.Len(t, stubs, 7)
+		for _, txt := range stubTexts(stubs) {
+			assert.Equal(t, dupMarker, txt)
+		}
 	})
 }
 
@@ -264,34 +248,9 @@ func TestFailedStub(t *testing.T) {
 		assert.Equal(t, "[tool read failed: output dropped]", failedStub("read", tr))
 	})
 
-	t.Run("long_first_line_clipped", func(t *testing.T) {
-		tr := llm.ToolResultBlock{CallID: "c1", IsError: true,
-			Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("e", 200)}}}
-		assert.Less(t, len([]rune(failedStub("bash", tr))), 120)
-	})
-
 	t.Run("clip_respects_the_80_rune_cap", func(t *testing.T) {
 		tr := llm.ToolResultBlock{CallID: "c1", IsError: true,
 			Content: llm.BlockList{llm.TextBlock{Text: strings.Repeat("e", 200)}}}
 		assert.Len(t, []rune(failedStub("bash", tr)), len("[tool bash failed: ")+80+len("]"))
 	})
-}
-
-func TestSpanStubsScale(t *testing.T) {
-	t.Parallel()
-
-	// a long run of identical greps: everything after the first collapses
-	var branch []session.Entry
-	body := strings.Repeat("match ", 50)
-	for i := 1; i <= 8; i++ {
-		s := strconv.Itoa(i)
-		branch = append(branch,
-			callMsg("a"+s, "c"+s, "grep", ""),
-			resultMsg("r"+s, "c"+s, body, false))
-	}
-	stubs := spanStubs(branch, 0, len(branch), "/tmp")
-	assert.Len(t, stubs, 7)
-	for _, txt := range stubTexts(stubs) {
-		assert.Equal(t, dupMarker, txt)
-	}
 }

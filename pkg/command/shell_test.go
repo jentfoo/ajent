@@ -98,8 +98,7 @@ func TestStagerRunsAndFlushesInOrder(t *testing.T) {
 		return sink.starts == 2
 	}, time.Second, time.Millisecond)
 
-	// budget clears the bash tool's 5s WaitDelay ceiling so a slow CI runner
-	// (throttled login-shell startup) doesn't flake, a genuine hang still failing.
+	// clears the bash tool's 5s WaitDelay even on a throttled CI login shell
 	require.Eventually(t, func() bool { return !s.Pending() }, 10*time.Second, time.Millisecond)
 	msgs := s.Flush(t.Context())
 	require.Len(t, msgs, 2)

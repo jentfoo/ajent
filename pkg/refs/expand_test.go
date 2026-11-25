@@ -126,8 +126,7 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "ls *.txt")
 	})
 
-	// an existing bracketed directory resolves literally instead of listing what
-	// its name would match, and dedupes on a repeat like any dir listing
+	// an existing bracketed dir lists literally and dedupes on repeat
 	t.Run("metachar_dir_lists_literal", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "weird[1]"), 0o700))
@@ -139,13 +138,11 @@ func TestExpand(t *testing.T) {
 		require.Len(t, injected(t, res), 2)
 		assert.Contains(t, sink.starts, "ls weird[1]")
 
-		// the listing landed and was observed: a repeat is deduped like any dir,
-		// never re-listed through the glob branch
+		// observed once: a repeat is deduped like any dir listing
 		assert.Empty(t, injected(t, x.Expand("list @weird[1] again")))
 	})
 
-	// an existing bracketed file reads literally; its name must not become a
-	// pattern that injects a sibling's listing or an ls error string
+	// an existing bracketed file reads literally, never glob-matches the sibling
 	t.Run("metachar_file_reads_literal", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "weird[1].txt"), []byte("content\n"), 0o600))
@@ -236,8 +233,7 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "read my notes.txt")
 	})
 
-	// an annotation on an escaped name re-escapes on rebuild, so re-expanding the
-	// annotated text replaces the measurement instead of stacking a second one
+	// re-expanding the annotated text replaces the measurement, never stacks one
 	t.Run("escaped_annotation_round_trips", func(t *testing.T) {
 		dir := t.TempDir()
 		writeBigLines(t, dir, "big notes.go")
@@ -264,29 +260,29 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 	})
 
-	// sentence-final '.' and ':' ride inside the token; when the written form
-	// names nothing real they are retried without them
-	t.Run("sentence_period_trims_to_file", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o600))
-		x, sink := newExpander(t, dir)
+	// sentence-final '.' and ':' ride inside a resolving token
+	t.Run("sentence_punct_trims_to_file", func(t *testing.T) {
+		cases := []struct {
+			name string
+			in   string
+			file string // what the trimmed token must read
+		}{
+			{"period", "Explain @main.go.", "main.go"},
+			{"colon", "see @a.txt: it explains", "a.txt"},
+		}
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				dir := t.TempDir()
+				require.NoError(t, os.WriteFile(filepath.Join(dir, c.file), []byte("hi\n"), 0o600))
+				x, sink := newExpander(t, dir)
 
-		res := x.Expand("Explain @main.go.")
-		assert.Equal(t, "Explain @main.go.", res.Text) // prose keeps the period
-		assert.Empty(t, res.Notices)
-		require.Len(t, injected(t, res), 2)
-		assert.Contains(t, sink.starts, "read main.go")
-	})
-
-	t.Run("sentence_colon_trims_to_file", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.txt"), []byte("hi\n"), 0o600))
-		x, sink := newExpander(t, dir)
-
-		res := x.Expand("see @a.txt: it explains")
-		assert.Empty(t, res.Notices)
-		require.Len(t, injected(t, res), 2)
-		assert.Contains(t, sink.starts, "read a.txt")
+				res := x.Expand(c.in)
+				assert.Equal(t, c.in, res.Text) // prose keeps the punctuation
+				assert.Empty(t, res.Notices)
+				require.Len(t, injected(t, res), 2)
+				assert.Contains(t, sink.starts, "read "+c.file)
+			})
+		}
 	})
 
 	// piped headless input keeps interior CRLF; every line-ending ref must still resolve
@@ -325,8 +321,7 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, sink.starts, "read ./a.go")
 	})
 
-	// a written form that resolves is never reinterpreted: both spellings exist,
-	// the token must keep its trailing dot
+	// an existing written form wins, keeping its trailing dot
 	t.Run("existing_written_form_wins", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, name := range []string{"cfg", "cfg."} {
@@ -361,8 +356,7 @@ func TestExpand(t *testing.T) {
 		assert.Contains(t, res.Notices[0], "@... not found")
 	})
 
-	// a trimmed large reference annotates under its written token, and
-	// re-expanding that annotation replaces rather than doubles it
+	// the trimmed ref annotates under its written token and survives re-expansion
 	t.Run("trimmed_large_file_annotates", func(t *testing.T) {
 		dir := t.TempDir()
 		writeBigLines(t, dir, "big.go")
@@ -376,43 +370,25 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(again.Text, "lines"))
 	})
 
-	t.Run("dedupes_unchanged_file", func(t *testing.T) {
+	t.Run("changed_file_reinjects_new_id", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "a.go")
 		require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o600))
 		x, _ := newExpander(t, dir)
 
-		// first expand reads it (observes in the tracker)
-		res1 := x.Expand("@a.go")
-		require.Len(t, injected(t, res1), 2)
+		// first inclusion reads the file; an unchanged re-expand dedupes
+		first := toolCallIDs(injected(t, x.Expand("@a.go")))
+		require.Len(t, first, 1)
+		assert.Empty(t, injected(t, x.Expand("@a.go")))
 
-		// second expand: file unchanged in the tracker, nothing injected
-		res2 := x.Expand("@a.go")
-		assert.Empty(t, injected(t, res2))
-	})
-
-	t.Run("reinjects_when_file_changes", func(t *testing.T) {
-		dir := t.TempDir()
-		p := filepath.Join(dir, "a.go")
-		require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o600))
-		x, _ := newExpander(t, dir)
-
-		// first inclusion reads the file and injects it
-		res1 := x.Expand("@a.go")
-		require.Len(t, injected(t, res1), 2)
-
-		// unchanged: not injected again
-		res2 := x.Expand("@a.go")
-		assert.Empty(t, injected(t, res2))
-
-		// hash changed: must be read and injected again
+		// hash changed: read and injected again under a fresh call id
 		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
-		res3 := x.Expand("@a.go")
-		require.Len(t, injected(t, res3), 2)
+		again := toolCallIDs(injected(t, x.Expand("@a.go")))
+		require.Len(t, again, 1)
+		assert.NotEqual(t, first[0], again[0])
 
 		// unchanged again: deduped once more
-		res4 := x.Expand("@a.go")
-		assert.Empty(t, injected(t, res4))
+		assert.Empty(t, injected(t, x.Expand("@a.go")))
 	})
 
 	t.Run("replaces_existing_annotation", func(t *testing.T) {
@@ -472,9 +448,7 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
 	})
 
-	// a file whose written path equals "ls-" plus a directory's path would mint
-	// the read and the listing one shared tool_use id: the exact duplicate the
-	// run number cannot separate
+	// a file named "ls-"+dir must not share its tool_use id with that dir's listing
 	t.Run("ls_named_file_keeps_ids_distinct", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "src"), 0o700))
@@ -485,6 +459,19 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, []string{"ref-1-ls-src", "ref-1-r-ls-src"}, toolCallIDs(injected(t, res)))
 	})
 
+	// the invariant that keeps a written path from imitating another kind's id:
+	// any kind prefixed by another admits a colliding path
+	t.Run("no_kind_prefixes_another", func(t *testing.T) {
+		for _, a := range []string{readKind, lsKind} {
+			for _, b := range []string{readKind, lsKind} {
+				if a == b {
+					continue
+				}
+				assert.False(t, strings.HasPrefix(a, b))
+			}
+		}
+	})
+
 	t.Run("nothing_to_inject_no_run", func(t *testing.T) {
 		dir := t.TempDir()
 		x, _ := newExpander(t, dir)
@@ -493,8 +480,7 @@ func TestExpand(t *testing.T) {
 		assert.Nil(t, x.Expand("see @nope.go").Run)
 	})
 
-	// dedupe must not reorder: a repeat mention plans nothing, so its content
-	// lands where the user first named it, not at the last mention
+	// dedupe keeps first-mention position, never reorders
 	t.Run("duplicate_keeps_first_position", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.MkdirAll(filepath.Join(dir, "sub"), 0o700))
@@ -505,8 +491,7 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
 	})
 
-	// relative, dot-slash and absolute spellings of one file share a resolved
-	// key, so the message plans one read at the first mention
+	// every spelling of one file dedupes to a single planned read
 	t.Run("spelling_variants_dedupe", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o600))
@@ -536,8 +521,7 @@ func TestExpand(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(res.Text, "(binary,"))
 	})
 
-	// a file too large to inject still dedupes its per-file refusal: a repeated
-	// mention must not repeat the notice either
+	// an oversized file's refusal is deduped like any other outcome
 	t.Run("repeat_oversized_notices_once", func(t *testing.T) {
 		dir := t.TempDir()
 		writeBigLines(t, dir, "big.go")
@@ -556,8 +540,7 @@ func TestExpand(t *testing.T) {
 		x, _ := newExpander(t, dir)
 
 		res := x.Expand("compare @a.go with @a.go, then @sub and @sub")
-		// a repeated path must not duplicate its content, and must never repeat a
-		// call id: Anthropic rejects a request whose tool_use ids collide
+		// one injection per path; colliding call ids are rejected by the API
 		assert.Equal(t, []string{"ref-1-r-a.go", "ref-1-ls-sub"}, toolCallIDs(injected(t, res)))
 	})
 
@@ -600,50 +583,24 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, res.Run(ctx))
 	})
 
-	t.Run("repeat_reference_mints_new_id", func(t *testing.T) {
+	// a listed dir dedupes while unchanged and re-lists once its contents change
+	t.Run("dir_dedupes_until_changed", func(t *testing.T) {
 		dir := t.TempDir()
-		p := filepath.Join(dir, "a.go")
-		require.NoError(t, os.WriteFile(p, []byte("package a\n"), 0o600))
-		x, _ := newExpander(t, dir)
-
-		first := toolCallIDs(injected(t, x.Expand("@a.go")))
-		require.NoError(t, os.WriteFile(p, []byte("package a\nvar X = 1\n"), 0o600))
-		second := toolCallIDs(injected(t, x.Expand("@a.go")))
-
-		require.Len(t, first, 1)
-		require.Len(t, second, 1)
-		assert.NotEqual(t, first[0], second[0])
-	})
-
-	// an unchanged directory already listed is not re-listed by @
-	t.Run("unchanged_dir_not_relisted", func(t *testing.T) {
-		dir := t.TempDir()
-		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o700))
+		sub := filepath.Join(dir, "sub")
+		require.NoError(t, os.Mkdir(sub, 0o700))
 		x, _ := newExpander(t, dir)
 
 		// first @ lists it and observes the entries in the tracker
 		first := x.Expand("list @sub")
 		require.Len(t, injected(t, first), 2)
 
-		// second @ with unchanged contents: nothing injected
-		second := x.Expand("list @sub again")
-		assert.Empty(t, injected(t, second))
-	})
+		// unchanged contents: not re-listed
+		assert.Empty(t, injected(t, x.Expand("list @sub again")))
 
-	// a changed directory is listed again
-	t.Run("changed_dir_relisted", func(t *testing.T) {
-		dir := t.TempDir()
-		sub := filepath.Join(dir, "sub")
-		require.NoError(t, os.Mkdir(sub, 0o700))
-		x, _ := newExpander(t, dir)
-
-		first := x.Expand("list @sub")
-		require.Len(t, injected(t, first), 2)
-
-		// an added entry changes the listing, @ must list again
+		// an added entry changes the listing, listed again under a fresh id
 		require.NoError(t, os.WriteFile(filepath.Join(sub, "a.txt"), []byte("x"), 0o600))
-		second := x.Expand("list @sub")
-		assert.Equal(t, []string{"ref-2-ls-sub"}, toolCallIDs(injected(t, second)))
+		relisted := toolCallIDs(injected(t, x.Expand("list @sub")))
+		assert.Equal(t, []string{"ref-3-ls-sub"}, relisted)
 	})
 
 	// an agent ls run earlier dedupes a later @ reference to the same dir
@@ -662,8 +619,7 @@ func TestExpand(t *testing.T) {
 		assert.Empty(t, injected(t, res))
 	})
 
-	// a windowed read shows only part of the file, so @ must inject rather than
-	// dedupe against it; once a full read lands, later refs dedupe again
+	// a partial (windowed) read does not satisfy @; only a full one dedupes
 	t.Run("partial_read_reinjects", func(t *testing.T) {
 		dir := t.TempDir()
 		p := filepath.Join(dir, "a.txt")
@@ -699,35 +655,10 @@ func TestExpanderSeed(t *testing.T) {
 	assert.Equal(t, []string{"ref-5-r-a.go"}, toolCallIDs(injected(t, x.Expand("@a.go"))))
 }
 
-func TestInjectedIDs(t *testing.T) {
-	t.Parallel()
-
-	seq := agent.NewRunSequencer(idPrefix)
-
-	// the invariant that keeps a written path from imitating another kind's id:
-	// any kind prefixed by another admits a colliding path
-	t.Run("no_kind_prefixes_another", func(t *testing.T) {
-		for _, a := range []string{readKind, lsKind} {
-			for _, b := range []string{readKind, lsKind} {
-				if a == b {
-					continue
-				}
-				assert.False(t, strings.HasPrefix(a, b))
-			}
-		}
-	})
-
-	t.Run("read_and_ls_never_collide", func(t *testing.T) {
-		// the todo's exact pair must differ however the paths are chosen
-		assert.NotEqual(t, seq.CallID(1, readKind+"ls-src"), seq.CallID(1, lsKind+"src"))
-	})
-}
-
 func TestExpandTotalCap(t *testing.T) {
 	t.Parallel()
 
-	// one 90kb file fits RefTotal alone, two do not; 100 lines keeps it under
-	// RefInject so only the total cap can trip
+	// sized near half of RefTotal, under RefInject: only the total cap trips
 	t.Run("repeat_mention_not_annotated", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSizedLines(t, dir, "half.txt", 100, 900)
@@ -739,8 +670,7 @@ func TestExpandTotalCap(t *testing.T) {
 		assert.Equal(t, []string{"ref-1-r-half.txt"}, toolCallIDs(injected(t, res)))
 	})
 
-	// a fresh sibling pushing spent over must not annotate an unchanged file:
-	// its content is already in context, it reserves nothing against the cap
+	// an unchanged file reserves nothing against the total cap
 	t.Run("unchanged_file_not_annotated", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSizedLines(t, dir, "a.txt", 100, 900)
@@ -756,10 +686,7 @@ func TestExpandTotalCap(t *testing.T) {
 		assert.Equal(t, []string{"ref-2-r-b.txt"}, toolCallIDs(injected(t, res)))
 	})
 
-	// distinct fresh files over the cap together still decline one read, so the
-	// cap keeps biting on genuinely new content. The cap fills in mention order,
-	// so the later file is the one that does not fit, and the refusal names the
-	// budget rather than the file: neither is too large alone.
+	// fresh files fill the cap in mention order; overflow declines by budget
 	t.Run("distinct_files_annotate_overflow", func(t *testing.T) {
 		dir := t.TempDir()
 		writeSizedLines(t, dir, "a.txt", 100, 900)
@@ -857,13 +784,11 @@ func TestExpandReserve(t *testing.T) {
 		landed := tokens.EstimateMessages(res.Run(t.Context()))
 		require.NotZero(t, landed)
 
-		// the reserve holds the tokens from submit until the pair is appended, so it has
-		// to size exactly what lands: line-numbered text plus the call and result framing.
-		// Reserving the raw file size alone ran 16-20% short on a source file.
+		// the reserve must match what lands: framed, line-numbered content
 		assert.Equal(t, landed, res.Est)
 	})
 
-	// directory/glob references get a non-zero reserve even though they cannot be measured without walking.
+	// unmeasurable listings still reserve above zero
 	t.Run("lists_listings", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.Mkdir(filepath.Join(dir, "sub"), 0o755))
@@ -944,9 +869,7 @@ func TestExpandImages(t *testing.T) {
 		assert.Equal(t, 1, strings.Count(res.Text, "(image,"))
 	})
 
-	// image mentions pay their nominal size against the same aggregate cap as
-	// text reads, so enough distinct references decline instead of injecting
-	// without bound (the "over the cap" outcome recorded in command-design.md)
+	// image mentions pay the shared total cap like text reads
 	t.Run("image_mentions_pay_total_cap", func(t *testing.T) {
 		dir := t.TempDir()
 		for _, name := range []string{"one.png", "two.png", "three.png"} {

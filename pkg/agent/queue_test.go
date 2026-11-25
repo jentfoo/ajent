@@ -37,34 +37,56 @@ func TestRunningReportsState(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
 	close(block) // let it finish
 	require.NoError(t, <-errCh)
 	assert.False(t, a.Running())
 }
 
-func TestSteerDeliveredFiresWhenLanded(t *testing.T) {
+func TestSteerDelivery(t *testing.T) {
 	t.Parallel()
 
-	block := make(chan struct{})
-	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: toolCallEvents("c1", "bash")},
-		{Events: textOnly("done")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
+	// a turn pinned on an in-flight bash call so steers queue behind it
+	newBlockedTurn := func() (*Agent, chan struct{}) {
+		block := make(chan struct{})
+		set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+			{Events: toolCallEvents("c1", "bash")},
+			{Events: textOnly("done")},
+		}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.Tools = set
+		return a, block
+	}
 
-	var delivered int
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+	t.Run("fires_when_landed", func(t *testing.T) {
+		a, block := newBlockedTurn()
 
-	require.True(t, a.Steer(Input{Text: "nudge", Delivered: func() { delivered++ }}))
-	close(block) // let the tool finish so the steer lands at the next step boundary
-	require.NoError(t, <-errCh)
-	assert.Equal(t, 1, delivered)
+		var delivered int
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+
+		require.True(t, a.Steer(Input{Text: "nudge", Delivered: func() { delivered++ }}))
+		close(block) // let the tool finish so the steer lands at the next step boundary
+		require.NoError(t, <-errCh)
+		assert.Equal(t, 1, delivered)
+	})
+
+	t.Run("empty_never_delivered", func(t *testing.T) {
+		a, block := newBlockedTurn()
+
+		var delivered int
+		errCh := make(chan error, 1)
+		go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
+		require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+
+		require.True(t, a.Steer(Input{Delivered: func() { delivered++ }}))
+		close(block)
+		require.NoError(t, <-errCh)
+		assert.Equal(t, 0, delivered) // nothing landed, so no confirmation
+	})
 }
 
 func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
@@ -79,9 +101,8 @@ func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
 	a := newTestAgent(nil, p, nil)
 	a.opts.Tools = set
 
-	// the callback is armed mid-turn (once bash blocks) so its input lands at the
-	// step boundary after the tool result rather than riding turn one. The mutex
-	// keeps arming race-free against the loop goroutine reading it.
+	// armed once bash blocks so its input lands at the next step boundary,
+	// not riding turn one (the mutex keeps arming race-free with the loop)
 	var mu sync.Mutex
 	pending := []Input{}
 	a.opts.OnBoundary = func() []Input {
@@ -98,11 +119,11 @@ func TestOnBoundaryPullsAtStepBoundary(t *testing.T) {
 	var delivered int
 	errCh := make(chan error, 1)
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
+	require.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
 
 	// wait until bash is executing (blocked), then arm and release it
 	tool := set.tools["bash"].(*stubTool)
-	assert.Eventually(t, func() bool { return tool.callCount() >= 1 }, defaultTimeout, pollInterval)
+	require.Eventually(t, func() bool { return tool.callCount() >= 1 }, defaultTimeout, pollInterval)
 	mu.Lock()
 	pending = []Input{{Text: "nudge", Delivered: func() { delivered++ }}}
 	mu.Unlock()
@@ -135,29 +156,6 @@ func TestOnBoundaryEmptyIsNoop(t *testing.T) {
 	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
 	require.NoError(t, <-errCh)
 	assert.Equal(t, 1, called) // a single-step turn hits exactly one boundary
-}
-
-func TestSteerEmptyNeverDelivered(t *testing.T) {
-	t.Parallel()
-
-	block := make(chan struct{})
-	set := &mapSet{tools: map[string]Tool{"bash": &stubTool{name: "bash", result: "ok", block: block}}}
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-		{Events: toolCallEvents("c1", "bash")},
-		{Events: textOnly("done")},
-	}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.Tools = set
-
-	var delivered int
-	errCh := make(chan error, 1)
-	go func() { errCh <- a.Prompt(t.Context(), Input{Text: "x"}) }()
-	assert.Eventually(t, func() bool { return a.Running() }, defaultTimeout, pollInterval)
-
-	require.True(t, a.Steer(Input{Delivered: func() { delivered++ }}))
-	close(block)
-	require.NoError(t, <-errCh)
-	assert.Equal(t, 0, delivered) // nothing landed, so no confirmation
 }
 
 func TestPromptBehindDriverQueues(t *testing.T) {

@@ -50,114 +50,163 @@ func TestCanonical(t *testing.T) {
 	}
 }
 
-func TestFindMatchesTiers(t *testing.T) {
+func TestFindMatches(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name     string
-		buf, old string
-		new      string // defaults to "REPL", indent cases must share oldText's base
-		wantTier matchTier
-		wantText string // the file text the match covers, empty means no match
-	}{
-		{
-			name: "exact", buf: "var x = 1\n", old: "x = 1",
-			wantTier: tierExact, wantText: "x = 1",
-		},
-		{
-			name: "smart_quotes", buf: "msg := \"hello\"\n", old: "msg := “hello”",
-			wantTier: tierCanon, wantText: "msg := \"hello\"",
-		},
-		{
-			name: "nbsp_for_space", buf: "a := b\n", old: "a\u00a0:=\u00a0b",
-			wantTier: tierCanon, wantText: "a := b",
-		},
-		{
-			// the file's trailing run falls inside the span so nothing is stranded
-			name: "file_trailing_whitespace", buf: "x = 1   \ny = 2\n", old: "x = 1\ny = 2",
-			wantTier: tierCanon, wantText: "x = 1   \ny = 2",
-		},
-		{
-			name: "text_trailing_whitespace", buf: "x = 1\ny = 2\n", old: "x = 1   \ny = 2",
-			wantTier: tierCanon, wantText: "x = 1\ny = 2",
-		},
-		{
-			name:     "indent_shift_added",
-			buf:      "func f() {\n    if err != nil {\n        return err\n    }\n}\n",
-			old:      "if err != nil {\n    return err\n}",
-			wantTier: tierIndent, wantText: "    if err != nil {\n        return err\n    }",
-		},
-		{
-			name:     "indent_shift_reduced",
-			buf:      "\tfoo()\n\tbar()\n",
-			old:      "\t\tfoo()\n\t\tbar()",
-			new:      "\t\tfoo()\n\t\tbaz()",
-			wantTier: tierIndent, wantText: "\tfoo()\n\tbar()",
-		},
-		{
-			// nested tabs vs spaces is not a uniform shift, so refuse and let the
-			// diagnostics explain it rather than reformat the block
-			name: "nested_tab_space_refused",
-			buf:  "func f() {\n\tif x {\n\t\ty()\n\t}\n}\n",
-			old:  "if x {\n    y()\n}",
-		},
-		{name: "absent", buf: "the quick brown fox\n", old: "no such text"},
-	}
+	t.Run("tiers", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			buf, old string
+			new      string // defaults to "REPL", indent cases must share oldText's base
+			wantTier matchTier
+			wantText string // the file text the match covers, empty means no match
+		}{
+			{
+				name: "exact", buf: "var x = 1\n", old: "x = 1",
+				wantTier: tierExact, wantText: "x = 1",
+			},
+			{
+				name: "smart_quotes", buf: "msg := \"hello\"\n", old: "msg := “hello”",
+				wantTier: tierCanon, wantText: "msg := \"hello\"",
+			},
+			{
+				name: "nbsp_for_space", buf: "a := b\n", old: "a\u00a0:=\u00a0b",
+				wantTier: tierCanon, wantText: "a := b",
+			},
+			{
+				// the file's trailing run falls inside the span so nothing is stranded
+				name: "file_trailing_whitespace", buf: "x = 1   \ny = 2\n", old: "x = 1\ny = 2",
+				wantTier: tierCanon, wantText: "x = 1   \ny = 2",
+			},
+			{
+				name: "text_trailing_whitespace", buf: "x = 1\ny = 2\n", old: "x = 1   \ny = 2",
+				wantTier: tierCanon, wantText: "x = 1\ny = 2",
+			},
+			{
+				name:     "indent_shift_added",
+				buf:      "func f() {\n    if err != nil {\n        return err\n    }\n}\n",
+				old:      "if err != nil {\n    return err\n}",
+				wantTier: tierIndent, wantText: "    if err != nil {\n        return err\n    }",
+			},
+			{
+				name:     "indent_shift_reduced",
+				buf:      "\tfoo()\n\tbar()\n",
+				old:      "\t\tfoo()\n\t\tbar()",
+				new:      "\t\tfoo()\n\t\tbaz()",
+				wantTier: tierIndent, wantText: "\tfoo()\n\tbar()",
+			},
+			{
+				// nested tabs vs spaces is not a uniform shift, so refuse and let the
+				// diagnostics explain it rather than reformat the block
+				name: "nested_tab_space_refused",
+				buf:  "func f() {\n\tif x {\n\t\ty()\n\t}\n}\n",
+				old:  "if x {\n    y()\n}",
+			},
+			{name: "absent", buf: "the quick brown fox\n", old: "no such text"},
+		}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			repl := tc.new
-			if repl == "" {
-				repl = "REPL"
-			}
-			ms, tier := findMatches(tc.buf, tc.old, repl, nil)
-			if tc.wantText == "" {
-				assert.Empty(t, ms)
-				return
-			}
-			require.Len(t, ms, 1)
-			assert.Equal(t, tc.wantTier, tier)
-			assert.Equal(t, tc.wantText, tc.buf[ms[0].s:ms[0].e])
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				repl := tc.new
+				if repl == "" {
+					repl = "REPL"
+				}
+				ms, tier := findMatches(tc.buf, tc.old, repl, nil)
+				if tc.wantText == "" {
+					assert.Empty(t, ms)
+					return
+				}
+				require.Len(t, ms, 1)
+				assert.Equal(t, tc.wantTier, tier)
+				assert.Equal(t, tc.wantText, tc.buf[ms[0].s:ms[0].e])
+			})
+		}
+	})
+
+	t.Run("indent_replacement", func(t *testing.T) {
+		buf := "func f() {\n    if err != nil {\n        return err\n    }\n}\n"
+		ms, tier := findMatches(buf,
+			"if err != nil {\n    return err\n}",
+			"if err != nil {\n    return wrap(err)\n}", nil)
+		require.Len(t, ms, 1)
+		assert.Equal(t, tierIndent, tier)
+		assert.Equal(t, "    if err != nil {\n        return wrap(err)\n    }", ms[0].repl)
+	})
+
+	t.Run("indent_refuses_unshared_base", func(t *testing.T) {
+		buf := "func f() {\n    a()\n    b()\n}\n"
+		ms, _ := findMatches(buf, "  a()\n  b()", "  a()\nb()", nil)
+		assert.Empty(t, ms)
+	})
+
+	t.Run("tier_order", func(t *testing.T) {
+		buf := "value\n“value”\n"
+		ms, tier := findMatches(buf, "value", "X", nil)
+		assert.Equal(t, tierExact, tier)
+		require.Len(t, ms, 2) // the bare line and the copy inside the quotes
+	})
+
+	t.Run("ambiguous_fuzzy", func(t *testing.T) {
+		buf := "a := \"x\"\nb := \"x\"\n"
+		ms, tier := findMatches(buf, ":= “x”", "X", nil)
+		assert.Equal(t, tierCanon, tier)
+		assert.Len(t, ms, 2)
+	})
+
+	t.Run("refuses_to_fold_the_edit", func(t *testing.T) {
+		t.Run("dash_near_miss_refused", func(t *testing.T) {
+			// the file already holds the hyphen here, and the em dash the model quoted is
+			// somewhere else, so this must fail rather than report a no-op success
+			ms, _ := findMatches("title - subtitle\n", "title — subtitle", "title - subtitle", nil)
+			assert.Empty(t, ms)
 		})
-	}
-}
 
-func TestFindMatchesIndentReplacement(t *testing.T) {
-	t.Parallel()
+		t.Run("real_near_miss_matches", func(t *testing.T) {
+			ms, tier := findMatches("msg := \"hi\"\n", "msg := “hi”", "msg := \"bye\"", nil)
+			require.Len(t, ms, 1)
+			assert.Equal(t, tierCanon, tier)
+		})
 
-	buf := "func f() {\n    if err != nil {\n        return err\n    }\n}\n"
-	ms, tier := findMatches(buf,
-		"if err != nil {\n    return err\n}",
-		"if err != nil {\n    return wrap(err)\n}", nil)
-	require.Len(t, ms, 1)
-	assert.Equal(t, tierIndent, tier)
-	assert.Equal(t, "    if err != nil {\n        return wrap(err)\n    }", ms[0].repl)
-}
+		t.Run("self_replace_refuses_indent", func(t *testing.T) {
+			// the site's trailing whitespace makes the indent tier's replacement
+			// byte-different, so it would apply as a success while asking for nothing
+			ms, _ := findMatches("\tfoo bar  \n", "  foo bar", "  foo bar", nil)
+			assert.Empty(t, ms)
+		})
 
-func TestFindMatchesIndentRefusesUnsharedBase(t *testing.T) {
-	t.Parallel()
+		t.Run("self_replace_refuses_fuzzy", func(t *testing.T) {
+			// healing here cannot tell a duplicated newText from a mis-transcribed oldText
+			ms, _ := findMatches("timeout := 30 * time.Second\n",
+				"timeout := 60 * time.Second", "timeout := 60 * time.Second", nil)
+			assert.Empty(t, ms)
+		})
 
-	buf := "func f() {\n    a()\n    b()\n}\n"
-	ms, _ := findMatches(buf, "  a()\n  b()", "  a()\nb()", nil)
-	assert.Empty(t, ms)
-}
+		t.Run("indent_tier_stays_reachable", func(t *testing.T) {
+			// the guard skips the canon tier, but a block quoted one level out is
+			// still a provable match and must not be lost with it
+			buf := "\tif x {\n\t\tfoo — bar\n\t}\n"
+			ms, tier := findMatches(buf, "if x {\n\tfoo — bar\n}", "if x {\n\tfoo - bar\n}", nil)
+			require.Len(t, ms, 1)
+			assert.Equal(t, tierIndent, tier)
+			assert.Equal(t, "\tif x {\n\t\tfoo - bar\n\t}", ms[0].repl) // the file's indent is kept
+		})
+	})
 
-func TestFindMatchesTierOrder(t *testing.T) {
-	t.Parallel()
+	t.Run("refuses_blank_old_text", func(t *testing.T) {
+		ms, _ := findMatches("a\n\nb\n", "   \n  ", "   \n  //Z", nil)
+		assert.Empty(t, ms)
 
-	buf := "value\n“value”\n"
-	ms, tier := findMatches(buf, "value", "X", nil)
-	assert.Equal(t, tierExact, tier)
-	require.Len(t, ms, 2) // the bare line and the copy inside the quotes
-}
+		// a zero-width rune hides inside whitespace-only oldText, folding to bare newlines
+		ms, _ = findMatches("a\n b\n\nc\n", " \u200b\n", "x", nil) // canon tier would match every line boundary
+		assert.Empty(t, ms)
+		ms, _ = findMatches("a\nb\n", "\ufeff ", "x", nil)
+		assert.Empty(t, ms)
 
-func TestFindMatchesAmbiguousFuzzy(t *testing.T) {
-	t.Parallel()
-
-	buf := "a := \"x\"\nb := \"x\"\n"
-	ms, tier := findMatches(buf, ":= “x”", "X", nil)
-	assert.Equal(t, tierCanon, tier)
-	assert.Len(t, ms, 2)
+		// exact still applies: the file genuinely holds that whitespace text
+		ms, tier := findMatches("a\n   \nb\n", "   ", "xx", nil)
+		require.Len(t, ms, 1)
+		assert.Equal(t, tierExact, tier)
+	})
 }
 
 func TestFuzzyApplyMatchesExactApply(t *testing.T) {
@@ -257,47 +306,6 @@ func TestFuzzyDoesNotMaskDiagnostics(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no match for edit 1")
 	assert.Contains(t, err.Error(), "tab") // the indentation diagnostic still fires
-}
-
-func TestFindMatchesRefusesToFoldTheEdit(t *testing.T) {
-	t.Parallel()
-
-	t.Run("dash_near_miss_refused", func(t *testing.T) {
-		// the file already holds the hyphen here, and the em dash the model quoted is
-		// somewhere else, so this must fail rather than report a no-op success
-		ms, _ := findMatches("title - subtitle\n", "title — subtitle", "title - subtitle", nil)
-		assert.Empty(t, ms)
-	})
-
-	t.Run("real_near_miss_matches", func(t *testing.T) {
-		ms, tier := findMatches("msg := \"hi\"\n", "msg := “hi”", "msg := \"bye\"", nil)
-		require.Len(t, ms, 1)
-		assert.Equal(t, tierCanon, tier)
-	})
-
-	t.Run("self_replace_refuses_indent", func(t *testing.T) {
-		// the site's trailing whitespace makes the indent tier's replacement
-		// byte-different, so it would apply as a success while asking for nothing
-		ms, _ := findMatches("\tfoo bar  \n", "  foo bar", "  foo bar", nil)
-		assert.Empty(t, ms)
-	})
-
-	t.Run("self_replace_refuses_fuzzy", func(t *testing.T) {
-		// healing here cannot tell a duplicated newText from a mis-transcribed oldText
-		ms, _ := findMatches("timeout := 30 * time.Second\n",
-			"timeout := 60 * time.Second", "timeout := 60 * time.Second", nil)
-		assert.Empty(t, ms)
-	})
-
-	t.Run("indent_tier_stays_reachable", func(t *testing.T) {
-		// the guard skips the canon tier, but a block quoted one level out is
-		// still a provable match and must not be lost with it
-		buf := "\tif x {\n\t\tfoo — bar\n\t}\n"
-		ms, tier := findMatches(buf, "if x {\n\tfoo — bar\n}", "if x {\n\tfoo - bar\n}", nil)
-		require.Len(t, ms, 1)
-		assert.Equal(t, tierIndent, tier)
-		assert.Equal(t, "\tif x {\n\t\tfoo - bar\n\t}", ms[0].repl) // the file's indent is kept
-	})
 }
 
 func TestIndentMatchesColumnZero(t *testing.T) {
@@ -415,24 +423,6 @@ func TestPreserveQuoted(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, "\tif x {\n\t\tfoo - bar\n\t}\n", string(o.final))
 	})
-}
-
-func TestFindMatchesRefusesBlankOldText(t *testing.T) {
-	t.Parallel()
-
-	ms, _ := findMatches("a\n\nb\n", "   \n  ", "   \n  //Z", nil)
-	assert.Empty(t, ms)
-
-	// a zero-width rune hides inside whitespace-only oldText, folding to bare newlines
-	ms, _ = findMatches("a\n b\n\nc\n", " \u200b\n", "x", nil) // canon tier would match every line boundary
-	assert.Empty(t, ms)
-	ms, _ = findMatches("a\nb\n", "\ufeff ", "x", nil)
-	assert.Empty(t, ms)
-
-	// exact still applies: the file genuinely holds that whitespace text
-	ms, tier := findMatches("a\n   \nb\n", "   ", "xx", nil)
-	require.Len(t, ms, 1)
-	assert.Equal(t, tierExact, tier)
 }
 
 func TestShiftRanges(t *testing.T) {

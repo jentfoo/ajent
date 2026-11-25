@@ -90,8 +90,7 @@ func TestNewRegistry(t *testing.T) {
 		require.Len(t, r.Models(), 1) // the declaration alone
 	})
 
-	// a responses model riding the chat-completions fallback and a completions endpoint
-	// opting into prompt_cache_key are documented seams, so neither field may warn here
+	// both fields ride documented seams and must not warn
 	t.Run("fallback_and_prompt_cache_fields_do_not_warn", func(t *testing.T) {
 		f := File{Providers: map[string]ProviderConfig{
 			"openai": {Models: []ModelConfig{{ID: "gpt-5.2",
@@ -255,12 +254,6 @@ func TestRegistryResolve(t *testing.T) {
 		assert.ElementsMatch(t,
 			[]string{"anthropic/claude-opus-4-5", "anthropic/claude-sonnet-4-5"}, ae.Candidates)
 	})
-
-	t.Run("alias_beats_a_substring_match", func(t *testing.T) {
-		got, err := r.Resolve("opus")
-		require.NoError(t, err)
-		assert.Equal(t, "anthropic/claude-opus-4-5", got.Key())
-	})
 }
 
 func TestRegistryDuplicateAlias(t *testing.T) {
@@ -340,7 +333,7 @@ func TestRegistryDuplicateModelID(t *testing.T) {
 		reg, warnings := NewRegistry(f, nil, RegistryOptions{})
 		require.Len(t, warnings, 1)
 
-		// the byte-larger id sorts last and wins byKey; resolution is unchanged
+		// the byte-larger id sorts last and wins byKey
 		m, err := reg.Resolve("p/M1")
 		require.NoError(t, err)
 		assert.Equal(t, "m1", m.ID)

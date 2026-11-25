@@ -14,17 +14,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-func TestHomeOneLevel(t *testing.T) {
-	home := t.TempDir()
-	writeTree(t, home, "deep/one/two/three.txt", ".bashrc")
-	restoreHome(t, home)
-	idx := NewIndex(t.TempDir())
-
-	top := idx.Candidates("~", nil)
-	assert.Equal(t, []string{"~/.bashrc", "~/deep/"}, textsOf(top)) // deep once, never its contents
-	assert.Equal(t, []string{".bashrc", "deep/"}, labelsOf(top))
-}
-
 func TestCandidates(t *testing.T) {
 	t.Run("list_top_level", func(t *testing.T) {
 		dir := t.TempDir()
@@ -36,8 +25,7 @@ func TestCandidates(t *testing.T) {
 	})
 
 	t.Run("never_walks_the_tree", func(t *testing.T) {
-		// a bare @ lists only the cwd's immediate children: deep files must not
-		// surface until the user drills into their directory.
+		// a bare @ lists only the cwd's immediate children
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "deep/one/two/three.txt")
 		idx := NewIndex(dir)
@@ -139,8 +127,7 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"b.go", "a.go"}, labelsOf(cands))
 	})
 
-	// a name no bare token could survive is offered escaped but labelled bare:
-	// the listing shows the real file, accepting inserts the parseable form
+	// unparseable names are offered escaped and labelled bare
 	t.Run("escapes_unparseable_names", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "my notes.txt", "report,v2.pdf")
@@ -151,8 +138,7 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"report\\,v2.pdf"}, textsOf(idx.Candidates("re", nil)))
 	})
 
-	// an accepted escaped name keeps completing: the query is read unescaped, so
-	// drilling through the space still reaches the next level
+	// an accepted escaped name keeps completing past it
 	t.Run("escaped_query_drills", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "my notes/inner.go")
@@ -162,13 +148,12 @@ func TestCandidates(t *testing.T) {
 		assert.Equal(t, []string{"my\\ notes/inner.go"}, textsOf(idx.Candidates("my\\ notes/i", nil)))
 	})
 
-	// tilde completion mutates the global userHome, so it stays sequential and
-	// shares one root + home tree across its cases.
+	// tilde mutates global userHome: sequential, one shared root + home tree
 	t.Run("tilde", func(t *testing.T) {
 		root := t.TempDir() // workspace, must not leak into home completion
 		home := t.TempDir()
 		writeTree(t, root, "main.go")
-		writeTree(t, home, ".bashrc", "docs/a.txt", "pkg/main.go", "bin/run.sh")
+		writeTree(t, home, ".bashrc", "docs/a.txt", "nest/one/two/three.txt", "pkg/main.go", "bin/run.sh")
 		restoreHome(t, home)
 		idx := NewIndex(root)
 
@@ -177,7 +162,8 @@ func TestCandidates(t *testing.T) {
 			for _, c := range cands {
 				assert.True(t, strings.HasPrefix(c.Text, "~/"))
 			}
-			assert.NotContains(t, labelsOf(cands), "main.go")
+			// nest lists once, never its contents; the workspace's main.go stays out
+			assert.Equal(t, []string{".bashrc", "bin/", "docs/", "nest/", "pkg/"}, labelsOf(cands))
 		})
 
 		t.Run("drills_deeper_with_slash", func(t *testing.T) {

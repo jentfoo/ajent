@@ -48,12 +48,19 @@ func slotSizedPNG(t *testing.T, w, h int) []byte {
 	return b.Bytes()
 }
 
+func TestImageToken(t *testing.T) {
+	t.Parallel()
+
+	// the exact wire form pasted into prompts and matched for recall
+	assert.Equal(t, "[image #12]", imageToken(12))
+}
+
 func TestImageSlots(t *testing.T) {
 	// these cases assume the default: images on, whatever earlier tests left behind
 	tools.SetImagesEnabled(true)
 	t.Cleanup(func() { tools.SetImagesEnabled(true) })
 
-	t.Run("store and take round trip", func(t *testing.T) {
+	t.Run("store_take_round_trip", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		token, rejected := s.store(slotPNG(t))
 		assert.Empty(t, rejected)
@@ -74,7 +81,7 @@ func TestImageSlots(t *testing.T) {
 		assert.Contains(t, notices[0], "no longer attached")
 	})
 
-	t.Run("multiple slots in order", func(t *testing.T) {
+	t.Run("multiple_slots_in_order", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		t1, _ := s.store(slotPNG(t))
 		t2, _ := s.store(slotPNG(t))
@@ -85,7 +92,7 @@ func TestImageSlots(t *testing.T) {
 	})
 
 	// text order even when the newer slot's token comes first in the line
-	t.Run("blocks follow text order", func(t *testing.T) {
+	t.Run("blocks_follow_text_order", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		wide, _ := s.store(slotSizedPNG(t, 40, 4))
 		tall, _ := s.store(slotSizedPNG(t, 4, 40))
@@ -99,7 +106,7 @@ func TestImageSlots(t *testing.T) {
 		assert.Equal(t, 4, w)
 	})
 
-	t.Run("refused store inserts nothing", func(t *testing.T) {
+	t.Run("refused_store_inserts_nothing", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		token, rejected := s.store([]byte("not an image"))
 		assert.Empty(t, token)
@@ -108,7 +115,7 @@ func TestImageSlots(t *testing.T) {
 		assert.Empty(t, blocks)
 	})
 
-	t.Run("refile keeps queued blocks alive", func(t *testing.T) {
+	t.Run("refile_keeps_queued_blocks_alive", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		blocks := llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}}
 
@@ -120,7 +127,7 @@ func TestImageSlots(t *testing.T) {
 		assert.Empty(t, s.refile(nil))
 	})
 
-	t.Run("orphaned tokens drop with a notice", func(t *testing.T) {
+	t.Run("orphaned_tokens_drop_with_notice", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		text, blocks, notices := s.take("[image #99] and [image #7]")
 		assert.Equal(t, " and ", text)
@@ -128,7 +135,7 @@ func TestImageSlots(t *testing.T) {
 		assert.Len(t, notices, 2)
 	})
 
-	t.Run("slots cap with fifo eviction", func(t *testing.T) {
+	t.Run("slots_cap_fifo_eviction", func(t *testing.T) {
 		s := &imageSlots{slots: make(map[int]llm.BlockList)}
 		var first string
 		for range maxImageSlots {
@@ -157,7 +164,7 @@ func TestCaptureClipboardImage(t *testing.T) {
 	realProbes := clipboardProbes
 	t.Cleanup(func() { clipboardProbes = realProbes })
 
-	t.Run("success stores a slot", func(t *testing.T) {
+	t.Run("success_stores_a_slot", func(t *testing.T) {
 		_, base64Err := exec.LookPath("base64")
 		if base64Err != nil {
 			t.Skip("base64 not on PATH")
@@ -171,7 +178,7 @@ func TestCaptureClipboardImage(t *testing.T) {
 		assert.Regexp(t, `^\[image #\d+]$`, token)
 	})
 
-	t.Run("over limit refused with notice", func(t *testing.T) {
+	t.Run("over_limit_refused_with_notice", func(t *testing.T) {
 		clipboardProbes = func() []clipCmd {
 			return []clipCmd{{"sh", []string{"-c", "head -c 33554433 /dev/zero"}}} // one past the cap
 		}
@@ -180,7 +187,7 @@ func TestCaptureClipboardImage(t *testing.T) {
 		assert.Contains(t, notice, "read limit")
 	})
 
-	t.Run("stderr noise stays off the tty", func(t *testing.T) {
+	t.Run("stderr_noise_stays_off_tty", func(t *testing.T) {
 		clipboardProbes = func() []clipCmd {
 			return []clipCmd{{"sh", []string{"-c", "echo probe-noise >&2; exit 1"}}}
 		}
@@ -191,18 +198,15 @@ func TestCaptureClipboardImage(t *testing.T) {
 	})
 }
 
-func TestImageToken(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "[image #12]", imageToken(12))
-}
-
 func TestRestoredLabel(t *testing.T) {
-	t.Run("plain label untouched", func(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plain_label_untouched", func(t *testing.T) {
 		it := steerItem{label: "plain text"}
 		assert.Equal(t, "plain text", refiledLabel(it.label, it.input.Blocks))
 	})
 
-	t.Run("blocks get a fresh token", func(t *testing.T) {
+	t.Run("blocks_get_fresh_token", func(t *testing.T) {
 		blocks := llm.BlockList{llm.ImageBlock{MediaType: "image/png", Data: slotPNG(t)}}
 		it := steerItem{label: "what is this", input: agent.Input{Blocks: blocks}}
 		label := refiledLabel(it.label, it.input.Blocks)

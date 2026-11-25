@@ -15,10 +15,6 @@ func dur(d time.Duration) *time.Duration { return &d }
 func TestNew(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no_client_timeout", func(t *testing.T) {
-		assert.Zero(t, New(Options{}).Timeout)
-	})
-
 	t.Run("shared_for_equal_bounds", func(t *testing.T) {
 		defaults, alsoDefaults := New(Options{}), New(Options{})
 		assert.Same(t, defaults, alsoDefaults)
@@ -50,6 +46,10 @@ func TestNew(t *testing.T) {
 
 		assert.Zero(t, tr.ResponseHeaderTimeout) // a lm-studio JIT load holds headers for minutes
 		assert.Equal(t, defaultTLSTimeout, tr.TLSHandshakeTimeout)
+	})
+
+	t.Run("no_client_timeout", func(t *testing.T) {
+		assert.Zero(t, New(Options{}).Timeout) // a client timeout would kill long streams
 	})
 
 	t.Run("proxy_and_pool_bounds_set", func(t *testing.T) {

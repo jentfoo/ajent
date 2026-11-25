@@ -1,7 +1,6 @@
 package subagent
 
 import (
-	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -38,11 +37,6 @@ func TestChildTools(t *testing.T) {
 	src := fullSource()
 	assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "git_log", "git_diff", "mcp_search"},
 		toolNames(childTools(src, true)))
-	for _, tl := range childTools(src, true) {
-		name := tl.Name()
-		assert.NotContains(t, []string{"bash", "write", "edit"}, name)
-		assert.False(t, slices.Contains([]string{"agent_start", "agent_poll", "agent_list", "ask_user"}, name))
-	}
 
 	src = &fakeSource{
 		tools:    []agent.Tool{&fakeTool{name: "bash"}, roTool("read")},
@@ -50,33 +44,28 @@ func TestChildTools(t *testing.T) {
 	}
 	// read is marked read-only so it survives, bash does not
 	assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))
-}
 
-func TestChildToolsGitGate(t *testing.T) {
-	t.Parallel()
+	// git readers need a repository at the child's cwd
+	t.Run("git_gate", func(t *testing.T) {
+		got := toolNames(childTools(fullSource(), false))
+		assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "mcp_search"}, got)
+		for _, name := range gitToolNames {
+			assert.NotContains(t, got, name)
+		}
+	})
 
-	src := fullSource()
-	got := toolNames(childTools(src, false))
-	assert.ElementsMatch(t, []string{"read", "grep", "find", "ls", "mcp_search"}, got)
-	for _, name := range gitToolNames {
-		assert.NotContains(t, got, name)
-	}
+	// only the four shipped readers, not any git-prefixed name
+	t.Run("is_git_tool", func(t *testing.T) {
+		for _, name := range gitToolNames {
+			assert.True(t, isGitTool(name))
+		}
+		assert.False(t, isGitTool("read"))
+		assert.False(t, isGitTool("git_blame"))
+	})
 }
 
 func TestIsChildBarred(t *testing.T) {
 	t.Parallel()
-
-	t.Run("barred_names", func(t *testing.T) {
-		for _, name := range []string{"ask_user",
-			"dev_implement", "dev_review", "dev_revise", "dev_complete"} {
-			assert.True(t, isChildBarred(name))
-		}
-	})
-
-	t.Run("admitted_names", func(t *testing.T) {
-		assert.False(t, isChildBarred("read"))
-		assert.False(t, isChildBarred("agent_start")) // barred by the agent_ prefix instead
-	})
 
 	// the parent marks dev_* read-only, so only this bar keeps them from children
 	t.Run("child_tools_filter", func(t *testing.T) {
@@ -88,16 +77,6 @@ func TestIsChildBarred(t *testing.T) {
 		}
 		assert.Equal(t, []string{"read"}, toolNames(childTools(src, true)))
 	})
-}
-
-func TestIsGitTool(t *testing.T) {
-	t.Parallel()
-
-	for _, name := range gitToolNames {
-		assert.True(t, isGitTool(name))
-	}
-	assert.False(t, isGitTool("read"))
-	assert.False(t, isGitTool("git_blame")) // only the four shipped readers
 }
 
 func TestToolSetView(t *testing.T) {

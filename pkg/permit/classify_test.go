@@ -39,8 +39,7 @@ func TestClassify(t *testing.T) {
 	t.Parallel()
 
 	cases := []classifyCase{
-		// read-only built-ins allow through the same metadata path as an MCP hint:
-		// Builtins marks them at construction, so the registry stub reports it here
+		// built-in readers allow through the same registry-marked path as an MCP hint
 		{"read tool", "read", `{"path":"a.txt"}`, []string{"read"}, VerdictAllow},
 		{"grep tool", "grep", `{}`, []string{"grep"}, VerdictAllow},
 		{"find tool", "find", `{}`, []string{"find"}, VerdictAllow},
@@ -60,8 +59,7 @@ func TestClassify(t *testing.T) {
 		{"bash git quoted output", "", `git diff "--output=/tmp/evil.patch"`, nil, VerdictPrompt},
 		{"bash git quoted ext diff", "", `git log '--ext-diff'`, nil, VerdictPrompt},
 		{"bash sed read only", "", `sed -n 's/a/b/p' f.txt`, nil, VerdictAllow},
-		// bash: exec or write vectors in awk/rg/sort prompt even though the
-		// head is otherwise name-trusted.
+		// checker-gated heads: exec or write vectors prompt despite the trusted name
 		{"awk system prompts", "", `awk 'BEGIN{system("x")}'`, nil, VerdictPrompt},
 		{"awk print field allows", "", "awk '{print $1}' f", nil, VerdictAllow},
 		{"rg pre prompts", "", "rg --pre c p", nil, VerdictPrompt},
@@ -129,9 +127,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// a planted binary under an allowlisted name must not inherit the real
-	// command's verdict: only slash-free heads are name-trusted, everything
-	// path-qualified or script-suffixed prompts like anything unverifiable
+	// path-qualified and script-suffixed heads are never name-trusted, always prompting
 	t.Run("path_qualified_head_prompts", func(t *testing.T) {
 		for _, cmd := range []string{
 			`./bin/cat x`,
@@ -143,8 +139,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// path-qualified launcher prefixes launder the head the same way and must
-	// not unwrap into a trusted name either
+	// path-qualified launcher prefixes never unwrap into a trusted name either
 	t.Run("path_qualified_launcher_prompts", func(t *testing.T) {
 		for _, cmd := range []string{
 			`./nohup git status`,
@@ -177,9 +172,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		assert.Equal(t, VerdictReject, Classify(bashCall("nohup sed -i s/a/b/ f"), noRO))
 	})
 
-	// awk splices backslash-newline before tokens form, so a redirect or pipe on
-	// the next physical line still belongs to the print statement, and awk's own
-	// lexing decides comments and strings: the read-only verdict must not survive
+	// awk's own lexing (splices, comments, strings) never hides a write vector
 	t.Run("awk_continuation_still_prompts", func(t *testing.T) {
 		for _, cmd := range []string{
 			"awk 'BEGIN{print \\\n> \"/tmp/evil\"}'",
@@ -195,8 +188,7 @@ func TestClassifyEdgeCases(t *testing.T) {
 		}
 	})
 
-	// a segment carrying shell expansion the analyser cannot resolve never
-	// verifies read-only: the argv it runs differs from the text analysed
+	// unresolved expansion means the analysed text is not what actually runs
 	t.Run("expanded_forms_prompt", func(t *testing.T) {
 		for _, cmd := range []string{
 			"file {--compile,-m} ./magic",
@@ -219,9 +211,8 @@ func TestClassifyEdgeCases(t *testing.T) {
 		assert.Equal(t, VerdictPrompt, Classify(c, noRO))
 	})
 
-	// a leading env assignment can hijack what the head actually executes (PATH to
-	// another binary, LD_PRELOAD into any dynamically-linked one), so even an
-	// otherwise-read-only command must fail closed and prompt.
+	// a leading env assignment can hijack what the head executes, so even an
+	// otherwise-read-only command fails closed
 	t.Run("env_prefix_never_read_only", func(t *testing.T) {
 		for _, cmd := range []string{
 			`PATH=/tmp/evil git status`,

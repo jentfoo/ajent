@@ -22,8 +22,7 @@ func ids(entries []Entry) []string {
 }
 
 // idTimeSec decodes the unix second an id embeds (first seven chars carry 35
-// bits, the top 32 are the second). Tests use it to tie an entry's ts back to
-// its own id without reaching into package state.
+// bits, the top 32 are the second).
 func idTimeSec(id string) int64 {
 	var v int64
 	for i := range 7 {
@@ -49,10 +48,8 @@ func noticeData(msg string) json.RawMessage {
 	return b
 }
 
-// loadEntries reads a committed transcript from testdata/branches. The corpus is
-// frozen on purpose: every other test writes and reads in one run, so a renamed
-// JSON field would change both sides at once and go unnoticed while breaking
-// every session already on disk.
+// loadEntries reads a committed transcript from testdata/branches. See the
+// fixture rationale atop fixtures_test.go for why that corpus stays frozen.
 func loadEntries(t *testing.T, name string) []Entry {
 	t.Helper()
 

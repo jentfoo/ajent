@@ -749,12 +749,8 @@ func TestInlineRendererSuspend(t *testing.T) {
 	})
 }
 
-// TestInlineRendererResizeRace models a resize landing in the middle of a frame:
-// the rows are composed at the old width, but the terminal has reflowed by the
-// time they are written. This is the window the resize gate narrows but cannot
-// close, and it is what used to strand a divider on every miss, compounding.
-// The park re-reads the size after composing the rows, so it still lands on the
-// block's first row and the next erase takes the whole block with it.
+// TestInlineRendererResizeRace models the window the resize gate narrows but cannot
+// close: rows composed at the old width, written after the terminal reflowed.
 func TestInlineRendererResizeRace(t *testing.T) {
 	t.Parallel()
 

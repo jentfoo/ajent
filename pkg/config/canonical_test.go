@@ -31,18 +31,6 @@ func TestCanonicalizeKeys(t *testing.T) {
 			renames: []keyRename{{from: "MODEL", to: "model"}},
 		},
 		{
-			name:    "case_twins_last_value_wins",
-			in:      `{"MODEL":"a","model":"b"}`,
-			want:    `{"model":"b"}`,
-			renames: []keyRename{{from: "MODEL", to: "model"}},
-		},
-		{
-			name:    "canonical_first_odd_second",
-			in:      `{"model":"a","MODEL":"b"}`,
-			want:    `{"model":"b"}`,
-			renames: []keyRename{{from: "MODEL", to: "model"}},
-		},
-		{
 			name: "array_values_traversed",
 			in:   `{"PERMISSIONS":{"SAFECOMMANDS":["git status"],"MODE":"allow-read"}}`,
 			want: `{"permissions":{"safeCommands":["git status"],"mode":"allow-read"}}`,
@@ -60,6 +48,17 @@ func TestCanonicalizeKeys(t *testing.T) {
 			assert.Equal(t, tc.renames, renames)
 		})
 	}
+
+	t.Run("case_twins_last_value_wins", func(t *testing.T) {
+		for _, in := range []string{
+			`{"MODEL":"a","model":"b"}`,
+			`{"model":"a","MODEL":"b"}`,
+		} {
+			out, renames := canonicalizeKeys([]byte(in))
+			assert.JSONEq(t, `{"model":"b"}`, string(out))
+			assert.Equal(t, []keyRename{{from: "MODEL", to: "model"}}, renames)
+		}
+	})
 
 	t.Run("already_canonical_byte_identical", func(t *testing.T) {
 		data := Defaults().Data

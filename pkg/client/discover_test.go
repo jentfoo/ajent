@@ -36,26 +36,22 @@ func TestResolveTargetForms(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, live, 1)
 
-	t.Run("exact_path", func(t *testing.T) {
-		match, _, rerr := Resolve(f.Path())
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
-
-	t.Run("session_id", func(t *testing.T) {
-		match, _, rerr := Resolve(live[0].SessionID)
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
-
-	t.Run("unique_prefix", func(t *testing.T) {
-		match, _, rerr := Resolve(live[0].SessionID[:8])
-		require.NoError(t, rerr)
-		require.Len(t, match, 1)
-		assert.Equal(t, f.Path(), match[0].Socket)
-	})
+	tests := []struct {
+		name   string
+		target string
+	}{
+		{name: "exact_path", target: f.Path()},
+		{name: "session_id", target: live[0].SessionID},
+		{name: "unique_prefix", target: live[0].SessionID[:8]},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			match, _, rerr := Resolve(tc.target)
+			require.NoError(t, rerr)
+			require.Len(t, match, 1)
+			assert.Equal(t, f.Path(), match[0].Socket)
+		})
+	}
 
 	t.Run("unknown_refused", func(t *testing.T) {
 		_, _, rerr := Resolve("zz-nothing")
@@ -129,9 +125,15 @@ func TestDiscoverLiveFiltersStale(t *testing.T) {
 func TestSavedSessionsOpensStore(t *testing.T) {
 	t.Setenv(paths.EnvHome, t.TempDir()) // env pinned: not parallel
 
-	saved, err := SavedSessions() // opening the store creates the root
+	saved, err := SavedSessions() // opening the store creates the sessions root
 	require.NoError(t, err)
 	assert.Empty(t, saved)
+
+	home, herr := paths.Home()
+	require.NoError(t, herr)
+	fi, serr := os.Stat(filepath.Join(home, "sessions"))
+	require.NoError(t, serr)
+	assert.True(t, fi.IsDir())
 }
 
 func TestFollowablePrefersSameInstance(t *testing.T) {

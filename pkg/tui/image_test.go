@@ -30,48 +30,38 @@ func TestDetectImageProtocol(t *testing.T) {
 	}
 
 	t.Run("kitty by term", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageKitty, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-kitty"}), true))
 	})
 	t.Run("kitty by window id", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageKitty, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "KITTY_WINDOW_ID": "1"}), true))
 	})
 	t.Run("iterm2 by term program", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageITerm2, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "TERM_PROGRAM": "iTerm.app"}), true))
 	})
 	t.Run("wezterm is iterm2", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageITerm2, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "WEZTERM_EXECUTABLE": "/usr/bin/wezterm"}), true))
 	})
 	t.Run("windows terminal is none", func(t *testing.T) {
-		t.Parallel()
 		// WT speaks sixel, not OSC 1337: advertising iterm2 would dump megabytes
 		// of base64 into a terminal that ignores it
 		assert.Equal(t, ImageNone, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "WT_SESSION": "x"}), true))
 	})
 	t.Run("ghostty and konsole are kitty", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageKitty, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "GHOSTTY_RESOURCES_DIR": "/usr/share/ghostty"}), true))
 		assert.Equal(t, ImageKitty, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color", "KONSOLE_VERSION": "220403"}), true))
 	})
 	t.Run("unknown term is none", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageNone, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-256color"}), true))
 	})
 	t.Run("multiplexer is none", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageNone, DetectImageProtocol("", env(map[string]string{
 			"TERM": "xterm-kitty", "TMUX": "/tmp/tmux,default"}), true))
 		assert.Equal(t, ImageNone, DetectImageProtocol("", env(map[string]string{"TERM": "screen-256color"}), true))
 	})
 	t.Run("not a tty is none", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageNone, DetectImageProtocol("", env(map[string]string{"TERM": "xterm-kitty"}), false))
 	})
 	t.Run("explicit override wins", func(t *testing.T) {
-		t.Parallel()
 		assert.Equal(t, ImageKitty, DetectImageProtocol("kitty", env(map[string]string{"TERM": "screen"}), true))
 		assert.Equal(t, ImageITerm2, DetectImageProtocol("iterm2", env(nil), true))
 		assert.Equal(t, ImageNone, DetectImageProtocol("none", env(map[string]string{"TERM": "xterm-kitty"}), true))
@@ -101,14 +91,12 @@ func TestImageRowsAndPlaceholder(t *testing.T) {
 	t.Parallel()
 
 	t.Run("no protocol renders placeholder", func(t *testing.T) {
-		t.Parallel()
 		l := histLine{image: &histImage{rows: 1, text: "[image 640x480, 12kb]"}}
 		rows := l.rows(80)
 		assert.Equal(t, []string{"[image 640x480, 12kb]"}, rows)
 	})
 
 	t.Run("sequence rows pad to height", func(t *testing.T) {
-		t.Parallel()
 		l := histLine{image: &histImage{seq: "\x1b_Ga=T,f=100\x1b\\", rows: 4, text: "[image]"}}
 		rows := l.rows(80)
 		assert.Len(t, rows, 4)
@@ -123,7 +111,6 @@ func TestCommitRendersImagePlaceholder(t *testing.T) {
 	t.Parallel()
 
 	t.Run("inline", func(t *testing.T) {
-		t.Parallel()
 		v := newVT(40, 12)
 		r := newTestInline(v)
 		r.commit([]histLine{{image: &histImage{rows: 1, text: "[image 640x480, 12kb]"}}})
@@ -131,7 +118,6 @@ func TestCommitRendersImagePlaceholder(t *testing.T) {
 	})
 
 	t.Run("plain", func(t *testing.T) {
-		t.Parallel()
 		var buf strings.Builder
 		p := &plainRenderer{out: &buf}
 		p.commit([]histLine{{image: &histImage{rows: 1, text: "[image 640x480, 12kb]"}}})
@@ -139,7 +125,6 @@ func TestCommitRendersImagePlaceholder(t *testing.T) {
 	})
 
 	t.Run("inline sequence goes out verbatim", func(t *testing.T) {
-		t.Parallel()
 		var buf strings.Builder
 		r := newTestInlineAt(recWriter{&buf}, 40, 12)
 		r.commit([]histLine{{image: &histImage{seq: "\x1b_Ga=T,f=100\x1b\\", rows: 2, text: "[image]"}}})
@@ -151,13 +136,11 @@ func TestKittyTransmit(t *testing.T) {
 	t.Parallel()
 
 	t.Run("single chunk", func(t *testing.T) {
-		t.Parallel()
 		seq := kittyTransmit(7, []byte("tiny"), 10, 5)
 		assert.Equal(t, "\x1b_Ga=T,f=100,q=2,C=1,i=7,c=10,r=5,m=0;dGlueQ==\x1b\\", seq)
 	})
 
 	t.Run("chunked payload", func(t *testing.T) {
-		t.Parallel()
 		data := make([]byte, imagePayloadChunk) // 4096 bytes -> 5462 base64 bytes -> two chunks
 		seq := kittyTransmit(9, data, 10, 5)
 		assert.Equal(t, 2, strings.Count(seq, "\x1b_G"))
@@ -181,7 +164,6 @@ func TestImageLine(t *testing.T) {
 	}
 
 	t.Run("kitty fits the viewport", func(t *testing.T) {
-		t.Parallel()
 		// 800x600 px at the default 10x20 cell: 80 cols fit 120, 30 rows fit
 		// the half-viewport of 30 exactly, so nothing clamps
 		u := newUI(ImageKitty)
@@ -192,7 +174,6 @@ func TestImageLine(t *testing.T) {
 	})
 
 	t.Run("kitty clamps tall images", func(t *testing.T) {
-		t.Parallel()
 		// 200x2000 px: 20 cols, 100 rows must clamp to the 30-row half
 		u := newUI(ImageKitty)
 		l := u.imageLine(Image{Data: []byte("x"), W: 200, H: 2000})
@@ -202,7 +183,6 @@ func TestImageLine(t *testing.T) {
 	})
 
 	t.Run("deferred image fits at settled size", func(t *testing.T) {
-		t.Parallel()
 		// an image committed during a resize burst is fitted at flush time,
 		// so a narrowing burst lands the smaller placement rather than one
 		// clamped to the burst-start width
@@ -215,7 +195,6 @@ func TestImageLine(t *testing.T) {
 	})
 
 	t.Run("no protocol is placeholder only", func(t *testing.T) {
-		t.Parallel()
 		data := pngImage(t)
 		u := newUI(ImageNone)
 		l := u.imageLine(Image{Data: data, W: 800, H: 600})
@@ -247,6 +226,8 @@ func TestIsImageLine(t *testing.T) {
 }
 
 func TestCellSizeReport(t *testing.T) {
+	t.Parallel()
+
 	t.Run("decode and apply", func(t *testing.T) {
 		// CSI 6;20;10 t answers a CSI 16 t query, height 20, width 10
 		k, n, ok := decodeKey([]byte("\x1b[6;20;10t"))
@@ -278,25 +259,21 @@ func TestCellSizeReport(t *testing.T) {
 func TestFitCells(t *testing.T) {
 	t.Parallel()
 	t.Run("within viewport untouched", func(t *testing.T) {
-		t.Parallel()
 		cols, rows := fitCells(40, 20, 120, 60)
 		assert.Equal(t, 40, cols)
 		assert.Equal(t, 20, rows)
 	})
 	t.Run("wide clamps to columns", func(t *testing.T) {
-		t.Parallel()
 		cols, rows := fitCells(200, 50, 100, 60)
 		assert.Equal(t, 100, cols)
 		assert.Equal(t, 25, rows)
 	})
 	t.Run("tall clamps to viewport half", func(t *testing.T) {
-		t.Parallel()
 		cols, rows := fitCells(60, 100, 120, 60)
 		assert.Equal(t, 18, cols)
 		assert.Equal(t, 30, rows)
 	})
 	t.Run("unknown size untouched", func(t *testing.T) {
-		t.Parallel()
 		cols, rows := fitCells(500, 200, 0, 0)
 		assert.Equal(t, 500, cols)
 		assert.Equal(t, 200, rows)

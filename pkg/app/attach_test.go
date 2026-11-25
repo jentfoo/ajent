@@ -373,7 +373,7 @@ func writeInstanceRecord(t *testing.T, sessionID string, in client.Instance) {
 // proves the dial happened.
 func countAccepts(t *testing.T, path string) *atomic.Int64 {
 	t.Helper()
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 	var n atomic.Int64
@@ -579,7 +579,7 @@ func TestReconnectLoopPacingSpansCycles(t *testing.T) {
 	require.NoError(t, err)
 	sock := filepath.Join(home, paths.ControlDirName, sid, "flapflap.sock")
 	writeInstanceRecord(t, sid, liveRecord(sid, "tokFLAPFLAPFLAPFLAP", sock))
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", sock)
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "unix", sock)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
 	var mu sync.Mutex
@@ -795,7 +795,7 @@ func TestAttachSeatRegainNotice(t *testing.T) {
 		assert.NotContains(t, a.out(), "you hold the control seat")
 
 		// its current state still answers a write attempt, now naming nobody
-		sctx, scancel := context.WithTimeout(context.Background(), client.CallWait)
+		sctx, scancel := context.WithTimeout(t.Context(), client.CallWait)
 		err := a.conn.Submit(sctx, ctl.SubmitParams{Line: "anyone there?"})
 		scancel()
 		var wire *ctl.Error

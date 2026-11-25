@@ -20,6 +20,31 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
+func TestTerminal(t *testing.T) {
+	t.Parallel()
+
+	// only queued/running keep a plan phase open; anything else ends it
+	cases := []struct {
+		name   string
+		status string
+		want   bool
+	}{
+		{"queued_waits", "queued", false},
+		{"running_waits", "running", false},
+		{"done_terminal", "done", true},
+		{"error_terminal", "error", true},
+		{"aborted_terminal", "aborted", true},
+		{"missing_terminal", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res := agent.ToolResult{Details: map[string]string{"status": tc.status}}
+			assert.Equal(t, tc.want, terminal(res))
+		})
+	}
+	assert.True(t, terminal(agent.ToolResult{})) // no Details at all
+}
+
 func TestSurvey(t *testing.T) {
 	t.Parallel()
 
@@ -81,7 +106,6 @@ func TestSurvey(t *testing.T) {
 		in, err := r.Survey(t.Context())
 		require.NoError(t, err)
 		assert.Equal(t, distillUpdate, in.Text)
-		assert.NotEqual(t, distillNew, in.Text)
 		// both files are read, the existing one last so it sits nearest the instruction
 		reads := resultTexts(agent.BeforeMessages(in.Before))
 		require.GreaterOrEqual(t, len(reads), 2)
@@ -255,6 +279,25 @@ func TestSurvey(t *testing.T) {
 		}
 	})
 
+	t.Run("after_seed_ids_unique", func(t *testing.T) {
+		dir := t.TempDir()
+		writeTree(t, dir, "README.md", "pkg/a.go")
+		r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
+		// seeded ids must not collide with a resumed transcript's ids
+		r.Seed([]llm.Message{{Content: llm.BlockList{
+			llm.ToolCallBlock{ID: r.seq.CallID(3, "read-1")},
+			llm.ToolCallBlock{ID: "ref-9-read-x"},
+		}}})
+
+		in, err := r.Survey(t.Context())
+		require.NoError(t, err)
+		ids := callIDs(agent.BeforeMessages(in.Before))
+		require.NotEmpty(t, ids)
+		for _, id := range ids {
+			assert.True(t, strings.HasPrefix(id, "init-4-"), id) // the seed raised it past run 3
+		}
+	})
+
 	t.Run("reports_each_started_id", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "pkg/a.go")
@@ -327,52 +370,4 @@ func TestSurvey(t *testing.T) {
 		_, err := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir)}).Survey(t.Context())
 		require.ErrorIs(t, err, ErrNoSubAgents)
 	})
-}
-
-func TestTerminal(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name   string
-		status string
-		want   bool
-	}{
-		{"queued_waits", "queued", false},
-		{"running_waits", "running", false},
-		{"done_terminal", "done", true},
-		{"error_terminal", "error", true},
-		{"aborted_terminal", "aborted", true},
-		{"missing_terminal", "", true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			res := agent.ToolResult{Details: map[string]string{"status": tc.status}}
-			assert.Equal(t, tc.want, terminal(res))
-		})
-	}
-	assert.True(t, terminal(agent.ToolResult{})) // no Details at all
-}
-
-func TestSurveyAfterSeedIsUnique(t *testing.T) {
-	t.Parallel()
-
-	// the end-to-end contract: a survey run after seeding mints ids above every id
-	// already in context, so re-running /init on a resumed session never collides.
-	// The literal prefix pins the transcript format against sequencer wiring drift,
-	// and the foreign ref- id in the seed must not move it past run 3 either.
-	dir := t.TempDir()
-	writeTree(t, dir, "README.md", "pkg/a.go")
-	r := New(Options{Cwd: dir, Sink: agent.NopSink{}, Notify: func(string, agent.Level) {}, Started: nopStarted, Registry: newRegistry(t, dir, startStub(), pollStub())})
-	r.Seed([]llm.Message{{Content: llm.BlockList{
-		llm.ToolCallBlock{ID: r.seq.CallID(3, "read-1")},
-		llm.ToolCallBlock{ID: "ref-9-read-x"},
-	}}})
-
-	in, err := r.Survey(t.Context())
-	require.NoError(t, err)
-	ids := callIDs(agent.BeforeMessages(in.Before))
-	require.NotEmpty(t, ids)
-	for _, id := range ids {
-		assert.True(t, strings.HasPrefix(id, "init-4-"), id) // the seed raised it past run 3
-	}
 }

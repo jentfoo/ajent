@@ -13,37 +13,131 @@ import (
 	"github.com/jentfoo/ajent/pkg/tui"
 )
 
-func TestSettingsSectionOpensDirectly(t *testing.T) {
+func TestSettingsCommand(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
+	setup := func(t *testing.T) (*fakeConsole, Command) {
+		t.Helper()
 
-	// /settings reasoning jumps straight to the reasoning picker. Supported levels
-	// are [off, minimal, low, medium, high], with index 4 selecting "high".
-	c.picks = []fakePick{{result: 4}}
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
-	assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
-}
+		c := newFakeConsole(t)
+		r := NewRegistry()
+		c.commands = r
+		RegisterBuiltins(r, c)
+		cmd, _ := r.Get("settings")
+		return c, cmd
+	}
 
-func TestSettingsReasoningCancelRecordsNothing(t *testing.T) {
-	t.Parallel()
+	t.Run("section_opens_directly", func(t *testing.T) {
+		c, cmd := setup(t)
 
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
+		// /settings reasoning jumps straight to the reasoning picker. Supported levels
+		// are [off, minimal, low, medium, high], with index 4 selecting "high".
+		c.picks = []fakePick{{result: 4}}
+		require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
+		assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
+	})
 
-	// /settings reasoning with no queued pick: the picker cancels, and neither a
-	// session override nor a save-to-layer prompt may appear for it
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
-	_, srcName, _ := c.settings.Explain("reasoning.level")
-	assert.NotEqual(t, "session", srcName)
-	assert.Empty(t, c.selects) // the save prompt never opened
+	t.Run("reasoning_cancel_records_nothing", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// no queued pick: the picker cancels, and neither a session override nor a
+		// save-to-layer prompt may appear for it
+		require.NoError(t, cmd.Handler(t.Context(), "reasoning", c))
+		_, srcName, _ := c.settings.Explain("reasoning.level")
+		assert.NotEqual(t, "session", srcName)
+		assert.Empty(t, c.selects) // the save prompt never opened
+	})
+
+	t.Run("menu_cancelled_closes_silently", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// no queued pick: Pick returns ErrCancelled, the menu closes silently.
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+		assert.Empty(t, c.notices)
+	})
+
+	t.Run("unknown_section_notifies", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		require.NoError(t, cmd.Handler(t.Context(), "bogus", c))
+		assert.True(t, c.noticeContains("no settings section"))
+	})
+
+	t.Run("retention_row_edits_and_saves", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// section jump lands on the retention row, Select picking "none" (index 0)
+		c.selects = []int{0}
+
+		require.NoError(t, cmd.Handler(t.Context(), "reasoning retention", c))
+		assert.Equal(t, llm.RetainNone, c.state.Reasoning.Retain)
+		// the dotted leaf persists so a resume (and a save) keeps "none"
+		v, src, ok := c.settings.Explain("reasoning.retain")
+		require.True(t, ok)
+		assert.Equal(t, `"none"`, string(v))
+		assert.Equal(t, "session", src)
+	})
+
+	t.Run("compaction_row_sets_session_keys", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// menu opens, pick the Auto-compaction row (index 5), Confirm on, Input threshold
+		c.picks = []fakePick{{result: 5}}
+		c.confirms = []bool{true}
+		c.inputs = []string{"0.6"}
+
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+		set := c.settings.Settings()
+		assert.True(t, set.Compaction.Auto)
+		assert.InDelta(t, 0.6, set.Compaction.Threshold, 1e-09)
+	})
+
+	t.Run("model_row_saves_to_project", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// a save-to-project answer writes only that layer, never an automatic user one;
+		// pick the Model row, applyModel picks beta, save prompt to project
+		c.picks = []fakePick{{result: 0}, {result: 1}}
+		c.selects = []int{2} // "save to project config"
+
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+
+		require.Len(t, c.saveCalls, 1)
+		assert.Equal(t, "project", c.saveCalls[0].layer)
+		assert.Equal(t, "model", c.saveCalls[0].key)
+	})
+
+	t.Run("model_row_session_only", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// a session-only answer leaves every config layer untouched; pick the Model
+		// row, applyModel picks beta, save prompt to session only
+		c.picks = []fakePick{{result: 0}, {result: 1}}
+		c.selects = []int{0} // "this session only"
+
+		require.NoError(t, cmd.Handler(t.Context(), "", c))
+
+		assert.Empty(t, c.saveCalls)
+		// the switch still applies as a live session override
+		v, src, ok := c.settings.Explain("model")
+		require.True(t, ok)
+		assert.Equal(t, "session", src)
+		assert.JSONEq(t, `"test/beta"`, string(v))
+	})
+
+	t.Run("permission_row_in_menu", func(t *testing.T) {
+		c, cmd := setup(t)
+
+		// jump to the Permissions mode row by name, Select picking allow-read (index 1)
+		c.picks = []fakePick{{result: 0}}
+		c.selects = []int{1}
+
+		require.NoError(t, cmd.Handler(t.Context(), "permissions mode", c))
+		raw, srcName, ok := c.settings.Explain("permissions.mode")
+		require.True(t, ok)
+		assert.Equal(t, `"allow-read"`, string(raw))
+		assert.Equal(t, "session", srcName)
+	})
 }
 
 func TestSettingsReasoningUnavailableWithFewOptions(t *testing.T) {
@@ -58,74 +152,6 @@ func TestSettingsReasoningUnavailableWithFewOptions(t *testing.T) {
 	c.state.Model = reg.Active()
 
 	assert.Equal(t, "only one level for this model", reasoningUnavailable(c))
-}
-
-func TestSettingsMenuCancelledClosesSilently(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	// no queued pick: Pick returns ErrCancelled, the menu closes silently.
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "", c))
-	assert.Empty(t, c.notices)
-}
-
-func TestSettingsUnknownSectionNotifies(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "bogus", c))
-	assert.True(t, c.noticeContains("no settings section"))
-}
-
-func TestSettingsRetentionRowEditsStateAndSaves(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	// section jump lands on the retention row, Select picking "none" (index 0)
-	c.selects = []int{0}
-
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "reasoning retention", c))
-	assert.Equal(t, llm.RetainNone, c.state.Reasoning.Retain)
-	// the dotted leaf persists so a resume (and a save) keeps "none"
-	v, src, ok := c.settings.Explain("reasoning.retain")
-	require.True(t, ok)
-	assert.Equal(t, `"none"`, string(v))
-	assert.Equal(t, "session", src)
-}
-
-func TestSettingsCompactionRowSetsSessionKeys(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	// menu opens, pick the Auto-compaction row (index 5), Confirm on, Input threshold
-	c.picks = []fakePick{{result: 5}}
-	c.confirms = []bool{true}
-	c.inputs = []string{"0.6"}
-
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "", c))
-	set := c.settings.Settings()
-	assert.True(t, set.Compaction.Auto)
-	assert.InDelta(t, 0.6, set.Compaction.Threshold, 1e-09)
 }
 
 func TestEditCompaction(t *testing.T) {
@@ -157,30 +183,11 @@ func TestEditCompaction(t *testing.T) {
 			assert.InDelta(t, wantValue, changes[1].value.(float64), 0)
 		})
 	}
-	t.Run("non_number_aborts_with_zero_changes", func(t *testing.T) {
-		c := newFakeConsole(t)
-		c.confirms = []bool{true}
-		c.inputs = []string{"abc"}
-
-		changes, err := row.edit(t.Context(), c)
-		require.NoError(t, err)
-		assert.Empty(t, changes)
-	})
-
-	t.Run("out_of_range_aborts_with_zero_changes", func(t *testing.T) {
-		c := newFakeConsole(t)
-		c.confirms = []bool{true}
-		c.inputs = []string{"0"}
-
-		changes, err := row.edit(t.Context(), c)
-		require.NoError(t, err)
-		assert.Empty(t, changes)
-	})
-
+	// every rejected input aborts the edit with no session settings recorded.
 	// NaN and ±Inf parse cleanly and pass naive range checks, so they must be
 	// rejected explicitly before they can poison a live session setting
-	t.Run("non_finite_aborts_with_zero_changes", func(t *testing.T) {
-		for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf"} {
+	t.Run("invalid_input_aborts_with_zero_changes", func(t *testing.T) {
+		for _, bad := range []string{"abc", "0", "NaN", "nan", "Inf", "+Inf", "-Inf"} {
 			c := newFakeConsole(t)
 			c.confirms = []bool{true}
 			c.inputs = []string{bad}
@@ -191,51 +198,6 @@ func TestEditCompaction(t *testing.T) {
 			_, srcName, _ := c.settings.Explain("compaction.threshold")
 			assert.NotEqual(t, "session", srcName) // nothing recorded
 		}
-	})
-}
-
-func TestSettingsModelRowHonoursSaveChoice(t *testing.T) {
-	t.Parallel()
-
-	// a save-to-project answer writes only that layer, never an automatic user one
-	t.Run("saves_to_project_layer", func(t *testing.T) {
-		c := newFakeConsole(t)
-		r := NewRegistry()
-		c.commands = r
-		RegisterBuiltins(r, c)
-
-		// pick the Model row, applyModel picks beta, save prompt to project
-		c.picks = []fakePick{{result: 0}, {result: 1}}
-		c.selects = []int{2} // "save to project config"
-
-		cmd, _ := r.Get("settings")
-		require.NoError(t, cmd.Handler(t.Context(), "", c))
-
-		require.Len(t, c.saveCalls, 1)
-		assert.Equal(t, "project", c.saveCalls[0].layer)
-		assert.Equal(t, "model", c.saveCalls[0].key)
-	})
-
-	// a session-only answer leaves every config layer untouched
-	t.Run("session_only_writes_nothing", func(t *testing.T) {
-		c := newFakeConsole(t)
-		r := NewRegistry()
-		c.commands = r
-		RegisterBuiltins(r, c)
-
-		// pick the Model row, applyModel picks beta, save prompt to session only
-		c.picks = []fakePick{{result: 0}, {result: 1}}
-		c.selects = []int{0} // "this session only"
-
-		cmd, _ := r.Get("settings")
-		require.NoError(t, cmd.Handler(t.Context(), "", c))
-
-		assert.Empty(t, c.saveCalls)
-		// the switch still applies as a live session override
-		v, src, ok := c.settings.Explain("model")
-		require.True(t, ok)
-		assert.Equal(t, "session", src)
-		assert.JSONEq(t, `"test/beta"`, string(v))
 	})
 }
 
@@ -284,9 +246,8 @@ func TestEditReasoningRow(t *testing.T) {
 		assert.NotEqual(t, "session", srcName)
 	})
 
-	// a model with only off never opens the picker; the /settings reasoning
-	// section path skips the row's disabled check, so the editor must still
-	// record nothing rather than pinning the current level
+	// a one-level model never opens the picker: the /settings section path skips
+	// the row's disabled check, so the editor must not pin a level
 	t.Run("single_level_records_nothing", func(t *testing.T) {
 		c := newFakeConsole(t)
 		reg, _ := llm.NewRegistry(llm.File{Providers: map[string]llm.ProviderConfig{
@@ -488,44 +449,41 @@ func TestModelRow(t *testing.T) {
 	})
 }
 
-func TestIntRowRecordsAndValidatesSubagentConcurrency(t *testing.T) {
+func TestIntRow(t *testing.T) {
 	t.Parallel()
 
-	c := newFakeConsole(t)
-	r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
+	t.Run("edit_records_valid_value", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
+		// a valid value persists under its own key
+		c.inputs = []string{"6"}
+		changes, err := r.edit(t.Context(), c)
+		require.NoError(t, err)
+		assert.Equal(t, "subagent.maxConcurrent", changes[0].key)
+		assert.Equal(t, 6, changes[0].value)
 
-	// a valid value persists under its own key
-	c.inputs = []string{"6"}
-	changes, err := r.edit(t.Context(), c)
-	require.NoError(t, err)
-	assert.Equal(t, "subagent.maxConcurrent", changes[0].key)
-	assert.Equal(t, 6, changes[0].value)
+		n, srcName, ok := c.settings.Explain("subagent.maxConcurrent")
+		require.True(t, ok)
+		var got int
+		_ = json.Unmarshal(n, &got)
+		assert.Equal(t, 6, got) // a number, not a string, so enumRow cannot store this
+		assert.Equal(t, "session", srcName)
+	})
 
-	n, srcName, ok := c.settings.Explain("subagent.maxConcurrent")
-	require.True(t, ok)
-	var got int
-	_ = json.Unmarshal(n, &got)
-	assert.Equal(t, 6, got) // a number, not a string, so enumRow cannot store this
-	assert.Equal(t, "session", srcName)
-}
+	t.Run("rejects_out_of_range", func(t *testing.T) {
+		c := newFakeConsole(t)
+		r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
 
-func TestIntRowRejectsOutOfRangeWithoutPersisting(t *testing.T) {
-	t.Parallel()
-
-	for _, bad := range []string{"0", "65", "abc"} {
-		t.Run(bad, func(t *testing.T) {
-			c := newFakeConsole(t)
-			r := intRow("Sub-agent concurrency", "subagent.maxConcurrent", 1, 64)
-
+		for _, bad := range []string{"0", "65", "abc"} {
 			c.inputs = []string{bad}
 			changes, err := r.edit(t.Context(), c)
 			require.NoError(t, err)
 			assert.Empty(t, changes)                            // invalid input aborts the edit
 			assert.True(t, c.noticeContains("must be between")) // and explains why
-			_, srcName, _ := c.settings.Explain("subagent.maxConcurrent")
-			assert.NotEqual(t, "session", srcName) // nothing recorded
-		})
-	}
+		}
+		_, srcName, _ := c.settings.Explain("subagent.maxConcurrent")
+		assert.NotEqual(t, "session", srcName) // nothing recorded
+	})
 }
 
 func TestFloatRowRecordsAndValidatesVerbatimFraction(t *testing.T) {
@@ -550,25 +508,10 @@ func TestFloatRowRecordsAndValidatesVerbatimFraction(t *testing.T) {
 		assert.Equal(t, "session", srcName)
 	})
 
-	t.Run("rejects_out_of_range", func(t *testing.T) {
-		for _, bad := range []string{"0", "0.9", "nope"} {
-			c := newFakeConsole(t)
-			r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
-
-			c.inputs = []string{bad}
-			changes, err := r.edit(t.Context(), c)
-			require.NoError(t, err)
-			assert.Empty(t, changes)
-			assert.True(t, c.noticeContains("must be between"))
-			_, srcName, _ := c.settings.Explain("compaction.verbatimFraction")
-			assert.NotEqual(t, "session", srcName)
-		}
-	})
-
 	// NaN and ±Inf parse cleanly and pass naive range checks, so they must be
 	// rejected explicitly
-	t.Run("rejects_non_finite", func(t *testing.T) {
-		for _, bad := range []string{"NaN", "nan", "Inf", "+Inf", "-Inf"} {
+	t.Run("rejects_invalid_input", func(t *testing.T) {
+		for _, bad := range []string{"0", "0.9", "nope", "NaN", "nan", "Inf", "+Inf", "-Inf"} {
 			c := newFakeConsole(t)
 			r := floatRow("Compaction verbatim size", "compaction.verbatimFraction", 0.01, 0.5)
 
@@ -581,26 +524,6 @@ func TestFloatRowRecordsAndValidatesVerbatimFraction(t *testing.T) {
 			assert.NotEqual(t, "session", srcName)
 		}
 	})
-}
-
-func TestSettingsPermissionRowInMenu(t *testing.T) {
-	t.Parallel()
-
-	c := newFakeConsole(t)
-	r := NewRegistry()
-	c.commands = r
-	RegisterBuiltins(r, c)
-
-	// jump to the Permissions mode row by name, Select picking allow-read (index 1)
-	c.picks = []fakePick{{result: 0}}
-	c.selects = []int{1}
-
-	cmd, _ := r.Get("settings")
-	require.NoError(t, cmd.Handler(t.Context(), "permissions mode", c))
-	raw, srcName, ok := c.settings.Explain("permissions.mode")
-	require.True(t, ok)
-	assert.Equal(t, `"allow-read"`, string(raw))
-	assert.Equal(t, "session", srcName)
 }
 
 func TestRowCompactionRendersFractionAndAbsolute(t *testing.T) {

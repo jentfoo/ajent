@@ -21,11 +21,9 @@ func TestDetectCompat(t *testing.T) {
 	t.Parallel()
 
 	type want struct {
-		thinking        string // expected thinkingFormat value when set
-		maxTokensField  string // "" means leave it to the flavor default
-		supportsStore   bool
-		reasoningEffort bool
-		replayReasoning bool
+		thinking       string // expected ThinkingFormat, "" means don't care
+		maxTokensField string // expected MaxTokensField, "" means don't care
+		supportsStore  bool   // every matched provider gets a non-nil SupportsStore
 	}
 	tests := []struct {
 		name     string
@@ -34,25 +32,22 @@ func TestDetectCompat(t *testing.T) {
 		want     want
 	}{
 		{"deepseek", "deepseek", "", want{thinking: "deepseek",
-			maxTokensField: fieldMaxTokens, reasoningEffort: true, replayReasoning: true}},
-		{"zai", "zai", "", want{thinking: "zai", maxTokensField: fieldMaxTokens,
-			reasoningEffort: false}},
-		{"together", "together", "", want{maxTokensField: fieldMaxTokens,
-			reasoningEffort: false}},
-		{"ant_ling", "ant-ling", "", want{reasoningEffort: false}},
+			maxTokensField: fieldMaxTokens}},
+		{"zai", "zai", "", want{thinking: "zai", maxTokensField: fieldMaxTokens}},
+		{"together", "together", "", want{thinking: "together",
+			maxTokensField: fieldMaxTokens}},
+		{"ant_ling", "ant-ling", "", want{maxTokensField: fieldMaxTokens}},
 		{"openrouter", "openrouter", "", want{thinking: "openrouter", maxTokensField: fieldMaxCompletion,
 			supportsStore: true}},
 		{"openai", "openai", "", want{thinking: "openai", maxTokensField: fieldMaxCompletion,
-			supportsStore: true, reasoningEffort: true}},
-		{"moonshot", "moonshotai", "", want{maxTokensField: fieldMaxTokens,
-			supportsStore: false, reasoningEffort: false}},
-		{"nvidia", "nvidia", "", want{maxTokensField: fieldMaxTokens,
-			reasoningEffort: false}},
-		{"cerebras", "cerebras", "", want{supportsStore: false, reasoningEffort: true}},
-		{"grok", "xai", "", want{supportsStore: false, reasoningEffort: false}},
+			supportsStore: true}},
+		{"moonshot", "moonshotai", "", want{maxTokensField: fieldMaxTokens}},
+		{"nvidia", "nvidia", "", want{maxTokensField: fieldMaxTokens}},
+		{"cerebras", "cerebras", "", want{}},
+		{"grok", "xai", "", want{}},
 		{"chutes_base_url", "custom", "https://api.chutes.ai/v1",
-			want{maxTokensField: fieldMaxTokens, supportsStore: false}},
-		{"opencode", "opencode", "", want{supportsStore: false, reasoningEffort: true}},
+			want{maxTokensField: fieldMaxTokens}},
+		{"opencode", "opencode", "", want{}},
 	}
 	t.Run("opencode_sets_reasoning_content_field", func(t *testing.T) {
 		got := detectCompat("opencode", "https://api.opencode.ai/v1", "")
@@ -77,20 +72,22 @@ func TestDetectCompat(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := detectCompat(tc.provider, tc.baseURL, "")
-			if tc.want.thinking != "" && got.ThinkingFormat != nil {
+
+			// nils here would be a regression
+			require.NotNil(t, got.ThinkingFormat)
+			if tc.want.thinking != "" {
 				assert.Equal(t, tc.want.thinking, *got.ThinkingFormat)
 			}
-			if tc.want.maxTokensField != "" && got.MaxTokensField != nil {
+			require.NotNil(t, got.MaxTokensField)
+			if tc.want.maxTokensField != "" {
 				assert.Equal(t, tc.want.maxTokensField, *got.MaxTokensField)
 			}
-			if got.SupportsStore != nil {
-				assert.Equal(t, tc.want.supportsStore, *got.SupportsStore)
-			}
-			if got.RequiresReasoningContent != nil && tc.name == "deepseek" {
-				assert.True(t, *got.RequiresReasoningContent)
-			} else if got.RequiresReasoningContent != nil {
-				assert.False(t, *got.RequiresReasoningContent)
-			}
+			require.NotNil(t, got.SupportsStore)
+			assert.Equal(t, tc.want.supportsStore, *got.SupportsStore)
+
+			// only deepseek maps reasoning onto the dedicated content field
+			require.NotNil(t, got.RequiresReasoningContent)
+			assert.Equal(t, tc.name == "deepseek", *got.RequiresReasoningContent)
 		})
 	}
 
@@ -120,16 +117,14 @@ func TestDetectCompat(t *testing.T) {
 
 	t.Run("base_url_alone_detects_deepseek", func(t *testing.T) {
 		got := detectCompat("custom", "https://api.deepseek.com", "")
-		if got.ThinkingFormat != nil {
-			assert.Equal(t, "deepseek", *got.ThinkingFormat)
-		}
+		require.NotNil(t, got.ThinkingFormat)
+		assert.Equal(t, "deepseek", *got.ThinkingFormat)
 	})
 
 	t.Run("openrouter_anthropic_prefix_sets_cache_format", func(t *testing.T) {
 		got := detectCompat("openrouter", "", "anthropic/claude-opus-4")
-		if got.CacheControlFormat != nil {
-			assert.Equal(t, "anthropic", *got.CacheControlFormat)
-		}
+		require.NotNil(t, got.CacheControlFormat)
+		assert.Equal(t, "anthropic", *got.CacheControlFormat)
 	})
 
 	t.Run("detection_never_enables_reasoning", func(t *testing.T) {

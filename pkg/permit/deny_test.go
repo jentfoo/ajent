@@ -34,11 +34,9 @@ func TestDenyMatches(t *testing.T) {
 		{"locale_quoted_head", []string{"rm"}, `$"rm" -rf x`},
 		{"ansi_c_after_launcher", []string{"rm"}, `nohup $'rm' -rf x`},
 		{"quoted_in_compound", []string{"git push"}, `cd /x && git "push"`},
-		// the .sh basename fold over-matches on purpose, a refusal catching a
-		// wrapper script the safe list's literal match would never bless
+		// the .sh basename fold over-matches on purpose, catching wrapper scripts
 		{"sh_suffix_folded_head", []string{"git push"}, "git.sh push"},
-		// leading env assignments are skipped, the prefixed head refusing like
-		// its bare form
+		// leading env assignments are skipped, the head refusing like its bare form
 		{"env_prefixed_head", []string{"rm"}, "FOO=bar rm -rf /"},
 		{"env_preload_prefix", []string{"rm"}, "LD_PRELOAD=./x.so rm -rf /"},
 		{"env_stacked_prefixes", []string{"rm"}, "A=1 B=2 rm x"},
@@ -80,8 +78,7 @@ func TestDenyMatches(t *testing.T) {
 		// an entry naming the wrapper itself still matches the verbatim argv
 		{"wrapper_named_entry", []string{"timeout"}, "timeout 10 ls"},
 		{"launcher_named_entry", []string{"env"}, "env FOO=1 git push"},
-		// a heredoc body is scanned when an interpreter reads it, quoted
-		// delimiters protecting nothing
+		// an interpreter-read heredoc body is scanned, quoted delimiters protecting nothing
 		{"heredoc_sh_body", []string{"rm"}, "sh <<EOF\nrm -rf /\nEOF"},
 		{"heredoc_bash_body", []string{"git push"}, "bash <<E\ngit push\nE"},
 		{"heredoc_quoted_delim", []string{"rm"}, "sh <<'EOF'\nrm -rf /\nEOF"},
@@ -89,8 +86,7 @@ func TestDenyMatches(t *testing.T) {
 		{"heredoc_body_nested", []string{"git push"}, "sh <<E\nsh -c 'git push'\nE"},
 		{"heredoc_nohup_sh", []string{"rm"}, "nohup sh <<E\nrm -rf x\nE"},
 		{"heredoc_in_subshell", []string{"rm"}, "( sh <<E\nrm -rf x\nE )"},
-		// an unquoted delimiter leaves substitution live whatever reads the
-		// body, since the shell expands it before the reader sees the text
+		// an unquoted delimiter keeps substitution live ahead of any reader
 		{"heredoc_cat_substitution", []string{"rm"}, "cat <<E\nrm status: $(rm -rf x)\nE"},
 	}
 	for _, c := range cases {

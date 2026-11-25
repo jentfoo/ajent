@@ -233,15 +233,19 @@ func TestEditorPageMovement(t *testing.T) {
 
 	// "one\ntwo\nthree": rows start at [0,4,8], end boundaries at [3,7,13].
 	t.Run("page_up_clamps_to_head", func(t *testing.T) {
-		e := newEditorAt("one\ntwo\nthree", 12)
-		assert.True(t, e.PageUp(wide, 2))
-		assert.Equal(t, 0, e.pos) // snapped to the buffer start
+		for _, from := range []int{12, 2} { // mid text, and already on the top row
+			e := newEditorAt("one\ntwo\nthree", from)
+			assert.True(t, e.PageUp(wide, 2))
+			assert.Equal(t, 0, e.pos) // snapped to the buffer start
+		}
 	})
 
 	t.Run("page_down_clamps_to_end", func(t *testing.T) {
-		e := newEditorAt("one\ntwo\nthree", 3)
-		assert.True(t, e.PageDown(wide, 2))
-		assert.Equal(t, 13, e.pos) // snapped to the end of text
+		for _, from := range []int{3, 10} { // mid text, and already on the last row
+			e := newEditorAt("one\ntwo\nthree", from)
+			assert.True(t, e.PageDown(wide, 2))
+			assert.Equal(t, 13, e.pos) // snapped to the end of text
+		}
 	})
 
 	t.Run("page_up_step_moves_rows", func(t *testing.T) {
@@ -254,18 +258,6 @@ func TestEditorPageMovement(t *testing.T) {
 		e := newEditorAt("one\ntwo\nthree", 3)
 		assert.True(t, e.PageDown(wide, 1))
 		assert.Equal(t, 7, e.pos) // clamped to the second row
-	})
-
-	t.Run("page_up_on_top_row_settles_to_start", func(t *testing.T) {
-		e := newEditorAt("one\ntwo\nthree", 2)
-		assert.True(t, e.PageUp(wide, 2))
-		assert.Equal(t, 0, e.pos)
-	})
-
-	t.Run("page_down_on_last_row_settles_to_end", func(t *testing.T) {
-		e := newEditorAt("one\ntwo\nthree", 10)
-		assert.True(t, e.PageDown(wide, 2))
-		assert.Equal(t, 13, e.pos)
 	})
 
 	t.Run("page_up_at_head_no_move", func(t *testing.T) {

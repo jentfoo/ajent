@@ -78,6 +78,18 @@ func TestMapCallResult(t *testing.T) {
 			want: []string{"[resource: file:///c (application/pdf)]"},
 		},
 		{
+			name: "embedded_text_resource_without_mime",
+			result: &mcp.CallToolResult{Content: []mcp.Content{
+				mcp.EmbeddedResource{Resource: mcp.TextResourceContents{URI: "file:///d"}},
+			}},
+			want: []string{"[resource: file:///d]"},
+		},
+		{
+			name:   "nil_resource_contents",
+			result: &mcp.CallToolResult{Content: []mcp.Content{mcp.EmbeddedResource{}}},
+			want:   []string{"[content of unrecognized type]"},
+		},
+		{
 			name:    "is_error_maps_through",
 			result:  &mcp.CallToolResult{IsError: true, Content: []mcp.Content{mcp.TextContent{Text: "boom"}}},
 			want:    []string{"boom"},
@@ -113,50 +125,21 @@ func TestMapCallResult(t *testing.T) {
 	}
 }
 
-func TestRefTextEmbeddedResource(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		in   mcp.Content
-		want string
-	}{
-		{
-			name: "embedded_without_mime",
-			in:   mcp.EmbeddedResource{Resource: mcp.TextResourceContents{URI: "file:///d"}},
-			want: "[resource: file:///d]",
-		},
-		{
-			name: "nil_resource_contents",
-			in:   mcp.EmbeddedResource{},
-			want: "[content of unrecognized type]",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, refText(tc.in))
-		})
-	}
-}
-
 func TestImageBytes(t *testing.T) {
 	t.Parallel()
 
-	t.Run("decodes image payload", func(t *testing.T) {
-		t.Parallel()
+	t.Run("decodes_image_payload", func(t *testing.T) {
 		b, ok := imageBytes("image/png", base64.StdEncoding.EncodeToString([]byte("abc")))
 		assert.True(t, ok)
 		assert.Equal(t, []byte("abc"), b)
 	})
 
-	t.Run("rejects non image mime", func(t *testing.T) {
-		t.Parallel()
+	t.Run("rejects_non_image_mime", func(t *testing.T) {
 		_, ok := imageBytes("text/plain", base64.StdEncoding.EncodeToString([]byte("abc")))
 		assert.False(t, ok)
 	})
 
-	t.Run("rejects bad base64", func(t *testing.T) {
-		t.Parallel()
+	t.Run("rejects_bad_base64", func(t *testing.T) {
 		_, ok := imageBytes("image/png", "!!!not base64!!!")
 		assert.False(t, ok)
 	})

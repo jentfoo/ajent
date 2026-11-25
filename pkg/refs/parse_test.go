@@ -102,19 +102,16 @@ func TestParse(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestParseIdempotentAnnotation(t *testing.T) {
-	t.Parallel()
-
-	// re-parsing already-annotated text yields the ref with the note absorbed, never a second annotation
-	annotated := "@file (800 lines, 64kb) and @file (800 lines, 64kb)"
-	refs := Parse(annotated)
-	require.Len(t, refs, 2)
-	for _, r := range refs {
-		assert.Equal(t, "file", r.Path)
-		assert.Equal(t, " (800 lines, 64kb)", r.Note)
-	}
+	// annotated text reparses with its note absorbed, never doubled
+	t.Run("idempotent_annotation", func(t *testing.T) {
+		refs := Parse("@file (800 lines, 64kb) and @file (800 lines, 64kb)")
+		require.Len(t, refs, 2)
+		for _, r := range refs {
+			assert.Equal(t, "file", r.Path)
+			assert.Equal(t, " (800 lines, 64kb)", r.Note)
+		}
+	})
 }
 
 func TestEscapePath(t *testing.T) {
@@ -151,8 +148,7 @@ func TestEscapePath(t *testing.T) {
 		})
 	}
 
-	// the invariant behind the completion round trip: an offered form parses
-	// back to the exact name, however hostile
+	// any offered form parses back to its exact name
 	t.Run("round_trips_through_parse", func(t *testing.T) {
 		for _, c := range cases {
 			refs := Parse("@" + escapePath(c.in))

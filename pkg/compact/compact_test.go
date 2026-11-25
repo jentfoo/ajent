@@ -207,6 +207,8 @@ func TestCompactMeasuresRequestRetention(t *testing.T) {
 		return res.Before
 	}
 
+	// both anchors: RetainNone still leaves a real saving, and RetainAll counts
+	// the thinking rather than silently measuring a stripped request
 	t.Run("retain_none_drops_thinking_before_measure", func(t *testing.T) {
 		assert.Less(t, measure(t, llm.RetainNone), 2000)
 	})
@@ -265,9 +267,7 @@ func TestCompactRecompaction(t *testing.T) {
 		assert.NotEmpty(t, res.Summary)
 	})
 
-	// a kept entry lost to corruption degrades like an undecodable payload: the pass
-	// rebuilds the checkpoint over the unreduced branch instead of failing, and the
-	// damage rides Result.Warnings
+	// a corrupt prior degrades to a recompute over the raw branch with damage in Warnings
 	t.Run("missing_prior_cut_recomputes", func(t *testing.T) {
 		branch := toolBranch(t, 8, 400)
 		branch = append(branch, compactEntry("comp", "a checkpoint", "gone"))

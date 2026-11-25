@@ -14,6 +14,18 @@ import (
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
+func TestEstimateBytes(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 250, estimateBytes(1000, KindProse))
+	assert.Equal(t, 313, estimateBytes(1000, KindCode)) // 312.5 rounds up, never truncates
+	assert.Equal(t, 357, estimateBytes(1000, KindJSON))
+	assert.Equal(t, 278, estimateBytes(1000, KindOpaque))
+	assert.Equal(t, 250, estimateBytes(1000, Kind(99))) // unknown kind reads as prose
+	assert.Zero(t, estimateBytes(0, KindCode))
+	assert.Zero(t, estimateBytes(-5, KindCode))
+}
+
 func TestEstimateText(t *testing.T) {
 	t.Parallel()
 
@@ -44,32 +56,49 @@ func TestEstimateText(t *testing.T) {
 	}
 }
 
-func TestEstimateBytes(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, 250, estimateBytes(1000, KindProse))
-	assert.Equal(t, 313, estimateBytes(1000, KindCode)) // 312.5 rounds up, never truncates
-	assert.Equal(t, 357, estimateBytes(1000, KindJSON))
-	assert.Equal(t, 278, estimateBytes(1000, KindOpaque))
-	assert.Equal(t, 250, estimateBytes(1000, Kind(99))) // unknown kind reads as prose
-	assert.Zero(t, estimateBytes(0, KindCode))
-	assert.Zero(t, estimateBytes(-5, KindCode))
-}
-
-func TestEstimateBlocksToolResultIsCode(t *testing.T) {
+func TestEstimateBlocks(t *testing.T) {
 	t.Parallel()
 
 	// a read result is a file, and its text uses the denser code ratio (3.2 bytes/token),
 	// so identical prose costs more tokens inside a tool result than as prose.
-	txt := "the quick brown fox jumps over the lazy dog"
-	inResult := estimateBlocks(llm.BlockList{llm.ToolResultBlock{
-		Content: llm.BlockList{llm.TextBlock{Text: txt}},
-	}})
-	plain := EstimateText(txt, KindProse)
-	code := EstimateText(txt, KindCode)
-	// the result carries its own tool_use_id framing on top of its content
-	assert.Equal(t, code+toolResultOverhead, inResult)
-	assert.Greater(t, inResult, plain) // and that costs more tokens than prose
+	t.Run("tool_result_is_code", func(t *testing.T) {
+		txt := "the quick brown fox jumps over the lazy dog"
+		inResult := estimateBlocks(llm.BlockList{llm.ToolResultBlock{
+			Content: llm.BlockList{llm.TextBlock{Text: txt}},
+		}})
+		plain := EstimateText(txt, KindProse)
+		code := EstimateText(txt, KindCode)
+		// the result carries its own tool_use_id framing on top of its content
+		assert.Equal(t, code+toolResultOverhead, inResult)
+		assert.Greater(t, inResult, plain) // and that costs more tokens than prose
+	})
+
+	short, long := "package main", strings.Repeat("package main\n", 64)
+	samples := map[llm.BlockType][2]llm.Block{
+		llm.BlockText:     {llm.TextBlock{Text: short}, llm.TextBlock{Text: long}},
+		llm.BlockThinking: {llm.ThinkingBlock{Text: short}, llm.ThinkingBlock{Text: long}},
+		llm.BlockToolCall: {
+			llm.ToolCallBlock{ID: "toolu_01", Name: "read", Input: json.RawMessage(`{"a":1}`)},
+			llm.ToolCallBlock{ID: "toolu_01", Name: "read", Input: json.RawMessage(`{"a":"` + long + `"}`)},
+		},
+		llm.BlockToolResult: {
+			llm.ToolResultBlock{CallID: "toolu_01", Content: llm.BlockList{llm.TextBlock{Text: short}}},
+			llm.ToolResultBlock{CallID: "toolu_01", Content: llm.BlockList{llm.TextBlock{Text: long}}},
+		},
+		llm.BlockImage: {
+			llm.ImageBlock{MediaType: "image/png", Data: make([]byte, 4096)},
+			llm.ImageBlock{MediaType: "image/png", Data: make([]byte, 1<<20)},
+		},
+	}
+	// guards llm.BlockTypes against the unknown-block fallback
+	for _, bt := range llm.BlockTypes {
+		t.Run(string(bt), func(t *testing.T) {
+			pair, ok := samples[bt]
+			require.True(t, ok)
+			assert.Greater(t, estimateBlocks(llm.BlockList{pair[1]}),
+				estimateBlocks(llm.BlockList{pair[0]}))
+		})
+	}
 }
 
 func TestEstimateRequest(t *testing.T) {
@@ -144,40 +173,6 @@ func TestEstimateRequest(t *testing.T) {
 		}
 		assert.Equal(t, manual, estimated)
 	})
-}
-
-// TestEstimateBlocksCoversEveryType walks llm.BlockTypes so a block type added to
-// pkg/llm cannot fall through to the unknown-block constant unnoticed. The probe
-// is content sensitivity: a real arm charges more for more content, while the
-// default constant is flat whatever the block holds.
-func TestEstimateBlocksCoversEveryType(t *testing.T) {
-	t.Parallel()
-
-	short, long := "package main", strings.Repeat("package main\n", 64)
-	samples := map[llm.BlockType][2]llm.Block{
-		llm.BlockText:     {llm.TextBlock{Text: short}, llm.TextBlock{Text: long}},
-		llm.BlockThinking: {llm.ThinkingBlock{Text: short}, llm.ThinkingBlock{Text: long}},
-		llm.BlockToolCall: {
-			llm.ToolCallBlock{ID: "toolu_01", Name: "read", Input: json.RawMessage(`{"a":1}`)},
-			llm.ToolCallBlock{ID: "toolu_01", Name: "read", Input: json.RawMessage(`{"a":"` + long + `"}`)},
-		},
-		llm.BlockToolResult: {
-			llm.ToolResultBlock{CallID: "toolu_01", Content: llm.BlockList{llm.TextBlock{Text: short}}},
-			llm.ToolResultBlock{CallID: "toolu_01", Content: llm.BlockList{llm.TextBlock{Text: long}}},
-		},
-		llm.BlockImage: {
-			llm.ImageBlock{MediaType: "image/png", Data: make([]byte, 4096)},
-			llm.ImageBlock{MediaType: "image/png", Data: make([]byte, 1<<20)},
-		},
-	}
-	for _, bt := range llm.BlockTypes {
-		t.Run(string(bt), func(t *testing.T) {
-			pair, ok := samples[bt]
-			require.True(t, ok)
-			assert.Greater(t, estimateBlocks(llm.BlockList{pair[1]}),
-				estimateBlocks(llm.BlockList{pair[0]}))
-		})
-	}
 }
 
 func TestEstimateFixedCountsDescriptions(t *testing.T) {

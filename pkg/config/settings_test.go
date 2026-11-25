@@ -8,20 +8,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultsLiteralHasNoUnknownKeys(t *testing.T) {
+func TestDefaultsLiteralValid(t *testing.T) {
 	t.Parallel()
 
-	unknown, err := UnknownKeys(Defaults().Data, Settings{})
-	require.NoError(t, err)
-	assert.Empty(t, unknown)
-}
+	t.Run("no_unknown_keys", func(t *testing.T) {
+		unknown, err := UnknownKeys(Defaults().Data, Settings{})
+		require.NoError(t, err)
+		assert.Empty(t, unknown)
+	})
 
-func TestDefaultsLiteralHasNoTypeErrors(t *testing.T) {
-	t.Parallel()
+	t.Run("no_type_errors", func(t *testing.T) {
+		te, err := TypeErrors(Defaults().Data, Settings{})
+		require.NoError(t, err)
+		assert.Empty(t, te)
+	})
 
-	te, err := TypeErrors(Defaults().Data, Settings{})
-	require.NoError(t, err)
-	assert.Empty(t, te)
+	// the shipped default render mode, pinned so a literal typo cannot silently
+	// downgrade every terminal to no color
+	t.Run("ui_color_defaults_to_auto", func(t *testing.T) {
+		var st Settings
+		require.NoError(t, json.Unmarshal(Defaults().Data, &st))
+		assert.Equal(t, "auto", st.UI.Color)
+	})
 }
 
 func TestSettingsDecodesMergedConfig(t *testing.T) {
@@ -51,8 +59,7 @@ func TestSettingsDecodesMergedConfig(t *testing.T) {
 func TestAgentMaxStepsLayers(t *testing.T) {
 	t.Parallel()
 
-	// no compiled-in cap: the key is absent from defaults, so the zero value
-	// (unlimited) is what an unconfigured install runs with.
+	// no compiled-in cap, zero means unlimited
 	var base Settings
 	require.NoError(t, json.Unmarshal(Defaults().Data, &base))
 	assert.Zero(t, base.Agent.MaxSteps)
@@ -72,16 +79,9 @@ func TestAgentMaxStepsLayers(t *testing.T) {
 	assert.Equal(t, 50, st.Agent.MaxSteps) // the user layer caps it
 }
 
-// TestUIColorLayers pins ui.color through the layers it has to survive: the
-// compiled-in default, the free AJENT_UI_COLOR binding, and a user override.
+// ui.color through the free env binding and a user-layer override
 func TestUIColorLayers(t *testing.T) {
 	t.Parallel()
-
-	t.Run("defaults_to_auto", func(t *testing.T) {
-		var base Settings
-		require.NoError(t, json.Unmarshal(Defaults().Data, &base))
-		assert.Equal(t, "auto", base.UI.Color)
-	})
 
 	t.Run("env_binds_without_wiring", func(t *testing.T) {
 		env, warns := EnvLayer(func(k string) string {

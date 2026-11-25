@@ -41,17 +41,15 @@ func TestLevelUnmarshalJSON(t *testing.T) {
 		require.ErrorContains(t, err, "unknown reasoning level")
 		assert.Contains(t, err.Error(), "off, minimal, low, medium, high, xhigh, max")
 	})
-}
 
-func TestParseLevel(t *testing.T) {
-	t.Parallel()
+	t.Run("parse_level_lookup", func(t *testing.T) {
+		got, ok := ParseLevel("xhigh")
+		require.True(t, ok)
+		assert.Equal(t, LevelXHigh, got)
 
-	got, ok := ParseLevel("xhigh")
-	require.True(t, ok)
-	assert.Equal(t, LevelXHigh, got)
-
-	_, ok = ParseLevel("nope")
-	assert.False(t, ok)
+		_, ok = ParseLevel("nope")
+		assert.False(t, ok)
+	})
 }
 
 func TestRetainPolicyUnmarshalJSON(t *testing.T) {
@@ -74,6 +72,15 @@ func TestRetainPolicyUnmarshalJSON(t *testing.T) {
 			assert.Equal(t, tc.expected, got)
 		})
 	}
+
+	t.Run("parse_retain_lookup", func(t *testing.T) {
+		got, ok := ParseRetain("wholeTurn")
+		require.True(t, ok)
+		assert.Equal(t, RetainWholeTurn, got)
+
+		_, ok = ParseRetain("nope")
+		assert.False(t, ok)
+	})
 }
 
 func TestThinkingFormatUnmarshalJSON(t *testing.T) {
@@ -98,15 +105,6 @@ func TestThinkingFormatUnmarshalJSON(t *testing.T) {
 	}
 }
 
-func TestTokenizerKindUnmarshalJSON(t *testing.T) {
-	t.Parallel()
-
-	var got TokenizerKind
-	require.NoError(t, json.Unmarshal([]byte(`"remote_tokenize"`), &got))
-	assert.Equal(t, TokenizerRemoteTokenize, got)
-	assert.Equal(t, "remote_tokenize", got.String())
-}
-
 // enumRoundTrip asserts every value encodes to its name and decodes back.
 func enumRoundTrip[T interface {
 	~uint8
@@ -127,6 +125,15 @@ func enumRoundTrip[T interface {
 		require.NoError(t, P(&got).UnmarshalText(data))
 		assert.Equal(t, v, got)
 	}
+}
+
+func TestAllLevels(t *testing.T) {
+	t.Parallel()
+
+	got := allLevels()
+	assert.Len(t, got, 7)
+	assert.Equal(t, LevelOff, got[0])
+	assert.Equal(t, LevelMax, got[len(got)-1])
 }
 
 func TestEnumTextRoundTrip(t *testing.T) {
@@ -164,24 +171,4 @@ func TestEnumTextRoundTrip(t *testing.T) {
 	t.Run("unknown_value_names_unknown", func(t *testing.T) {
 		assert.Equal(t, "unknown", Level(200).String())
 	})
-}
-
-func TestParseRetain(t *testing.T) {
-	t.Parallel()
-
-	got, ok := ParseRetain("wholeTurn")
-	require.True(t, ok)
-	assert.Equal(t, RetainWholeTurn, got)
-
-	_, ok = ParseRetain("nope")
-	assert.False(t, ok)
-}
-
-func TestAllLevels(t *testing.T) {
-	t.Parallel()
-
-	got := allLevels()
-	assert.Len(t, got, 7)
-	assert.Equal(t, LevelOff, got[0])
-	assert.Equal(t, LevelMax, got[len(got)-1])
 }

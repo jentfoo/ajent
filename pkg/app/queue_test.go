@@ -327,10 +327,7 @@ func TestSteerQueue(t *testing.T) {
 	})
 
 	t.Run("controller_runs_keep_origin", func(t *testing.T) {
-		// a controller submit is an ordinary user line carrying provenance: its
-		// run hands back the origin the direct dispatch records, so the queued
-		// entry does not land as a plain typed message. It never merges into a
-		// typed run, where one entry could not name both submitters
+		// controller runs keep their origin and never merge into typed runs
 		fake := &fakeQueueUI{}
 		waitReady, takeReady := stagePair(t)
 		q := newSteerQueue(fake, func(int) {}, waitReady, takeReady, noopDrop)
@@ -636,42 +633,38 @@ func TestSteerQueue(t *testing.T) {
 		assert.Empty(t, fake.lastQueued()) // rows cleared
 	})
 
-	t.Run("take_attaches_staged", func(t *testing.T) {
-		fake := &fakeQueueUI{}
-		var consumed int
-		waitReady, _ := stagePair(t)
-		q := newSteerQueue(fake, func(int) {}, waitReady,
-			func() []agent.MessageInfo {
-				consumed++
-				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			}, noopDrop)
+	t.Run("delivery_attaches_staged", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			fetch func(*steerQueue, context.Context) ([]agent.Input, bool)
+		}{
+			{"take", func(q *steerQueue, ctx context.Context) ([]agent.Input, bool) { return q.take(ctx) }},
+			{"pull", func(q *steerQueue, _ context.Context) ([]agent.Input, bool) {
+				out := q.pull()
+				return out, len(out) > 0
+			}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var consumed int
+				waitReady, _ := stagePair(t)
+				q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady,
+					func() []agent.MessageInfo {
+						consumed++
+						return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
+					}, noopDrop)
 
-		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
-		require.True(t, q.offer(agent.Input{Text: "why did it fail"}, "why did it fail", 1))
+				q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
+				require.True(t, q.offer(agent.Input{Text: "why did it fail"}, "why did it fail", 1))
 
-		in, ok := q.take(t.Context())
-		require.True(t, ok)
-		require.Len(t, in, 1)
-		// the staged output rides ahead of the queued item's own Before, verbatim
-		require.Len(t, in[0].Before, 1)
-		assert.Equal(t, llm.Text(llm.RoleUser, "User Ran: make"), in[0].Before[0].Message)
-		assert.Equal(t, 1, consumed)
-	})
-
-	t.Run("pull_attaches_staged", func(t *testing.T) {
-		waitReady, _ := stagePair(t)
-		q := newSteerQueue(&fakeQueueUI{}, func(int) {}, waitReady,
-			func() []agent.MessageInfo {
-				return []agent.MessageInfo{{Message: llm.Text(llm.RoleUser, "User Ran: make")}}
-			}, noopDrop)
-
-		q.offer(agent.Input{Text: "seed"}, "seed", 0) // starts the drain, not queued
-		require.True(t, q.offer(agent.Input{Text: "and then?"}, "and then?", 1))
-
-		in := q.pull()
-		require.Len(t, in, 1)
-		require.Len(t, in[0].Before, 1)
-		assert.Equal(t, llm.Text(llm.RoleUser, "User Ran: make"), in[0].Before[0].Message)
+				in, ok := tc.fetch(q, t.Context())
+				require.True(t, ok)
+				require.Len(t, in, 1)
+				// the staged output rides ahead of the queued item's own Before, verbatim
+				require.Len(t, in[0].Before, 1)
+				assert.Equal(t, llm.Text(llm.RoleUser, "User Ran: make"), in[0].Before[0].Message)
+				assert.Equal(t, 1, consumed)
+			})
+		}
 	})
 
 	t.Run("take_aborted_while_waiting", func(t *testing.T) {

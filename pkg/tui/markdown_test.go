@@ -585,12 +585,6 @@ func TestFenceCloses(t *testing.T) {
 	}
 }
 
-func TestRuleCharSingleColumn(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, 1, displayWidth(ruleChar))
-}
-
 func TestOrderedListMarkerAlignment(t *testing.T) {
 	t.Parallel()
 
@@ -609,10 +603,12 @@ func TestOrderedListMarkerAlignment(t *testing.T) {
 func TestMarkdownGlyphWidths(t *testing.T) {
 	t.Parallel()
 
-	t.Run("markers_are_two_columns", func(t *testing.T) {
+	t.Run("marker_glyph_widths", func(t *testing.T) {
 		assert.Equal(t, 2, displayWidth(bulletMarker))
 		assert.Equal(t, 2, displayWidth(quotePrefix))
 		assert.Equal(t, 2, displayWidth(codeIndent))
+		// a rule draws one glyph per column
+		assert.Equal(t, 1, displayWidth(ruleChar))
 	})
 
 	t.Run("checkboxes_are_four_columns", func(t *testing.T) {

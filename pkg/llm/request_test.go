@@ -187,6 +187,13 @@ func TestReasoningOn(t *testing.T) {
 	})
 }
 
+func TestLevelsAreSortedAscending(t *testing.T) {
+	t.Parallel()
+
+	caps := Capabilities{Reasoning: true}
+	assert.True(t, slices.IsSorted(levelsFor(caps)))
+}
+
 func TestMaxOutputFor(t *testing.T) {
 	t.Parallel()
 
@@ -213,43 +220,37 @@ func TestMaxOutputFor(t *testing.T) {
 	}
 }
 
-func TestLevelsAreSortedAscending(t *testing.T) {
-	t.Parallel()
-
-	caps := Capabilities{Reasoning: true}
-	got := levelsFor(caps)
-	assert.True(t, slices.IsSorted(got))
-}
-
 func TestReasoningFrom(t *testing.T) {
 	t.Parallel()
 
 	m := Model{Provider: "p", ID: "m"}
 	m.Caps.Reasoning = true
-	rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Hide: true, Budget: 5000}, m)
-	assert.Equal(t, LevelHigh, rc.Level)
-	assert.Equal(t, RetainNone, rc.Retain)
-	assert.True(t, rc.Hide)
-	assert.Equal(t, 5000, rc.Budget)
 
-	// an empty block falls back to the compiled-in defaults
-	d := ReasoningFrom(config.Reasoning{}, m)
-	assert.Equal(t, LevelMedium, d.Level)
-	assert.Equal(t, RetainWholeTurn, d.Retain)
-}
+	t.Run("config_mapping", func(t *testing.T) {
+		rc := ReasoningFrom(config.Reasoning{Level: "high", Retain: "none", Hide: true, Budget: 5000}, m)
+		assert.Equal(t, LevelHigh, rc.Level)
+		assert.Equal(t, RetainNone, rc.Retain)
+		assert.True(t, rc.Hide)
+		assert.Equal(t, 5000, rc.Budget)
+	})
 
-func TestReasoningFromRetainDefault(t *testing.T) {
-	t.Parallel()
+	t.Run("empty_block_falls_back_to_defaults", func(t *testing.T) {
+		d := ReasoningFrom(config.Reasoning{}, m)
+		assert.Equal(t, LevelMedium, d.Level)
+		assert.Equal(t, RetainWholeTurn, d.Retain)
+	})
 
-	local := flavorDefaults[FlavorLMStudio].caps
-	mLocal := Model{Provider: "lmstudio", ID: "m", Caps: local}
-	mPriced := Model{Provider: "anthropic", ID: "m", Caps: Capabilities{Reasoning: true}}
+	t.Run("flavor_retain_default", func(t *testing.T) {
+		local := flavorDefaults[FlavorLMStudio].caps
+		mLocal := Model{Provider: "lmstudio", ID: "m", Caps: local}
+		mPriced := Model{Provider: "anthropic", ID: "m", Caps: Capabilities{Reasoning: true}}
 
-	assert.Equal(t, RetainAll, ReasoningFrom(config.Reasoning{}, mLocal).Retain)
-	assert.Equal(t, RetainWholeTurn, ReasoningFrom(config.Reasoning{}, mPriced).Retain)
-	// an explicit choice always wins over the flavor default
-	assert.Equal(t, RetainWholeTurn,
-		ReasoningFrom(config.Reasoning{Retain: "wholeTurn"}, mLocal).Retain)
+		assert.Equal(t, RetainAll, ReasoningFrom(config.Reasoning{}, mLocal).Retain)
+		assert.Equal(t, RetainWholeTurn, ReasoningFrom(config.Reasoning{}, mPriced).Retain)
+		// an explicit choice always wins over the flavor default
+		assert.Equal(t, RetainWholeTurn,
+			ReasoningFrom(config.Reasoning{Retain: "wholeTurn"}, mLocal).Retain)
+	})
 }
 
 func TestReasoningConfigUnmarshal(t *testing.T) {

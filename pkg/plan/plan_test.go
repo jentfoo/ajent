@@ -13,6 +13,8 @@ func TestControllerStart(t *testing.T) {
 	t.Run("applies_planning_scope", func(t *testing.T) {
 		c, f := started(t)
 		assert.Equal(t, PhasePlanning, c.phase)
+		assert.False(t, c.Parked())
+		assert.Empty(t, c.Focus()) // planning uses the unguided summary
 		assert.Equal(t, plannerModel, c.planner)
 		assert.Equal(t, implementorModel, c.implementor)
 		assert.Equal(t, []string{"read", "grep", "find", "ls", "bash", "git_status",
@@ -91,34 +93,17 @@ func TestControllerStop(t *testing.T) {
 		assert.Contains(t, f.notices, "no plan workflow is running")
 	})
 
-	t.Run("returns_to_review_tip", func(t *testing.T) {
+	t.Run("review_stop_targets_live_head", func(t *testing.T) {
 		c, f := started(t)
 		handOff(t, c, "the plan")
 		submitPlan(t, c, "the plan")
-		_, ok := c.Advance(t.Context(), done())
-		require.True(t, ok)
 
-		f.mu.Lock()
-		live := f.head // the review round's entries sit past both recorded tips
-		f.mu.Unlock()
-
-		c.Stop()
-		last := f.forks[len(f.forks)-1]
-		assert.Equal(t, live, last.head)
-		assert.NotEqual(t, c.planTip, last.head) // the final round must not be dropped
-		assert.Equal(t, implementorModel, last.model)
-	})
-
-	t.Run("final_round_not_lost", func(t *testing.T) {
-		c, f := started(t)
-		handOff(t, c, "the plan")
-		submitPlan(t, c, "the plan")
-		_, ok := c.Advance(t.Context(), done())
+		_, ok := c.Advance(t.Context(), done()) // round-1 review forks the plan tip
 		require.True(t, ok)
 
 		// one revision later the recorded tip trails the newest review round
 		require.True(t, call(t, c, DevReviseTool, `{"instructions":"round 2"}`).EndTurn)
-		_, ok = c.Advance(t.Context(), done())
+		_, ok = c.Advance(t.Context(), done()) // re-enters implementation on a fresh root
 		require.True(t, ok)
 		stale := c.reviewTip
 		require.NotEmpty(t, stale)
@@ -130,10 +115,12 @@ func TestControllerStop(t *testing.T) {
 		live := f.head
 		f.mu.Unlock()
 
-		c.Stop()
+		c.Stop() // reviewing ends on its live branch, not either recorded tip
 		last := f.forks[len(f.forks)-1]
 		assert.Equal(t, live, last.head)
-		assert.NotEqual(t, stale, last.head) // completion lands past the stale tip
+		assert.NotEqual(t, c.planTip, last.head) // the round-1 fork point must not be reused
+		assert.NotEqual(t, stale, last.head)     // nor the pre-revision review tip
+		assert.Equal(t, implementorModel, last.model)
 	})
 
 	t.Run("gate_stop_returns_plan_tip", func(t *testing.T) {
@@ -161,24 +148,6 @@ func TestControllerStop(t *testing.T) {
 	})
 }
 
-func TestControllerFocus(t *testing.T) {
-	t.Parallel()
-
-	c, _ := started(t)
-	assert.Empty(t, c.Focus()) // planning uses the unguided summary
-
-	handOff(t, c, "the plan")
-	submitPlan(t, c, "the plan")
-	assert.Equal(t, implementFocus, c.Focus())
-
-	_, ok := c.Advance(t.Context(), done())
-	require.True(t, ok)
-	assert.Equal(t, reviewFocus, c.Focus())
-
-	c.Stop()
-	assert.Empty(t, c.Focus())
-}
-
 func TestControllerToolsFor(t *testing.T) {
 	t.Parallel()
 
@@ -204,57 +173,31 @@ func TestControllerStatus(t *testing.T) {
 
 	f := newFakeHost()
 	c := New(f.host())
-	assert.Empty(t, c.Status())
 
-	require.Empty(t, c.Start(t.Context(), ""))
-	assert.Contains(t, c.Status(), "phase=planning")
-	assert.Contains(t, c.Status(), "round=1/4")
-	assert.Contains(t, f.statuses, "plan: planning (r1/4)")
-}
+	t.Run("wired_publishes_segments", func(t *testing.T) {
+		assert.Empty(t, c.Status())
 
-func TestControllerNilStatus(t *testing.T) {
-	t.Parallel()
-
-	h := newFakeHost().host()
-	h.Status = nil
-	c := New(h)
-
-	require.Empty(t, c.Start(t.Context(), "")) // the first transition publishes planning
-	assert.Equal(t, PhasePlanning, c.phase)
-
-	handOff(t, c, "the plan") // awaiting-plan gate
-	submitPlan(t, c, "the plan")
-	_, ok := c.Advance(t.Context(), done())
-	require.True(t, ok)
-	assert.Equal(t, PhaseReviewing, c.phase)
-
-	c.Stop() // the idle/done branch clears the segment
-	assert.Equal(t, PhaseDone, c.phase)
-}
-
-func TestControllerParked(t *testing.T) {
-	t.Parallel()
-
-	t.Run("idle_not_parked", func(t *testing.T) {
-		c := New(newFakeHost().host())
-		assert.False(t, c.Parked())
+		require.Empty(t, c.Start(t.Context(), ""))
+		assert.Contains(t, c.Status(), "phase=planning")
+		assert.Contains(t, c.Status(), "round=1/4")
+		assert.Contains(t, f.statuses, "plan: planning (r1/4)")
 	})
 
-	t.Run("planning_not_parked", func(t *testing.T) {
-		c, _ := started(t)
-		assert.False(t, c.Parked())
-	})
+	t.Run("nil_callback_no_panic", func(t *testing.T) {
+		h := newFakeHost().host()
+		h.Status = nil
+		c := New(h)
 
-	t.Run("awaiting_plan_parked", func(t *testing.T) {
-		c, _ := started(t)
-		handOff(t, c, "the plan")
-		assert.True(t, c.Parked())
-	})
+		require.Empty(t, c.Start(t.Context(), "")) // the first transition publishes planning
+		assert.Equal(t, PhasePlanning, c.phase)
 
-	t.Run("implementation_not_parked", func(t *testing.T) {
-		c, _ := started(t)
-		handOff(t, c, "the plan")
+		handOff(t, c, "the plan") // awaiting-plan gate
 		submitPlan(t, c, "the plan")
-		assert.False(t, c.Parked())
+		_, ok := c.Advance(t.Context(), done())
+		require.True(t, ok)
+		assert.Equal(t, PhaseReviewing, c.phase)
+
+		c.Stop() // the idle/done branch clears the segment
+		assert.Equal(t, PhaseDone, c.phase)
 	})
 }

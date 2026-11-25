@@ -380,6 +380,8 @@ func firstOpenID(b *interactionBroker) uint64 {
 }
 
 func TestBrokerOpenDecision(t *testing.T) {
+	t.Parallel()
+
 	t.Run("races_remote", func(t *testing.T) {
 		local := &scriptedLocal{}
 		b, log := newBroker(local)

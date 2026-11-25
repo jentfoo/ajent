@@ -16,8 +16,7 @@ func setClock(t time.Time) func() {
 }
 
 // pinClock pins the clock at t and rewinds the monotonic floor so ids adopt the
-// pinned time outright; the returned restore puts both back, keeping a future
-// stamp from leaking into later tests through lastMS.
+// pinned time outright. Restore rolls both back to keep the stamp isolated.
 func pinClock(t time.Time) func() {
 	mu.Lock()
 	oldFloor := lastMS

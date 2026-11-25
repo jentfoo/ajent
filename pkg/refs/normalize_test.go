@@ -18,8 +18,6 @@ func TestNormalize(t *testing.T) {
 	t.Parallel()
 
 	t.Run("nil_registry_passthrough", func(t *testing.T) {
-		t.Parallel()
-
 		in := agent.Input{Text: "see @a.go"}
 		x := NewExpander(nil, agent.NopSink{}, tools.PathPolicy{}, nil)
 		got := Normalize(x, in, func(string) {})
@@ -28,8 +26,6 @@ func TestNormalize(t *testing.T) {
 	})
 
 	t.Run("expands_like_fresh_prompt", func(t *testing.T) {
-		t.Parallel()
-
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644))
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
@@ -46,8 +42,6 @@ func TestNormalize(t *testing.T) {
 	})
 
 	t.Run("notices_surface", func(t *testing.T) {
-		t.Parallel()
-
 		dir := t.TempDir()
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)
@@ -60,8 +54,6 @@ func TestNormalize(t *testing.T) {
 	})
 
 	t.Run("assembled_context_skips_expansion", func(t *testing.T) {
-		t.Parallel()
-
 		dir := t.TempDir()
 		reg, err := tools.Builtins(tools.Options{Cwd: dir})
 		require.NoError(t, err)

@@ -91,56 +91,50 @@ func TestOnSettled(t *testing.T) {
 		assert.Equal(t, 1, settled)
 	})
 
-	// an observer that queues another input keeps the same Prompt call alive until everything drains
-	t.Run("observer_can_queue_work", func(t *testing.T) {
-		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textOnly("one")},
-			{Events: textOnly("two")},
-		}}
-		a := newTestAgent(nil, p, nil)
+	// an observer that queues follow-up work keeps the same Prompt call alive
+	// until everything drains, whether it nested a Prompt or used Steer
+	t.Run("observer_queues_follow_up", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			steer bool // queue via Steer instead of a nested Prompt
+		}{
+			{"nested_prompt", false},
+			{"steered", true},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
+					{Events: textOnly("one")},
+					{Events: textOnly("two")},
+				}}
+				a := newTestAgent(nil, p, nil)
 
-		var settled int
-		var queued bool
-		var nested error
-		a.opts.OnSettled = []func(context.Context){func(ctx context.Context) {
-			settled++
-			if !queued {
-				queued = true // queue exactly one follow-up so the run terminates
-				nested = a.Prompt(ctx, Input{Text: "next"})
-			}
-		}}
+				var settled int
+				var queued bool
+				var nested error
+				a.opts.OnSettled = []func(context.Context){func(ctx context.Context) {
+					settled++
+					if !queued {
+						queued = true // queue exactly one follow-up so the run terminates
+						if tc.steer {
+							require.True(t, a.Steer(Input{Text: "next"}))
+							return
+						}
+						nested = a.Prompt(ctx, Input{Text: "next"})
+					}
+				}}
 
-		require.NoError(t, a.Prompt(t.Context(), Input{Text: "first"}))
-		assert.True(t, queued)
-		require.NoError(t, nested)
-		assert.Equal(t, 2, settled) // once after each turn drains
+				require.NoError(t, a.Prompt(t.Context(), Input{Text: "first"}))
+				assert.True(t, queued)
+				if !tc.steer {
+					require.NoError(t, nested)
+				}
+				assert.Equal(t, 2, settled) // once after each turn drains
+			})
+		}
 	})
 
-	// an observer that queues via Steer keeps the same Prompt call alive until everything drains
-	t.Run("observer_can_steer", func(t *testing.T) {
-		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
-			{Events: textOnly("one")},
-			{Events: textOnly("two")},
-		}}
-		a := newTestAgent(nil, p, nil)
-
-		var settled int
-		var queued bool
-		a.opts.OnSettled = []func(context.Context){func(ctx context.Context) {
-			settled++
-			if !queued {
-				queued = true // queue exactly one follow-up via Steer so the run terminates
-				require.True(t, a.Steer(Input{Text: "next"}))
-			}
-		}}
-
-		require.NoError(t, a.Prompt(t.Context(), Input{Text: "first"}))
-		assert.True(t, queued)
-		assert.Equal(t, 2, settled) // once after each turn drains
-	})
-
-	// a sibling observer's nested Prompt never wipes steering an earlier observer
-	// queued: the seed appends, so the steer folds in behind the fresh prompt
+	// a sibling observer's nested Prompt never wipes an earlier observer's queued steer
 	t.Run("steer_survives_nested_prompt", func(t *testing.T) {
 		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{
 			{Events: textOnly("one")},

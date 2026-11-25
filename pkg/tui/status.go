@@ -148,6 +148,7 @@ func (s Status) fixedParts(t Theme) []part {
 	if s.Estimated {
 		tilde = "~" // the count is approximate until the next provider report
 	}
+	// token counts format base-1000 unsuffixed; byte sizes elsewhere pick strutil.HumanSize
 	toks := t.Dim.Wrap(tilde + strutil.FormatTokens(s.Tokens) + "/" + strutil.FormatTokens(s.MaxTokens))
 	return append(parts, part{orderContext, neverCollapse, bar + " " + toks, ""})
 }

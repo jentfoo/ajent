@@ -59,49 +59,67 @@ func TestRegistryDeclarationOrder(t *testing.T) {
 	assert.Equal(t, []string{"read", "write", "edit"}, got)
 }
 
-func TestRegistryDefaultEnableDisable(t *testing.T) {
+func TestRegistryEnableState(t *testing.T) {
 	t.Parallel()
 
-	r := New()
-	r.Register(&fakeTool{name: "bash"}, true)
-	r.Register(&fakeTool{name: "find"}, false)
+	// registration's enabled flag seeds the state, Get refusing disabled names
+	t.Run("defaults", func(t *testing.T) {
+		r := New()
+		r.Register(&fakeTool{name: "bash"}, true)
+		r.Register(&fakeTool{name: "find"}, false)
 
-	assert.True(t, r.IsEnabled("bash"))
-	assert.False(t, r.IsEnabled("find"))
+		assert.True(t, r.IsEnabled("bash"))
+		assert.False(t, r.IsEnabled("find"))
+		assert.False(t, r.IsEnabled("ghost")) // unregistered is never enabled
 
-	_, ok := r.Get("bash")
-	assert.True(t, ok) // enabled tools resolve
-	_, ok = r.Get("find")
-	assert.False(t, ok) // disabled ones do not
-}
+		_, ok := r.Get("bash")
+		assert.True(t, ok) // enabled tools resolve
+		_, ok = r.Get("find")
+		assert.False(t, ok) // disabled ones do not
+	})
 
-func TestRegistrySetEnabledWithUnknownNameIgnored(t *testing.T) {
-	t.Parallel()
+	// SetEnabled replaces the whole set; unknown names are ignored
+	t.Run("set_enabled_replaces", func(t *testing.T) {
+		r := New()
+		for _, n := range []string{"a", "b"} {
+			r.Register(&fakeTool{name: n}, true)
+		}
+		r.SetEnabled([]string{"a", "ghost"}) // ghost is unknown and ignored
+		assert.Equal(t, []string{"a"}, r.Names())
 
-	r := New()
-	for _, n := range []string{"a", "b"} {
-		r.Register(&fakeTool{name: n}, true)
-	}
-	r.SetEnabled([]string{"a", "ghost"}) // ghost is unknown and ignored
-	assert.Equal(t, []string{"a"}, r.Names())
-}
+		r.SetEnabled(nil) // the set replaces, nothing survives
+		assert.False(t, r.IsEnabled("a"))
+	})
 
-func TestRegistryIsEnabled(t *testing.T) {
-	t.Parallel()
+	t.Run("enable_promotes_disabled", func(t *testing.T) {
+		r := New()
+		for _, n := range []string{"a", "b"} {
+			r.RegisterState("mcp: srv", &fakeTool{name: "srv__" + n}, StateDisabled)
+		}
 
-	r := New()
-	r.Register(&fakeTool{name: "read"}, true)
-	r.Register(&fakeTool{name: "ls"}, false)
+		assert.Empty(t, r.Schemas())
+		_, ok := r.Get("srv__a")
+		assert.False(t, ok) // disabled tools are not callable by name
 
-	assert.True(t, r.IsEnabled("read"))
-	assert.False(t, r.IsEnabled("ls"))
-	assert.False(t, r.IsEnabled("ghost")) // unregistered is never enabled
+		r.Enable([]string{"srv__b"}) // promotion widens to enabled
+		names := r.Names()
+		require.Len(t, names, 1)
+		assert.Equal(t, "srv__b", names[0])
+		assert.Len(t, r.Schemas(), 1) // promoted schema now reaches the prompt
+	})
 
-	r.Enable([]string{"ls"})
-	assert.True(t, r.IsEnabled("ls"))
+	t.Run("enable_is_additive", func(t *testing.T) {
+		r := New()
+		r.Register(&fakeTool{name: "read"}, true)
+		r.Register(&fakeTool{name: "ls"}, false)
 
-	r.SetEnabled(nil) // the set replaces, nothing survives
-	assert.False(t, r.IsEnabled("read"))
+		r.Enable([]string{"ls"})
+		assert.True(t, r.IsEnabled("read")) // Enable must not disable existing tools
+		assert.True(t, r.IsEnabled("ls"))
+
+		r.Enable([]string{"ghost"}) // unknown names ignored, no error
+		assert.True(t, r.IsEnabled("ls"))
+	})
 }
 
 func TestRegistrySchemaCacheInvalidatedBySetEnabled(t *testing.T) {
@@ -118,25 +136,6 @@ func TestRegistrySchemaCacheInvalidatedBySetEnabled(t *testing.T) {
 	schemas2 := r.Schemas()
 	require.Len(t, schemas2, 1)
 	assert.Equal(t, "write", schemas2[0].Name)
-}
-
-func TestRegistryEnablePromotesDisabled(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-	for _, n := range []string{"a", "b"} {
-		r.RegisterState("mcp: srv", &fakeTool{name: "srv__" + n}, StateDisabled)
-	}
-
-	assert.Empty(t, r.Schemas())
-	_, ok := r.Get("srv__a")
-	assert.False(t, ok) // disabled tools are not callable by name
-
-	r.Enable([]string{"srv__b"}) // promotion widens to enabled
-	names := r.Names()
-	require.Len(t, names, 1)
-	assert.Equal(t, "srv__b", names[0])
-	assert.Len(t, r.Schemas(), 1) // promoted schema now reaches the prompt
 }
 
 func TestRegistryMarkReadOnlyMetadata(t *testing.T) {
@@ -200,21 +199,6 @@ func TestRegistryDisabledListsDisabledOnly(t *testing.T) {
 		got = append(got, tool.Name())
 	}
 	assert.Equal(t, []string{"ls", "find"}, got)
-}
-
-func TestRegistryEnableIsAdditive(t *testing.T) {
-	t.Parallel()
-
-	r := New()
-	r.Register(&fakeTool{name: "read"}, true)
-	r.Register(&fakeTool{name: "ls"}, false)
-
-	r.Enable([]string{"ls"})
-	assert.True(t, r.IsEnabled("read")) // Enable must not disable existing tools
-	assert.True(t, r.IsEnabled("ls"))
-
-	r.Enable([]string{"ghost"}) // unknown names ignored, no error
-	assert.True(t, r.IsEnabled("ls"))
 }
 
 func TestRegistryTrackerExposedByBuiltins(t *testing.T) {
@@ -536,6 +520,8 @@ func TestGuardedToolPreviewSkipsNonPreviewers(t *testing.T) {
 }
 
 func TestRegistryConcurrentRegisterAndSetEnabled(t *testing.T) {
+	t.Parallel()
+
 	r := New()
 	for _, n := range []string{"read", "write"} {
 		r.Register(&fakeTool{name: n}, true)

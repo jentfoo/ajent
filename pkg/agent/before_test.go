@@ -42,66 +42,68 @@ func TestInputBeforeAppendedAheadOfText(t *testing.T) {
 	assert.Equal(t, "what was that?", tb.Text)
 }
 
-func TestInputAfterAppendedBehindText(t *testing.T) {
+func TestInputAfter(t *testing.T) {
 	t.Parallel()
 
-	var seen []MessageInfo
-	var order []string
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info) }}
+	// after messages land behind the typed text and stay injected
+	t.Run("appended_behind_text", func(t *testing.T) {
+		var seen []MessageInfo
+		var order []string
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info) }}
 
-	after := func(context.Context) []llm.Message {
-		order = append(order, "after")
-		return []llm.Message{
-			{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
-				ID: "ref-1-a.go", Name: "read", Input: json.RawMessage(`{"path":"a.go"}`),
-			}}},
-			{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
-				CallID: "ref-1-a.go", Content: llm.BlockList{llm.TextBlock{Text: "package a"}},
-			}}},
+		after := func(context.Context) []llm.Message {
+			order = append(order, "after")
+			return []llm.Message{
+				{Role: llm.RoleAssistant, Content: llm.BlockList{llm.ToolCallBlock{
+					ID: "ref-1-a.go", Name: "read", Input: json.RawMessage(`{"path":"a.go"}`),
+				}}},
+				{Role: llm.RoleUser, Content: llm.BlockList{llm.ToolResultBlock{
+					CallID: "ref-1-a.go", Content: llm.BlockList{llm.TextBlock{Text: "package a"}},
+				}}},
+			}
 		}
-	}
-	err := a.Prompt(t.Context(), Input{
-		Text:      "explain @a.go",
-		After:     after,
-		Delivered: func() { order = append(order, "delivered") },
-		Settled:   func() { order = append(order, "settled") },
+		err := a.Prompt(t.Context(), Input{
+			Text:      "explain @a.go",
+			After:     after,
+			Delivered: func() { order = append(order, "delivered") },
+			Settled:   func() { order = append(order, "settled") },
+		})
+		require.NoError(t, err)
+
+		// the user text, then its reads, then the assistant reply
+		require.Len(t, seen, 4)
+		tb, ok := seen[0].Message.Content[0].(llm.TextBlock)
+		require.True(t, ok)
+		assert.Equal(t, "explain @a.go", tb.Text)
+		assert.False(t, seen[0].Injected)
+		assert.Equal(t, llm.RoleAssistant, seen[1].Message.Role)
+		assert.Equal(t, llm.RoleUser, seen[2].Message.Role)
+		assert.True(t, seen[1].Injected)
+		assert.True(t, seen[2].Injected)
+		// the echo lands with the message so the reads render under it, and the
+		// reserve is released only once they have been accounted
+		assert.Equal(t, []string{"delivered", "after", "settled"}, order)
 	})
-	require.NoError(t, err)
 
-	// the user text, then its reads, then the assistant reply
-	require.Len(t, seen, 4)
-	tb, ok := seen[0].Message.Content[0].(llm.TextBlock)
-	require.True(t, ok)
-	assert.Equal(t, "explain @a.go", tb.Text)
-	assert.False(t, seen[0].Injected)
-	assert.Equal(t, llm.RoleAssistant, seen[1].Message.Role)
-	assert.Equal(t, llm.RoleUser, seen[2].Message.Role)
-	assert.True(t, seen[1].Injected)
-	assert.True(t, seen[2].Injected)
-	// the echo lands with the message so the reads render under it, and the reserve
-	// is released only once they have been accounted
-	assert.Equal(t, []string{"delivered", "after", "settled"}, order)
-}
+	// an After-only input still lands its messages without any typed text
+	t.Run("only_still_lands", func(t *testing.T) {
+		var seen []llm.Message
+		p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
+		a := newTestAgent(nil, p, nil)
+		a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message) }}
 
-func TestInputAfterOnlyStillLands(t *testing.T) {
-	t.Parallel()
+		err := a.Prompt(t.Context(), Input{After: func(context.Context) []llm.Message {
+			return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "ctx"}}}}
+		}})
+		require.NoError(t, err)
 
-	var seen []llm.Message
-	p := &llm.ScriptedProvider{Turns: []llm.ScriptedTurn{{Events: textOnly("ok")}}}
-	a := newTestAgent(nil, p, nil)
-	a.opts.OnMessage = []func(MessageInfo){func(info MessageInfo) { seen = append(seen, info.Message) }}
-
-	err := a.Prompt(t.Context(), Input{After: func(context.Context) []llm.Message {
-		return []llm.Message{{Role: llm.RoleUser, Content: llm.BlockList{llm.TextBlock{Text: "ctx"}}}}
-	}})
-	require.NoError(t, err)
-
-	require.Len(t, seen, 2)
-	tb, ok := seen[0].Content[0].(llm.TextBlock)
-	require.True(t, ok)
-	assert.Equal(t, "ctx", tb.Text)
+		require.Len(t, seen, 2)
+		tb, ok := seen[0].Content[0].(llm.TextBlock)
+		require.True(t, ok)
+		assert.Equal(t, "ctx", tb.Text)
+	})
 }
 
 func TestInputBeforeMarkedInjected(t *testing.T) {
@@ -258,10 +260,7 @@ func TestNewOutputForwardsToSink(t *testing.T) {
 	assert.Equal(t, []string{"tool_output", "diff"}, sink.calls)
 }
 
-// TestInputSettledSeesReadsAccounted asserts a host's submit reserve outlives the
-// reads it was holding tokens for. Releasing it on Delivered dropped the whole
-// reserve for the repaint between the two, so a large @ read flashed the bar down
-// and straight back up as its pair landed.
+// the submit reserve must outlive Delivered so pending reads never dip the token bar
 func TestInputSettledSeesReadsAccounted(t *testing.T) {
 	t.Parallel()
 

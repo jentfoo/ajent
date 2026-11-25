@@ -109,14 +109,13 @@ func TestShellComplete(t *testing.T) {
 		assert.Equal(t, 4, start)
 		assert.Empty(t, items)
 	})
-}
 
-func TestShellCmdStart(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, 1, shellCmdStart(tui.GraphemeCells("!ls")))
-	assert.Equal(t, 2, shellCmdStart(tui.GraphemeCells("!!ls")))
-	assert.Equal(t, 1, shellCmdStart(tui.GraphemeCells("!")))
+	// the !! exclusion prefix shifts the command start one cell right
+	t.Run("cmd_start", func(t *testing.T) {
+		assert.Equal(t, 1, shellCmdStart(tui.GraphemeCells("!ls")))
+		assert.Equal(t, 2, shellCmdStart(tui.GraphemeCells("!!ls")))
+		assert.Equal(t, 1, shellCmdStart(tui.GraphemeCells("!")))
+	})
 }
 
 func TestIsCmdPosition(t *testing.T) {

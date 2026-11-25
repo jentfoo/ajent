@@ -25,8 +25,7 @@ func TestSessionAffinityHeaders(t *testing.T) {
 	t.Run("anthropic_no_beta_still_affixed", func(t *testing.T) {
 		srv, got := sseServer(t, "anthropic/text.sse")
 		p := newAnthropicTestProvider(t, srv.URL)
-		// no reasoning means no interleaved beta header, so the affinity header must
-		// still be applied on the shared-headers path
+		// no reasoning: the shared-headers path must still apply it
 		m := anthropicModel(func(c *Capabilities) { c.SessionAffinity = true; c.Reasoning = false })
 
 		s, err := p.Stream(t.Context(), Request{Model: m, SessionID: "sess-1"})

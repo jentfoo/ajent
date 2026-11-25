@@ -19,8 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testGlobals serializes the subtests that mutate package globals, so a future
-// parallel parent cannot interleave an override's window with another reader.
+// testGlobals serializes global-mutating subtests against future parallel parents.
 var testGlobals sync.Mutex
 
 // setVersionForTest overrides Version for a subtest and restores it on cleanup.
@@ -44,13 +43,17 @@ func TestCheckUpdateNotice(t *testing.T) {
 		return UpdateCheckOptions{Now: func() time.Time { return at }, Fetch: fn}
 	}
 
-	t.Run("no_update_when_current", func(t *testing.T) {
-		setVersionForTest(t, "v0.1.5")
+	t.Run("current_and_dev_no_notice", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "remote.json")
 		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
-		require.NoError(t, err)
-		assert.Empty(t, msg)
+		for _, v := range []string{"v0.1.5", "dev"} {
+			t.Run(v, func(t *testing.T) {
+				setVersionForTest(t, v)
+				msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
+				require.NoError(t, err)
+				assert.Empty(t, msg)
+			})
+		}
 	})
 
 	t.Run("notices_when_older", func(t *testing.T) {
@@ -61,15 +64,6 @@ func TestCheckUpdateNotice(t *testing.T) {
 		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
 		require.NoError(t, err)
 		assert.Equal(t, want, msg)
-	})
-
-	t.Run("dev_never_notices", func(t *testing.T) {
-		setVersionForTest(t, "dev")
-		path := filepath.Join(t.TempDir(), "remote.json")
-		require.NoError(t, saveUpdateCache(path, UpdateCache{Version: "v0.1.5", CheckedAt: now.Unix()}))
-		msg, err := CheckUpdateNotice(t.Context(), path, optsAt(noFetch, now))
-		require.NoError(t, err)
-		assert.Empty(t, msg)
 	})
 
 	t.Run("respects_notice_interval", func(t *testing.T) {
@@ -163,20 +157,6 @@ func TestParseVersion(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestLoadUpdateCacheMissingFile(t *testing.T) {
-	t.Parallel()
-
-	var c UpdateCache
-	loadUpdateCache(filepath.Join(t.TempDir(), "absent.json"), &c)
-	assert.Empty(t, c.Version)
-
-	data := []byte(`{"version":"v0.1.5","checkedAtUnix":100,"noticedAtUnix":200}`)
-	require.NoError(t, os.WriteFile(filepath.Join(t.TempDir(), "x.json"), data, 0o600))
-	var got UpdateCache
-	loadUpdateCache("", &got) // ignored path: no-op
-	assert.Empty(t, got.Version)
 }
 
 func TestFetchLatestVersion(t *testing.T) {

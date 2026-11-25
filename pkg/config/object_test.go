@@ -39,8 +39,7 @@ func TestParseNode(t *testing.T) {
 	}
 
 	t.Run("trailing_bytes_error_is_positioned", func(t *testing.T) {
-		// the offset lands on the first trailing byte, so JSONError can name its
-		// line and column like every other config file failure
+		// the offset lands on the first trailing byte so JSONError can name its line/col
 		data := `"done"` + "\n  junk"
 		_, err := parseNode([]byte(data))
 		var oe *offsetError
@@ -100,8 +99,7 @@ func TestSetKey(t *testing.T) {
 	})
 
 	t.Run("duplicate_key_round_trips_once", func(t *testing.T) {
-		// a source file that repeats a key keeps the last value; the key must
-		// not be emitted twice on Save
+		// a duplicated key keeps its last value and round-trips once
 		root, err := parseNode([]byte(`{"a":1,"a":2}`))
 		require.NoError(t, err)
 		out := root.marshal()
@@ -109,8 +107,7 @@ func TestSetKey(t *testing.T) {
 	})
 
 	t.Run("non_object_document_refused", func(t *testing.T) {
-		// a stray document cannot gain a key without discarding what it holds;
-		// Load rejects these shapes too, so saving must refuse them loudly
+		// SetKey refuses stray documents rather than discard their content
 		for _, data := range []string{`[1]`, `123`, `"x"`, `null`} {
 			out, err := SetKey([]byte(data), "model", "m")
 			assert.Nil(t, out)
@@ -120,8 +117,7 @@ func TestSetKey(t *testing.T) {
 	})
 
 	t.Run("non_object_refusal_names_the_value", func(t *testing.T) {
-		// the refusal is positioned at the value's first byte so JSONError can
-		// name its line and column like every other config file failure
+		// the refusal points at the value's first byte
 		data := "\n  [1]"
 		_, err := SetKey([]byte(data), "a", 1)
 		var oe *offsetError

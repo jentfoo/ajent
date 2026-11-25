@@ -11,11 +11,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDetectEnvironment(t *testing.T) {
+	t.Parallel()
+
+	env := DetectEnvironment()
+	assert.NotEmpty(t, env.Cwd)
+	assert.NotEmpty(t, env.OS)
+	assert.NotEmpty(t, env.Date)
+}
+
 func TestBuildSystem(t *testing.T) {
 	t.Parallel()
 
-	// the whole system prompt is a single text block carrying env facts
-	t.Run("base", func(t *testing.T) {
+	// a single text block carrying env facts and the identity line
+	t.Run("env_and_identity", func(t *testing.T) {
 		env := Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}
 
 		blocks := buildSystem(env, nil, nil, "")
@@ -26,13 +35,6 @@ func TestBuildSystem(t *testing.T) {
 		for _, want := range []string{"/repo", "linux/amd64", "2024-01-02"} {
 			assert.Contains(t, tb.Text, want)
 		}
-	})
-
-	t.Run("identity_line", func(t *testing.T) {
-		blocks := buildSystem(Environment{Cwd: "/repo", OS: "linux/amd64", Date: "2024-01-02"}, nil, nil, "")
-
-		tb, ok := blocks[0].(llm.TextBlock)
-		require.True(t, ok)
 		assert.Contains(t, tb.Text,
 			"You help by following the user's instructions: research and review until you understand them, then focus on what is asked.")
 	})
@@ -159,15 +161,6 @@ func TestBuildSystem(t *testing.T) {
 			assert.Contains(t, tb.Text, want)
 		}
 	})
-}
-
-func TestDetectEnvironment(t *testing.T) {
-	t.Parallel()
-
-	env := DetectEnvironment()
-	assert.NotEmpty(t, env.Cwd)
-	assert.NotEmpty(t, env.OS)
-	assert.NotEmpty(t, env.Date)
 }
 
 func TestLoadProjectInstructions(t *testing.T) {

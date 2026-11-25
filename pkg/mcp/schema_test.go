@@ -345,8 +345,7 @@ func TestSchemaDefectDepthCap(t *testing.T) {
 		assert.Contains(t, got, "nested too deeply")
 	})
 	t.Run("deep_bytes_stay_fast", func(t *testing.T) {
-		// a single decode bounds work: a 2000-deep schema answers without the
-		// quadratic re-decode the raw walker used to pay per level
+		// one decode bounds work even past the depth cap
 		raw := json.RawMessage(nested(2000))
 		assert.Contains(t, schemaDefect(raw), "nested too deeply")
 	})

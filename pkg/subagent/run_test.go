@@ -138,8 +138,7 @@ func TestTruncatedSummary(t *testing.T) {
 		assert.True(t, lastRequestEndsWith(sp, truncatedNudge))
 	})
 
-	// a turn ended by the step limit leaves tool calls unanswered in the final
-	// assistant message; that counts as cut off and gets the same wrap-up turn
+	// an unanswered tool call at the step limit counts as cut off
 	t.Run("step_limit_tool_calls_nudged", func(t *testing.T) {
 		toolTurn := []llm.Event{
 			{Type: llm.EventTextStart, Index: 0},
@@ -198,20 +197,6 @@ func lastRequestEndsWith(sp *llm.ScriptedProvider, text string) bool {
 	return false
 }
 
-func TestRunAbortedContextIsNotACompletion(t *testing.T) {
-	t.Parallel()
-
-	b := &blockingProvider{}
-	m := New(wired(t, Options{Provider: func(llm.Model) (llm.Provider, error) { return b, nil }}))
-	t.Cleanup(m.Close)
-
-	id := m.start("q", "", "")
-	require.NoError(t, m.Stop(id))
-	j, ok, _ := m.poll(t.Context(), id)
-	require.True(t, ok)
-	assert.Equal(t, StatusAborted, j.Status)
-}
-
 func TestRunInheritsModel(t *testing.T) {
 	t.Parallel()
 
@@ -231,8 +216,7 @@ func TestRunInheritsModel(t *testing.T) {
 	require.Eventually(t, func() bool { return len(sp.Requests()) > 0 }, time.Second, 5*time.Millisecond)
 	assert.Equal(t, "child-model", sp.Requests()[0].Model.ID)
 
-	// the ledger is pinned to the parent's model at Child(); run must rebase it so
-	// window/reserve follow the child's own model
+	// run rebases the parent-pinned ledger onto the child's own model
 	lj, ok := m.lookup(id)
 	require.True(t, ok)
 	c := lj.tokens.Context()

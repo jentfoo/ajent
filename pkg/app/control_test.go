@@ -307,9 +307,6 @@ func TestPidDead(t *testing.T) {
 	})
 }
 
-// TestCollectStaleNeverDials pins the passive sweep: a live peer's files
-// survive a sweep without its socket ever accepting a connection.
-
 func TestControlCollectStale(t *testing.T) {
 	t.Run("never_dials", func(t *testing.T) {
 		rig := newServeRig(t, nil) // not parallel: AJENT_HOME pins the control dir

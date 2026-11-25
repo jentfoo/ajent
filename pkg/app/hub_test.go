@@ -107,6 +107,8 @@ func (o rigObserver) log(ev string) {
 }
 
 func TestHubSubmit(t *testing.T) {
+	t.Parallel()
+
 	t.Run("routes_like_the_editor", func(t *testing.T) {
 		submit := func(t *testing.T, line string, fromEditor bool) []pumpLine {
 			t.Helper()
@@ -343,6 +345,8 @@ func TestHubModeCycleMatchesKeypress(t *testing.T) {
 }
 
 func TestHubSnapshot(t *testing.T) {
+	t.Parallel()
+
 	t.Run("truth", func(t *testing.T) {
 		term, _ := pipeUI(t)
 		hub := newTestHub(term)
@@ -437,6 +441,8 @@ func TestHubSnapshot(t *testing.T) {
 }
 
 func TestHubHeadTracks(t *testing.T) {
+	t.Parallel()
+
 	t.Run("tracks_switches", func(t *testing.T) {
 		w, err := session.Create(filepath.Join(t.TempDir(), "s.jsonl"),
 			session.SessionData{Version: session.Version()})

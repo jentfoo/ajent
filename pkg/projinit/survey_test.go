@@ -167,6 +167,7 @@ func TestCodeSlices(t *testing.T) {
 	})
 }
 
+// literal file counts, so a threshold move must update this test on purpose
 func TestAgentCount(t *testing.T) {
 	t.Parallel()
 
@@ -176,11 +177,13 @@ func TestAgentCount(t *testing.T) {
 		want  int
 	}{
 		{"tiny_one_pass", 10, 1},
-		{"just_under_small", smallRepo - 1, 1},
-		{"medium_two", smallRepo, 2},
-		{"large_three", mediumRepo, 3},
-		{"huge_four", largeRepo, 4},
-		{"caps_at_four", largeRepo * 100, maxCodeAgents},
+		{"just_under_small", 49, 1},
+		{"medium_two", 50, 2},
+		{"just_under_medium", 199, 2},
+		{"large_three", 200, 3},
+		{"just_under_large", 599, 3},
+		{"huge_four", 600, 4},
+		{"caps_at_four", 100000, maxCodeAgents},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -199,9 +202,7 @@ func TestBuildTasks(t *testing.T) {
 		require.Len(t, got, 2) // one build survey plus one codebase slice
 
 		assert.Equal(t, buildLabel, got[0].label)
-		for _, want := range []string{"Makefile", ".github/workflows", "CONTRIBUTING.md"} {
-			assert.Contains(t, got[0].text, want)
-		}
+		// the wording itself is pinned by TestBuildTask in prompt_test.go
 		for _, want := range []string{"pkg/", "cmd/"} {
 			assert.Contains(t, got[1].text, want)
 		}
@@ -227,6 +228,8 @@ func TestGroup(t *testing.T) {
 			{path: "pkg", count: 4},
 			{count: 2}, // main.go and go.mod as one loose unit
 		}, got)
+		assert.Equal(t, "pkg/", got[0].label())
+		assert.Equal(t, "the files at the repository root", got[1].label())
 	})
 
 	t.Run("one_level_down", func(t *testing.T) {
@@ -236,19 +239,12 @@ func TestGroup(t *testing.T) {
 			{path: "pkg/b", count: 1},
 			{dir: "pkg", count: 1},
 		}, got)
+		assert.Equal(t, "the files directly in pkg/", got[2].label())
 	})
 
 	t.Run("unknown_prefix", func(t *testing.T) {
 		assert.Empty(t, group(files, "nope/"))
 	})
-}
-
-func TestUnitLabel(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, "pkg/agent/", unit{path: "pkg/agent"}.label())
-	assert.Equal(t, "the files at the repository root", unit{}.label())
-	assert.Equal(t, "the files directly in pkg/", unit{dir: "pkg"}.label())
 }
 
 func TestSliceUnits(t *testing.T) {
@@ -313,8 +309,7 @@ func TestLargest(t *testing.T) {
 func TestRepoFiles(t *testing.T) {
 	t.Parallel()
 
-	// paths arrive cwd-relative with .gitignore honoured, so ignored trees never
-	// inflate a slice and names read the way the walk fallback spells them
+	// git-honoured, cwd-relative names
 	t.Run("git_repo_relative_names", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTree(t, dir, "main.go", "pkg/a.go")

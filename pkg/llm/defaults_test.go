@@ -339,8 +339,7 @@ func TestFlavorDefaults(t *testing.T) {
 	t.Parallel()
 
 	t.Run("no_flavor_ships_models", func(t *testing.T) {
-		// a compiled in model list would go stale in a way that silently
-		// corrupts the context bar, so there must never be one
+		// compiled-in model lists rot
 		for f, d := range flavorDefaults {
 			assert.NotEmpty(t, d.dialect.String(), f.String())
 		}
@@ -449,6 +448,19 @@ func TestFlavorDefaults(t *testing.T) {
 			assert.True(t, flavorDefaults[f].caps.Reasoning, f.String())
 		}
 	})
+
+	t.Run("zai_defaults", func(t *testing.T) {
+		caps := flavorDefaults[FlavorZAI].caps
+		assert.True(t, caps.Reasoning)
+		assert.Equal(t, ThinkingZAI, caps.Thinking)
+		assert.Equal(t, fieldReasoningConten, caps.ReasoningField)
+		assert.True(t, caps.ZaiToolStream)
+	})
+
+	t.Run("zai_coding_cn_discovers", func(t *testing.T) {
+		assert.True(t, flavorDefaults[FlavorZaiCodingCN].discover)
+		assert.Equal(t, "zai-coding-cn", FlavorZaiCodingCN.String())
+	})
 }
 
 func TestLookupFlavor(t *testing.T) {
@@ -482,16 +494,4 @@ func TestLookupFlavor(t *testing.T) {
 			assert.False(t, ok, name)
 		}
 	})
-}
-
-func TestZaiFlavorDefaults(t *testing.T) {
-	t.Parallel()
-
-	caps := flavorDefaults[FlavorZAI].caps
-	assert.True(t, caps.Reasoning)
-	assert.Equal(t, ThinkingZAI, caps.Thinking)
-	assert.Equal(t, fieldReasoningConten, caps.ReasoningField)
-	assert.True(t, caps.ZaiToolStream)
-	assert.True(t, flavorDefaults[FlavorZaiCodingCN].discover)
-	assert.Equal(t, "zai-coding-cn", FlavorZaiCodingCN.String())
 }

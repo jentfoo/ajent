@@ -25,7 +25,9 @@ func TestRegisterBuiltinsInstallsAll(t *testing.T) {
 	c.commands = r
 	RegisterBuiltins(r, c)
 
-	want := []string{"help", "model", "reasoning", "usage", "copy", "compact", "tools", "session", "mcp", "reload", "agents", "settings", "update", "exit"}
+	// the exact set and order of built-in commands is user-visible (help, docs)
+	want := []string{"help", "model", "reasoning", "usage", "copy", "compact", "tools",
+		"session", "mcp", "reload", "agents", "settings", "update", "exit"}
 	assert.Equal(t, want, commandNames(r))
 }
 

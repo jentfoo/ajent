@@ -5,9 +5,8 @@ import (
 	"testing"
 )
 
-// BenchmarkStripANSI measures the escape filter under the shapes that reach it:
-// plain and styled lines stripped per wrapped row, a contaminated stream, and a
-// chunked feed carrying an open sequence across calls.
+// BenchmarkStripANSI measures the escape filter on plain, styled, contaminated
+// and chunked inputs.
 func BenchmarkStripANSI(b *testing.B) {
 	for _, tc := range []struct {
 		name   string

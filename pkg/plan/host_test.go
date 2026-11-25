@@ -24,8 +24,7 @@ type forkCall struct {
 	model llm.Model
 }
 
-// fakeHost records everything the controller drives so tests can assert on the
-// sequence rather than on a real session, registry or UI.
+// fakeHost records every host call for sequence assertions.
 type fakeHost struct {
 	mu sync.Mutex
 
@@ -37,9 +36,7 @@ type fakeHost struct {
 	askErr   error
 	// messages is what the live context carries, for the summary fallback
 	messages []llm.Message
-	// landed says the newest custom entry is followed by messages on the
-	// branch. A persist drops it to false the way a real append would, so a
-	// restore must read it before persisting
+	// persist clears landed the way a real append would
 	landed  bool
 	forkErr error
 
@@ -202,6 +199,3 @@ func call(t *testing.T, c *Controller, name, args string) agent.ToolResult {
 
 // done is a cleanly finished turn.
 func done() agent.TurnResult { return agent.TurnResult{Stop: llm.StopEndTurn} }
-
-// agentCall builds a bare call for label checks.
-func agentCall(name string) agent.ToolCall { return agent.ToolCall{Name: name} }

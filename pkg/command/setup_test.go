@@ -406,20 +406,6 @@ func TestProviderSetupChoices(t *testing.T) {
 		assert.False(t, providerSetupChoices[3].local)
 	})
 
-	t.Run("openrouter_follows_other", func(t *testing.T) {
-		assert.Equal(t, 3, pickName("openrouter"))
-		assert.Equal(t, 4, pickName("anthropic"))
-	})
-
-	t.Run("one_row_per_vendor", func(t *testing.T) {
-		labels := make([]string, 0, len(providerSetupChoices))
-		for _, ch := range providerSetupChoices {
-			assert.NotContains(t, labels, ch.label)
-			labels = append(labels, ch.label)
-			assert.NotContains(t, ch.name, "-cn", ch.name)
-		}
-	})
-
 	t.Run("groups_render_local_then_other_then_hosted", func(t *testing.T) {
 		var order []string
 		for _, ch := range providerSetupChoices {

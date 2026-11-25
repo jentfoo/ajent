@@ -20,7 +20,6 @@ func TestGitLog(t *testing.T) {
 	t.Parallel()
 
 	t.Run("lists_newest_first_with_metadata", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{}`)
 		assert.False(t, isErr)
@@ -30,7 +29,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("file_filter_scopes_to_path", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"a.txt"}`)
 		assert.False(t, isErr)
@@ -39,7 +37,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("follows_rename_to_older_history", func(t *testing.T) {
-		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"moved.txt"}`)
 		assert.False(t, isErr)
@@ -50,7 +47,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("old_name_still_finds_creation", func(t *testing.T) {
-		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"origin.txt"}`)
 		assert.False(t, isErr)
@@ -61,7 +57,6 @@ func TestGitLog(t *testing.T) {
 	// pairing follows content alone (tools-design.md), so a rename that also
 	// changed mode keeps one change and the walk continues under the old name
 	t.Run("follows_rename_through_chmod", func(t *testing.T) {
-		t.Parallel()
 		g, _ := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"new.sh"}`)
 		assert.False(t, isErr)
@@ -73,7 +68,6 @@ func TestGitLog(t *testing.T) {
 	// edited blobs pair by similarity instead of the exact-hash match above,
 	// with modes normalised first so a chmod keeps one change
 	t.Run("follows_edited_rename_through_chmod", func(t *testing.T) {
-		t.Parallel()
 		g, _ := renameChmodRepo(t, 0o644, "echo hi\nmore\n", 0o755)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"new.sh"}`)
 		assert.False(t, isErr)
@@ -82,7 +76,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("old_name_passes_rename_chmod", func(t *testing.T) {
-		t.Parallel()
 		g, _ := renameChmodRepo(t, 0o644, "echo hi\n", 0o755)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"old.sh"}`)
 		assert.False(t, isErr)
@@ -93,7 +86,6 @@ func TestGitLog(t *testing.T) {
 	// both readers see one rename at the same commit, so log may never claim
 	// creation where show describes a rename
 	t.Run("readers_agree_on_rename_chmod", func(t *testing.T) {
-		t.Parallel()
 		g, h := renameChmodRepo(t, 0o644, "echo hi\nmore\n", 0o755)
 		showOut, isErr := runGitTool(t, &gitShowTool{policy: g.policy()}, `{"ref":"`+h+`"}`)
 		assert.False(t, isErr)
@@ -106,7 +98,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("follow_limit_reports_more", func(t *testing.T) {
-		t.Parallel()
 		g := newLinearRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"moved.txt","limit":1}`)
 		assert.False(t, isErr)
@@ -116,7 +107,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("step_cap_counts_shown_commits", func(t *testing.T) {
-		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits+10)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"target.txt"}`)
 		assert.False(t, isErr)
@@ -126,7 +116,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("step_cap_without_match_stays_partial", func(t *testing.T) {
-		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits+10)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt","limit":5}`)
 		assert.False(t, isErr)
@@ -135,7 +124,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("cap_at_history_end_is_complete", func(t *testing.T) {
-		t.Parallel()
 		g := newDeepRepo(t, maxLogCommits-4) // the cut lands exactly at history's end
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt"}`)
 		assert.False(t, isErr)
@@ -149,7 +137,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("empty_scope_says_so", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"ghost.txt"}`)
 		assert.False(t, isErr)
@@ -157,7 +144,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("limit_bounds_output", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"limit":1}`)
 		assert.False(t, isErr)
@@ -168,7 +154,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("limit_at_history_end_has_no_note", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t) // exactly three commits
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"limit":3}`)
 		assert.False(t, isErr)
@@ -176,7 +161,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("unborn_head_errors_cleanly", func(t *testing.T) {
-		t.Parallel()
 		dir := t.TempDir()
 		_, err := git.PlainInit(dir, false)
 		require.NoError(t, err)
@@ -187,7 +171,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("trailing_separator_file_scope", func(t *testing.T) {
-		t.Parallel()
 		g := newGitRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./a.txt/"}`)
 		assert.False(t, isErr)
@@ -195,7 +178,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("directory_scope_lists_nested_history", func(t *testing.T) {
-		t.Parallel()
 		g := newDirRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"pkg/"}`)
 		assert.False(t, isErr)
@@ -206,7 +188,6 @@ func TestGitLog(t *testing.T) {
 	})
 
 	t.Run("dot_slash_scope_matches_too", func(t *testing.T) {
-		t.Parallel()
 		g := newDirRepo(t)
 		out, isErr := runGitTool(t, &gitLogTool{policy: g.policy()}, `{"file":"./pkg/"}`)
 		assert.False(t, isErr)

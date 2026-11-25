@@ -152,46 +152,34 @@ func TestLoadConfig(t *testing.T) {
 }
 
 func TestValidateServer(t *testing.T) {
-	cases := []struct {
-		name        string
-		cfg         ServerConfig
-		errContains string
-	}{
-		{"stdio_needs_a_command", ServerConfig{Transport: "stdio", URL: "http://x"}, "requires a command"},
-		{"network_needs_a_url", ServerConfig{Transport: "http", Command: "x"}, "requires a url"},
-		{"command_and_url_both_rejected", ServerConfig{Command: "x", URL: "http://y"}, "not both"},
-		{"neither_command_nor_url", ServerConfig{}, "need a command"},
-		{"unknown_transport_value", ServerConfig{Transport: "websocket", URL: "http://x"}, `unknown transport "websocket"`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateServer("s", tc.cfg)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tc.errContains)
-		})
-	}
-}
-
-func TestValidateServerName(t *testing.T) {
 	t.Parallel()
-
-	cfg := ServerConfig{Command: "x"} // connection fields are valid, the name is under test
-	require.NoError(t, validateServer("github", cfg))
 
 	cases := []struct {
 		name        string
 		srvName     string
-		errContains string
+		cfg         ServerConfig
+		errContains string // "" asserts the happy path
 	}{
-		{"dotted_name", "my.server", "name must match"},
-		{"unicode_name", "servér", "name must match"},
-		{"name_too_long", strings.Repeat("x", 65), "name must match"},
-		{"name_with_separator", "a__b", `may not contain "__"`},
+		{"happy_path", "github", ServerConfig{Command: "x"}, ""},
+		{"stdio_needs_a_command", "s", ServerConfig{Transport: "stdio", URL: "http://x"}, "requires a command"},
+		{"network_needs_a_url", "s", ServerConfig{Transport: "http", Command: "x"}, "requires a url"},
+		{"command_and_url_both_rejected", "s", ServerConfig{Command: "x", URL: "http://y"}, "not both"},
+		{"neither_command_nor_url", "s", ServerConfig{}, "need a command"},
+		{"unknown_transport_value", "s", ServerConfig{Transport: "websocket", URL: "http://x"}, `unknown transport "websocket"`},
+		// connection fields are valid from here on, the name is under test
+		{"dotted_name", "my.server", ServerConfig{Command: "x"}, "name must match"},
+		{"unicode_name", "servér", ServerConfig{Command: "x"}, "name must match"},
+		{"name_too_long", strings.Repeat("x", 65), ServerConfig{Command: "x"}, "name must match"},
+		{"name_with_separator", "a__b", ServerConfig{Command: "x"}, `may not contain "__"`},
 	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := validateServer(tc.srvName, cfg)
+			err := validateServer(tc.srvName, tc.cfg)
+			if tc.errContains == "" {
+				assert.NoError(t, err)
+				return
+			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.errContains)
 		})

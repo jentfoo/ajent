@@ -124,12 +124,106 @@ func TestRawIDProgressTokenCorrelation(t *testing.T) {
 		}
 		require.NoError(t, json.Unmarshal(s.params, &p))
 		assert.Greater(t, s.id, int64(rawSeqBase)) // never collides with a typed id
-		assert.Equal(t, s.id, p.Meta.Token, "progress token must equal its request id")
+		assert.Equal(t, s.id, p.Meta.Token)
 		ids[s.id] = struct{}{}
 		tokens[p.Meta.Token] = struct{}{}
 	}
 	assert.Len(t, ids, workers*each)    // one unique id per request
 	assert.Len(t, tokens, workers*each) // and one unique default token
+}
+
+func TestCallTimeoutCancelsSlowTool(t *testing.T) {
+	t.Parallel()
+
+	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-slow"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel() // already cancelled: the call must not hang
+	_, err = c.Call(ctx, "tool_00", json.RawMessage(`{}`), nil)
+	assert.Error(t, err) // transport or context failure surfaces as an error
+}
+
+func TestTools(t *testing.T) {
+	t.Parallel()
+
+	t.Run("preserves_schema_fidelity", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+		defs, err := c.Tools(t.Context())
+		require.NoError(t, err)
+
+		var schema map[string]any
+		err = json.Unmarshal(defs[0].InputSchema, &schema)
+		require.NoError(t, err)
+		assert.Equal(t, "object", schema["type"])
+	})
+
+	t.Run("repeated_cursor", func(t *testing.T) {
+		var lists atomic.Int32 // tools/list requests answered so far
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			method, _, respond := jsonrpcPost(w, r)
+			if respond == nil {
+				return
+			}
+			switch method {
+			case "server/discover":
+				respond(`{"supportedVersions":["2025-11-25"],"capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
+			case "initialize":
+				respond(`{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
+			case "tools/list":
+				lists.Add(1)
+				respond(`{"tools":[{"name":"loop_tool","description":"d","inputSchema":{"type":"object"}}],"nextCursor":"again"}`)
+			default: // notifications and anything else
+				w.WriteHeader(http.StatusAccepted)
+			}
+		}))
+		t.Cleanup(ts.Close)
+
+		c, err := Connect(t.Context(), "loopy", ServerConfig{URL: ts.URL})
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+
+		// bounded so a regression spins out of the test instead of to go-test's timeout
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		t.Cleanup(cancel)
+		_, err = c.Tools(ctx)
+		require.ErrorIs(t, err, mcpclient.ErrRepeatedListCursor)
+		assert.Equal(t, int32(2), lists.Load()) // the echoed cursor is caught on its second appearance
+	})
+
+	t.Run("drops_bad_schema", func(t *testing.T) {
+		c, err := Connect(t.Context(), "fake", stdioConfig(t, "-bad-schema"))
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = c.Close() })
+
+		var notices []string // warn fires synchronously inside Tools, single goroutine
+		c.SetNotice(func(msg string) { notices = append(notices, msg) })
+
+		defs, err := c.Tools(t.Context())
+		require.NoError(t, err)
+		assert.Len(t, defs, 3) // the generated tools survive the bad one
+		assert.False(t, slices.ContainsFunc(defs, func(d ToolDef) bool { return d.Name == "bad_schema" }))
+		require.Len(t, notices, 1)
+		assert.Contains(t, notices[0], `tool "bad_schema" has an invalid input schema`)
+		assert.Contains(t, notices[0], "properties.rows.items is not an object")
+		assert.NotContains(t, notices[0], "mcp fake") // warnings stay bare, the sink prefixes
+	})
+}
+
+func TestConnectHTTPListsTools(t *testing.T) {
+	t.Parallel()
+
+	url := startHTTP(t)
+	c, err := Connect(t.Context(), "fakehttp", ServerConfig{URL: url})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = c.Close() })
+	assert.Equal(t, mcp.LATEST_PROTOCOL_VERSION, c.negotiated) // modern server, modern era
+	defs, err := c.Tools(t.Context())
+	require.NoError(t, err)
+	assert.Len(t, defs, 3)
 }
 
 func TestHandle(t *testing.T) {
@@ -148,47 +242,6 @@ func TestHandle(t *testing.T) {
 	assert.Contains(t, c.handlers, "first/method")
 	assert.Contains(t, c.handlers, "second/method")
 	assert.Contains(t, c.handlers, string(mcp.MethodPing)) // always re-implemented
-}
-
-func TestCallTimeoutCancelsSlowTool(t *testing.T) {
-	t.Parallel()
-
-	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-slow"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel() // already cancelled: the call must not hang
-	_, err = c.Call(ctx, "tool_00", json.RawMessage(`{}`), nil)
-	assert.Error(t, err) // transport or context failure surfaces as an error
-}
-
-func TestToolsPreservesSchemaFidelity(t *testing.T) {
-	t.Parallel()
-
-	c, err := Connect(t.Context(), "fake", stdioConfig(t))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	defs, err := c.Tools(t.Context())
-	require.NoError(t, err)
-
-	var schema map[string]any
-	err = json.Unmarshal(defs[0].InputSchema, &schema)
-	require.NoError(t, err)
-	assert.Equal(t, "object", schema["type"])
-}
-
-func TestConnectHTTPListsTools(t *testing.T) {
-	t.Parallel()
-
-	url := startHTTP(t)
-	c, err := Connect(t.Context(), "fakehttp", ServerConfig{URL: url})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-	assert.Equal(t, mcp.LATEST_PROTOCOL_VERSION, c.negotiated) // modern server, modern era
-	defs, err := c.Tools(t.Context())
-	require.NoError(t, err)
-	assert.Len(t, defs, 3)
 }
 
 func TestToolsFollowsPagination(t *testing.T) {
@@ -224,41 +277,6 @@ func jsonrpcPost(w http.ResponseWriter, r *http.Request) (string, json.RawMessag
 	}
 }
 
-func TestToolsRepeatedCursor(t *testing.T) {
-	t.Parallel()
-
-	var lists atomic.Int32 // tools/list requests answered so far
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		method, _, respond := jsonrpcPost(w, r)
-		if respond == nil {
-			return
-		}
-		switch method {
-		case "server/discover":
-			respond(`{"supportedVersions":["2025-11-25"],"capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
-		case "initialize":
-			respond(`{"protocolVersion":"2025-11-25","capabilities":{},"serverInfo":{"name":"loopy","version":"1.0"}}`)
-		case "tools/list":
-			lists.Add(1)
-			respond(`{"tools":[{"name":"loop_tool","description":"d","inputSchema":{"type":"object"}}],"nextCursor":"again"}`)
-		default: // notifications and anything else
-			w.WriteHeader(http.StatusAccepted)
-		}
-	}))
-	t.Cleanup(ts.Close)
-
-	c, err := Connect(t.Context(), "loopy", ServerConfig{URL: ts.URL})
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-
-	// bounded so a regression spins out of the test instead of to go-test's timeout
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
-	_, err = c.Tools(ctx)
-	require.ErrorIs(t, err, mcpclient.ErrRepeatedListCursor)
-	assert.Equal(t, int32(2), lists.Load()) // the echoed cursor is caught on its second appearance
-}
-
 func TestLegacyServerCompat(t *testing.T) {
 	t.Parallel()
 
@@ -286,10 +304,7 @@ func TestLegacyServerCompat(t *testing.T) {
 	require.NoError(t, c.Ping(t.Context()))
 }
 
-// TestNegotiatesAdvertisedOlderVersion covers a server that answers
-// server/discover but serves an older revision: ajent must negotiate to the
-// newest advertised version instead of sending era-stamped requests the server
-// rejects (the "protocol version 2026-07-28 is not supported" failure).
+// an older advertised revision must win negotiation over era-stamped requests
 func TestNegotiatesAdvertisedOlderVersion(t *testing.T) {
 	t.Parallel()
 
@@ -535,26 +550,6 @@ func TestUniqueTools(t *testing.T) {
 	assert.Equal(t, []string{"a", "b"}, names)
 	require.Len(t, warns, 1)
 	assert.Contains(t, warns[0], `tool "a" listed more than once`)
-}
-
-func TestToolsDropsBadSchema(t *testing.T) {
-	t.Parallel()
-
-	c, err := Connect(t.Context(), "fake", stdioConfig(t, "-bad-schema"))
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = c.Close() })
-
-	var notices []string // warn fires synchronously inside Tools, single goroutine
-	c.SetNotice(func(msg string) { notices = append(notices, msg) })
-
-	defs, err := c.Tools(t.Context())
-	require.NoError(t, err)
-	assert.Len(t, defs, 3) // the generated tools survive the bad one
-	assert.False(t, slices.ContainsFunc(defs, func(d ToolDef) bool { return d.Name == "bad_schema" }))
-	require.Len(t, notices, 1)
-	assert.Contains(t, notices[0], `tool "bad_schema" has an invalid input schema`)
-	assert.Contains(t, notices[0], "properties.rows.items is not an object")
-	assert.NotContains(t, notices[0], "mcp fake") // warnings stay bare, the sink prefixes
 }
 
 func TestNotificationHandlerDoesNotDeadlock(t *testing.T) {

@@ -36,22 +36,22 @@ func TestParseLlamaProps(t *testing.T) {
 		assert.Equal(t, 4096, *got[0].ContextWindow)
 	})
 
-	t.Run("missing_model_path_is_a_router", func(t *testing.T) {
-		got, err := parseLlamaProps([]byte(`{"default_generation_settings":{"n_ctx":2048}}`))
-		require.NoError(t, err)
-		assert.Empty(t, got) // nothing to name, so discovery falls back to /v1/models
-	})
-
-	t.Run("none_model_path_is_a_router", func(t *testing.T) {
-		got, err := parseLlamaProps([]byte(`{"model_path":"none"}`))
-		require.NoError(t, err)
-		assert.Empty(t, got)
-	})
-
-	t.Run("degenerate_base_name_yields_nothing", func(t *testing.T) {
-		got, err := parseLlamaProps([]byte(`{"model_path":"/"}`))
-		require.NoError(t, err)
-		assert.Empty(t, got)
+	t.Run("router_shaped_bodies_yield_nothing", func(t *testing.T) {
+		tests := []struct {
+			name string
+			body string
+		}{
+			{"missing_model_path", `{"default_generation_settings":{"n_ctx":2048}}`},
+			{"none_model_path", `{"model_path":"none"}`},
+			{"degenerate_base_name", `{"model_path":"/"}`},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				got, err := parseLlamaProps([]byte(tc.body))
+				require.NoError(t, err)
+				assert.Empty(t, got) // nothing to name, so discovery falls back to /v1/models
+			})
+		}
 	})
 
 	t.Run("unknown_context_is_left_unset", func(t *testing.T) {

@@ -45,22 +45,6 @@ func TestTokenizeRaw(t *testing.T) {
 		{`empty single quote`, `echo '' x`, []string{"echo", "", "x"}},
 		// backslash survives inside single quotes so regexes hold
 		{`quoted regex survives`, `grep 'a\.b' f`, []string{"grep", "a\\.b", "f"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, tokenizeRaw(c.in))
-		})
-	}
-}
-
-func TestTokenizeRawContinuations(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		in   string
-		want []string
-	}{
 		// bash removes a backslash-newline before tokens form, argv arriving joined
 		{"unquoted joins", "rg --\\\npre=id f", []string{"rg", "--pre=id", "f"}},
 		{"crlf joins", "rg --\\\r\npre f", []string{"rg", "--pre", "f"}},
@@ -69,22 +53,6 @@ func TestTokenizeRawContinuations(t *testing.T) {
 		{"single quoted keeps", "sed 'a\\\nb' f", []string{"sed", "a\\\nb", "f"}},
 		// an escaped backslash then a newline is no continuation: both survive
 		{"escaped backslash keeps", "a\\\\\nb", []string{"a\\\nb"}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			assert.Equal(t, c.want, tokenizeRaw(c.in))
-		})
-	}
-}
-
-func TestTokenizeRawDoubleQuoteEscapes(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		in   string
-		want []string
-	}{
 		// inside double quotes only \" \\ \$ \` are escapes, others staying literal
 		{`escaped dollar`, `echo "a\$b"`, []string{"echo", "a$b"}},
 		// \. and \/ before non-escape chars survive verbatim so sed regexes hold
@@ -225,8 +193,7 @@ func TestSkipQuoted(t *testing.T) {
 func TestHeadOfPathQualified(t *testing.T) {
 	t.Parallel()
 
-	// a path-qualified head can point at any binary, so it names nothing: never
-	// auto-allows under the basename's verdict and never matches a grant
+	// a path-qualified head names no command: no basename verdict, no grant match
 	for _, seg := range []string{
 		"./bin/cat x",
 		"../tooling/jq f",

@@ -81,7 +81,7 @@ func TestOpenResolvesCursor(t *testing.T) {
 
 	w2, entries, _, err := OpenEntries(p)
 	require.NoError(t, err)
-	defer func() { _ = w2.Close() }()
+	t.Cleanup(func() { _ = w2.Close() })
 	assert.Equal(t, e1.ID, w2.Head())
 	next, err := w2.Append(TypeMessage, msgData("m3"))
 	require.NoError(t, err)

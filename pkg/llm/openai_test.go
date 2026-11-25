@@ -114,10 +114,15 @@ func TestResponsesProviderStream(t *testing.T) {
 
 		s, err := p.Stream(t.Context(), Request{Model: responsesModel(nil)})
 		require.NoError(t, err)
-		t.Cleanup(func() { _ = s.Close() })
 
-		msg, _, err := Accumulate(s)
-		require.NoError(t, err)
+		events := collect(t, s)
+		var acc Accumulator
+		for _, ev := range events {
+			acc.Add(ev)
+		}
+		require.NoError(t, acc.Err())
+
+		msg := acc.Message()
 		require.Len(t, msg.Content, 1)
 
 		call, ok := msg.Content[0].(ToolCallBlock)
@@ -125,15 +130,6 @@ func TestResponsesProviderStream(t *testing.T) {
 		assert.Equal(t, "call_abc|fc_1", call.ID) // call id piped with the item id
 		assert.Equal(t, "read", call.Name)
 		assert.JSONEq(t, `{"path":"main.go"}`, string(call.Input))
-	})
-
-	t.Run("tool_call_sets_the_stop_reason", func(t *testing.T) {
-		srv, _ := sseServer(t, "openai/tool_call.sse")
-		p := newResponsesTestProvider(t, srv.URL)
-
-		s, err := p.Stream(t.Context(), Request{Model: responsesModel(nil)})
-		require.NoError(t, err)
-		events := collect(t, s)
 
 		assert.Equal(t, StopToolUse, events[len(events)-1].StopReason)
 	})

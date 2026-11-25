@@ -228,30 +228,13 @@ func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 
 	accent := NewTheme(ColorBasic, DefaultPalette()).Accent.Open()
 
-	type highlight struct {
-		wrapped string
-	}
-	cases := []struct {
-		name string
-		item SearchItem
-		want []highlight // expected accent-wrapped substrings in the echo row
-	}{
-		{"single_line_match",
-			SearchItem{Text: "Fix the retry loop"},
-			[]highlight{{accent + "Fix" + sgrReset}}},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &searchOverlay{query: "fix", items: []SearchItem{tc.item}}
-			s.refilter()
-			rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80)
-			require.Len(t, rows, 1)
-			for _, want := range tc.want {
-				assert.Contains(t, rows[0], want.wrapped)
-			}
-		})
-	}
+	t.Run("single_line_match", func(t *testing.T) {
+		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
+		s.refilter()
+		rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80)
+		require.Len(t, rows, 1)
+		assert.Contains(t, rows[0], accent+"Fix"+sgrReset)
+	})
 
 	t.Run("query_on_hidden_line_not_shown", func(t *testing.T) {
 		// the echo shows the first line only; a match living deeper stays hidden

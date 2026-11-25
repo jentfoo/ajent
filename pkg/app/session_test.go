@@ -1620,10 +1620,8 @@ func TestStaleLineWithoutCorrelationPublishesNothing(t *testing.T) {
 	assert.Empty(t, rig.prov.Requests())
 }
 
-// Races a dispatched prompt against a rewind over and over: whichever wins,
-// the live state must keep describing exactly the writer head's branch, the
-// invariant a torn swap-then-SetHead window used to break by appending from
-// the old head while the head moved.
+// Racing a dispatched prompt against a rewind never leaves live state off the
+// writer head's branch, what a torn swap-then-SetHead window used to break.
 func TestRewindDispatchRaceKeepsBranch(t *testing.T) {
 	t.Parallel()
 

@@ -122,30 +122,20 @@ func TestReasoningCommand(t *testing.T) {
 		assert.True(t, c.noticeContains("unknown reasoning level"))
 	})
 
-	// a user-off show stays off across a level change
-	t.Run("preserves_hidden", func(t *testing.T) {
-		c := newFakeConsole(t)
-		r := NewRegistry()
-		c.commands = r
-		RegisterBuiltins(r, c)
+	// a level change leaves the show/hide flag alone in either starting state
+	t.Run("level_change_preserves_hide", func(t *testing.T) {
+		for _, hide := range []bool{false, true} {
+			c := newFakeConsole(t)
+			r := NewRegistry()
+			c.commands = r
+			RegisterBuiltins(r, c)
 
-		c.state.Reasoning.Hide = true // the /settings off choice
-		cmd, _ := r.Get("reasoning")
-		require.NoError(t, cmd.Handler(t.Context(), "high", c))
-		assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
-		assert.True(t, c.state.Reasoning.Hide)
-	})
-
-	// a user-on show survives a level change too
-	t.Run("preserves_show", func(t *testing.T) {
-		c := newFakeConsole(t)
-		r := NewRegistry()
-		c.commands = r
-		RegisterBuiltins(r, c)
-
-		cmd, _ := r.Get("reasoning")
-		require.NoError(t, cmd.Handler(t.Context(), "high", c))
-		assert.False(t, c.state.Reasoning.Hide)
+			c.state.Reasoning.Hide = hide // the /settings off choice when set
+			cmd, _ := r.Get("reasoning")
+			require.NoError(t, cmd.Handler(t.Context(), "high", c))
+			assert.Equal(t, llm.LevelHigh, c.state.Reasoning.Level)
+			assert.Equal(t, hide, c.state.Reasoning.Hide)
+		}
 	})
 
 	// the level pick owns its leaf: no retain or hide override appears

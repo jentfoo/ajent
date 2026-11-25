@@ -24,6 +24,35 @@ func TestUsageAdd(t *testing.T) {
 	})
 }
 
+func TestEventTypeString(t *testing.T) {
+	t.Parallel()
+
+	// the wire spellings, plus the unmapped fallback logging relies on
+	tests := []struct {
+		typ  EventType
+		want string
+	}{
+		{EventMessageStart, "message_start"},
+		{EventThinkingStart, "thinking_start"},
+		{EventThinkingDelta, "thinking_delta"},
+		{EventThinkingEnd, "thinking_end"},
+		{EventTextStart, "text_start"},
+		{EventTextDelta, "text_delta"},
+		{EventTextEnd, "text_end"},
+		{EventToolCallStart, "tool_call_start"},
+		{EventToolCallDelta, "tool_call_delta"},
+		{EventToolCallEnd, "tool_call_end"},
+		{EventUsage, "usage"},
+		{EventDone, "done"},
+		{EventType(200), "unknown"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			assert.Equal(t, tc.want, tc.typ.String())
+		})
+	}
+}
+
 func TestUsageMerge(t *testing.T) {
 	t.Parallel()
 
@@ -64,34 +93,6 @@ func TestUsageMerge(t *testing.T) {
 			got := tc.have
 			got.Merge(tc.next)
 			assert.Equal(t, tc.want, got)
-		})
-	}
-}
-
-func TestEventTypeString(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		typ      EventType
-		expected string
-	}{
-		{EventMessageStart, "message_start"},
-		{EventThinkingStart, "thinking_start"},
-		{EventThinkingDelta, "thinking_delta"},
-		{EventThinkingEnd, "thinking_end"},
-		{EventTextStart, "text_start"},
-		{EventTextDelta, "text_delta"},
-		{EventTextEnd, "text_end"},
-		{EventToolCallStart, "tool_call_start"},
-		{EventToolCallDelta, "tool_call_delta"},
-		{EventToolCallEnd, "tool_call_end"},
-		{EventUsage, "usage"},
-		{EventDone, "done"},
-		{EventType(200), "unknown"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.expected, func(t *testing.T) {
-			assert.Equal(t, tc.expected, tc.typ.String())
 		})
 	}
 }

@@ -79,6 +79,8 @@ func TestDetectToneLuminanceBoundary(t *testing.T) {
 }
 
 func TestDetectTone(t *testing.T) {
+	t.Parallel()
+
 	t.Run("env_answers_without_query", func(t *testing.T) {
 		u, out := newRecordingUI(t, strings.NewReader(""))
 		withEnv(u, map[string]string{"COLORFGBG": "0;15"})

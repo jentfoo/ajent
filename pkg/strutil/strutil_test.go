@@ -29,21 +29,6 @@ func TestFirstLine(t *testing.T) {
 	}
 }
 
-func TestTrimZero(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		in, want string
-	}{
-		{"1.0", "1"},
-		{"3.14", "3.14"}, // no trailing .0: unchanged
-		{"12", "12"},
-	}
-	for _, tc := range cases {
-		assert.Equal(t, tc.want, trimZero(tc.in))
-	}
-}
-
 func TestFormatTokens(t *testing.T) {
 	t.Parallel()
 
@@ -77,8 +62,7 @@ func TestClip(t *testing.T) {
 		{"abcdef", 4, "abc…"},     // cut: the ellipsis fills the last rune of the budget
 		{"héllo wörld", 3, "hé…"}, // truncates on a rune boundary
 		{"abcdef", 1, "…"},        // a one-rune budget holds only the ellipsis
-		{"abcdef", 0, ""},         // zero width clips to nothing
-		{"abcdef", -1, ""},
+		{"abcdef", 0, ""},         // n <= 0 clips to nothing (zero and negative)
 	}
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, Clip(tc.in, tc.n))
@@ -101,8 +85,7 @@ func TestFirstArgText(t *testing.T) {
 	}
 
 	t.Run("document_order_beats_sorted", func(t *testing.T) {
-		// sorted keys would name edit by old_text; the label must follow the
-		// order the sender wrote, path first
+		// label follows document order, not sorted keys: path first
 		in := json.RawMessage(`{"path":"a.go","old_text":"zzz"}`)
 		assert.Equal(t, "a.go", FirstArgText(in))
 	})

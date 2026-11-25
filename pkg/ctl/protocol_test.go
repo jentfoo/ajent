@@ -41,23 +41,25 @@ func TestNewEventDropsUnencodableData(t *testing.T) {
 func TestSubagentWireShapes(t *testing.T) {
 	t.Parallel()
 
-	t.Run("segment_counts_round_trip", func(t *testing.T) {
-		raw, err := json.Marshal(Segment{Key: "subagents", Text: "2 running (oldest 31s), 1 queued",
-			Order: 40, Counts: map[string]int{"running": 2, "queued": 1}})
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"key":"subagents","text":"2 running (oldest 31s), 1 queued",`+
-			`"order":40,"counts":{"running":2,"queued":1}}`, string(raw))
+	t.Run("segment_json_shape", func(t *testing.T) {
+		for _, tc := range []struct {
+			seg  Segment
+			want string
+		}{
+			{Segment{Key: "subagents", Text: "2 running (oldest 31s), 1 queued",
+				Order: 40, Counts: map[string]int{"running": 2, "queued": 1}},
+				`{"key":"subagents","text":"2 running (oldest 31s), 1 queued",` +
+					`"order":40,"counts":{"running":2,"queued":1}}`},
+			{Segment{Key: "mcp", Text: "2/2 servers"}, `{"key":"mcp","text":"2/2 servers","order":0}`},
+		} {
+			raw, err := json.Marshal(tc.seg)
+			require.NoError(t, err)
+			assert.JSONEq(t, tc.want, string(raw))
 
-		var seg Segment
-		require.NoError(t, json.Unmarshal(raw, &seg))
-		assert.Equal(t, 2, seg.Counts["running"])
-		assert.Equal(t, 1, seg.Counts["queued"])
-	})
-
-	t.Run("nil_counts_omitted", func(t *testing.T) {
-		raw, err := json.Marshal(Segment{Key: "mcp", Text: "2/2 servers"})
-		require.NoError(t, err)
-		assert.JSONEq(t, `{"key":"mcp","text":"2/2 servers","order":0}`, string(raw))
+			var back Segment
+			require.NoError(t, json.Unmarshal(raw, &back))
+			assert.Equal(t, tc.seg, back)
+		}
 	})
 
 	t.Run("agents_list_round_trip", func(t *testing.T) {

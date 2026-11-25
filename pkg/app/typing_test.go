@@ -172,7 +172,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
+		t.Cleanup(cancel)
 		g.edit("draft")
 		done := g.holdIn(ctx)
 		require.Eventually(t, func() bool { return rec.count() > 0 }, time.Second, time.Millisecond)
@@ -230,7 +230,7 @@ func TestTypingGateHold(t *testing.T) {
 		g.status = rec.record
 
 		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
+		t.Cleanup(cancel)
 		g.edit("draft")
 		done := g.holdIn(ctx)
 		// the hold publishes its countdown segment shortly after engaging, and the
@@ -432,7 +432,7 @@ func TestTypingGateHoldDialog(t *testing.T) {
 		g.status = rec.record
 
 		ctx, cancel := context.WithCancel(t.Context())
-		defer cancel()
+		t.Cleanup(cancel)
 		g.edit("draft")
 		done := g.holdDialogIn(ctx)
 		require.Eventually(t, func() bool {

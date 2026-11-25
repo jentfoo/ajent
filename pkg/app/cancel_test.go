@@ -290,6 +290,19 @@ func askCancel(b *permit.Barrier, ctx context.Context, input string) tools.Decis
 	return b.Asker()(ctx, agent.ToolCall{ID: "c", Name: "bash", Input: []byte(input)})
 }
 
+// startControlLoop builds a test hub over ui with wire assigning its seams,
+// then runs controlLoop until the test context ends. Returns its controls.
+func startControlLoop(t *testing.T, ui *tui.UI, wire func(*sessionHub)) chan tui.Control {
+	t.Helper()
+
+	hub := newTestHub(ui)
+	wire(hub)
+	controls := make(chan tui.Control, 4)
+	go controlLoop(t.Context(), controls,
+		newHintBoard(func(string, string) {}), hub, func() {})
+	return controls
+}
+
 func TestControlInterruptCancelsStagedShell(t *testing.T) {
 	t.Parallel()
 
@@ -301,19 +314,7 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 		{"escape", tui.ControlEscape},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inR, inW, err := os.Pipe()
-			require.NoError(t, err)
-			outR, outW, err := os.Pipe()
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				_ = inR.Close()
-				_ = inW.Close()
-				_ = outR.Close()
-			})
-			go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
-			ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-			require.NoError(t, err)
-			t.Cleanup(ui.Close)
+			ui := newPumpTestUI(t)
 
 			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "ctrl-staged"})
 			require.NoError(t, err)
@@ -331,14 +332,11 @@ func TestControlInterruptCancelsStagedShell(t *testing.T) {
 			stager.Run("sleep 30", false)
 			require.True(t, stager.Pending())
 
-			quit := make(chan struct{})
-			controls := make(chan tui.Control, 4)
-			hub := newTestHub(ui)
-			hub.ag = ag
-			hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, stager.WaitReady, stager.TakeReady, noopDrop)
-			hub.stager = stager
-			go controlLoop(t.Context(), controls,
-				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
+			controls := startControlLoop(t, ui, func(hub *sessionHub) {
+				hub.ag = ag
+				hub.q = newSteerQueue(&fakeQueueUI{}, func(int) {}, stager.WaitReady, stager.TakeReady, noopDrop)
+				hub.stager = stager
+			})
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "run it"}) }()
@@ -375,20 +373,7 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 		{"escape", tui.ControlEscape},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inR, inW, err := os.Pipe()
-			require.NoError(t, err)
-			outR, outW, err := os.Pipe()
-			require.NoError(t, err)
-			t.Cleanup(func() {
-				_ = inR.Close()
-				_ = inW.Close()
-				_ = outR.Close()
-				_ = outW.Close()
-			})
-			go func() { _, _ = io.Copy(io.Discard, outR) }() // status writes must not fill the pipe
-			ui, err := tui.New(tui.Options{In: inR, Out: outW, Mode: tui.ModePlain})
-			require.NoError(t, err)
-			t.Cleanup(ui.Close)
+			ui := newPumpTestUI(t)
 
 			reg, err := tools.Builtins(tools.Options{Cwd: t.TempDir(), SessionID: "abort-hold"})
 			require.NoError(t, err)
@@ -409,17 +394,12 @@ func TestControlAbortReleasesHeldReserve(t *testing.T) {
 			// wired as the driver wires it: submit reserves, clear releases. The
 			// queue takes the hubUI wrapper, whose Interactive gates recovery.
 			waitReady, takeReady := stagePair(t)
-			hub := newTestHub(ui)
-			q := newSteerQueue(hub.ui, st.Tokens.SetSubmit, waitReady, takeReady, noopDrop)
 			stager := command.NewStager(t.Context(), reg, agent.NopSink{})
-
-			quit := make(chan struct{})
-			controls := make(chan tui.Control, 4)
-			hub.ag = ag
-			hub.q = q
-			hub.stager = stager
-			go controlLoop(t.Context(), controls,
-				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
+			controls := startControlLoop(t, ui, func(hub *sessionHub) {
+				hub.ag = ag
+				hub.q = newSteerQueue(hub.ui, st.Tokens.SetSubmit, waitReady, takeReady, noopDrop)
+				hub.stager = stager
+			})
 
 			errCh := make(chan error, 1)
 			go func() { errCh <- ag.Prompt(t.Context(), agent.Input{Text: "held prompt"}) }()
@@ -481,14 +461,11 @@ func TestControlEscapeStopsDrainStagedWait(t *testing.T) {
 			require.Eventually(t, func() bool { return len(p.Requests()) == 1 },
 				5*time.Second, 5*time.Millisecond)
 
-			controls := make(chan tui.Control, 1)
-			quit := make(chan struct{})
-			hub := newTestHub(ui)
-			hub.ag = ag
-			hub.q = q
-			hub.stager = stager
-			go controlLoop(t.Context(), controls,
-				newHintBoard(func(string, string) {}), hub, func() { close(quit) })
+			controls := startControlLoop(t, ui, func(hub *sessionHub) {
+				hub.ag = ag
+				hub.q = q
+				hub.stager = stager
+			})
 			controls <- tc.control
 
 			require.Eventually(t, func() bool { return q.pending() == 0 },

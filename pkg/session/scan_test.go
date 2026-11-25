@@ -21,13 +21,13 @@ func pinScanWorkers(t *testing.T, n int) {
 
 func TestScanEach(t *testing.T) {
 	// pins the shared scanWorkers var, so the subtests run sequentially
-	t.Run("keeps input order", func(t *testing.T) {
+	t.Run("keeps_input_order", func(t *testing.T) {
 		paths := []string{"a", "b", "c", "d"}
 		out := scanEach(paths, func(p string) string { return p })
 		assert.Equal(t, paths, out)
 	})
 
-	t.Run("bounds concurrent runs", func(t *testing.T) {
+	t.Run("bounds_concurrent_runs", func(t *testing.T) {
 		pinScanWorkers(t, 2)
 
 		var inFlight atomic.Int32
@@ -37,7 +37,7 @@ func TestScanEach(t *testing.T) {
 		out := scanEach(paths, func(p string) string {
 			n := inFlight.Add(1)
 			defer inFlight.Add(-1)
-			require.LessOrEqual(t, n, int32(2), "scan exceeded the pool bound")
+			require.LessOrEqual(t, n, int32(2))
 			if n == 2 { // two runs admitted: the bound holds and the pool is live
 				pairOnce.Do(func() { close(paired) })
 			}

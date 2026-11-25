@@ -42,20 +42,13 @@ func TestCopyTexts(t *testing.T) {
 	})
 
 	t.Run("tool_row_pairs_call_and_result", func(t *testing.T) {
-		got := CopyTexts(entries, []string{"t3"})
-		require.Len(t, got, 1)
 		want := `{"name":"bash","input":{"command":"read main.go"}}` + "\n" +
 			`{"callId":"c1","content":[{"text":"line one\nline two"}]}`
-		assert.Equal(t, want, got[0])
-	})
-
-	t.Run("result_row_finds_its_call", func(t *testing.T) {
-		got := CopyTexts(entries, []string{"r4"})
-		require.Len(t, got, 1)
-		want := `{"name":"bash","input":{"command":"read main.go"}}` + "\n" +
-			`{"callId":"c1","content":[{"text":"line one\nline two"}]}`
-		assert.Equal(t, got[0], CopyTexts(entries, []string{"t3"})[0]) // same payload both sides of the pair
-		assert.Equal(t, want, got[0])
+		for _, id := range []string{"t3", "r4"} { // both sides of the call/result pair
+			got := CopyTexts(entries, []string{id})
+			require.Len(t, got, 1)
+			assert.Equal(t, want, got[0])
+		}
 	})
 
 	t.Run("assistant_turn_pairs_across_child", func(t *testing.T) {
@@ -81,77 +74,71 @@ func TestCopyTexts(t *testing.T) {
 		got := CopyTexts(entries, []string{"a2", "u1"})
 		assert.Equal(t, []string{"hi there", "hello world"}, got)
 	})
-}
-
-func TestCopyTextsForkChain(t *testing.T) {
-	t.Parallel()
 
 	// an abandoned fork: the copied row still pairs with its own chain's results
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "q")),
-		pickToolCall("t2", "u1"),
-		pickToolResultMsg("r3", "t2"),
-		pickToolCall("t4", "u1"),
-	}
+	t.Run("abandoned_fork_bare_call", func(t *testing.T) {
+		forked := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "q")),
+			pickToolCall("t2", "u1"),
+			pickToolResultMsg("r3", "t2"),
+			pickToolCall("t4", "u1"),
+		}
 
-	got := CopyTexts(entries, []string{"t4"})
-	require.Len(t, got, 1)
-	// t4's first child r3 belongs to t2's chain? No: r3's parent is t2, so t4 has
-	// no children and copies as a bare call
-	assert.JSONEq(t, `{"name":"bash","input":{"command":"read main.go"}}`, got[0])
-}
-
-func TestCopyTextsMultiResultChain(t *testing.T) {
-	t.Parallel()
+		got := CopyTexts(forked, []string{"t4"})
+		require.Len(t, got, 1)
+		// t4's first child r3 belongs to t2's chain? No: r3's parent is t2, so t4 has
+		// no children and copies as a bare call
+		assert.JSONEq(t, `{"name":"bash","input":{"command":"read main.go"}}`, got[0])
+	})
 
 	// two calls answered by one following message, like a parallel dispatch step
-	callA := llm.ToolCallBlock{ID: "ca", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}
-	callB := llm.ToolCallBlock{ID: "cb", Name: "grep", Input: json.RawMessage(`{}`)}
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
-		pickMsg("a2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}),
-		pickMsg("r3", "a2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
-			llm.ToolResultBlock{CallID: "ca", Content: llm.BlockList{llm.TextBlock{Text: "A"}}},
-			llm.ToolResultBlock{CallID: "cb", Content: llm.BlockList{llm.TextBlock{Text: "B"}}},
-		}}),
-	}
+	t.Run("parallel_calls_single_result", func(t *testing.T) {
+		callA := llm.ToolCallBlock{ID: "ca", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}
+		callB := llm.ToolCallBlock{ID: "cb", Name: "grep", Input: json.RawMessage(`{}`)}
+		chained := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
+			pickMsg("a2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}),
+			pickMsg("r3", "a2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.ToolResultBlock{CallID: "ca", Content: llm.BlockList{llm.TextBlock{Text: "A"}}},
+				llm.ToolResultBlock{CallID: "cb", Content: llm.BlockList{llm.TextBlock{Text: "B"}}},
+			}}),
+		}
 
-	got := CopyTexts(entries, []string{"a2"})
-	require.Len(t, got, 1)
-	want := `{"name":"read","input":{"path":"a"}}` + "\n" +
-		`{"callId":"ca","content":[{"text":"A"}]}` + "\n" +
-		`{"name":"grep","input":{}}` + "\n" +
-		`{"callId":"cb","content":[{"text":"B"}]}`
-	assert.Equal(t, want, got[0])
-}
-
-func TestCopyTextsSplitResultChain(t *testing.T) {
-	t.Parallel()
+		got := CopyTexts(chained, []string{"a2"})
+		require.Len(t, got, 1)
+		want := `{"name":"read","input":{"path":"a"}}` + "\n" +
+			`{"callId":"ca","content":[{"text":"A"}]}` + "\n" +
+			`{"name":"grep","input":{}}` + "\n" +
+			`{"callId":"cb","content":[{"text":"B"}]}`
+		assert.Equal(t, want, got[0])
+	})
 
 	// two parallel calls answered by separate result messages, one per dispatch step
-	callA := llm.ToolCallBlock{ID: "ca", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}
-	callB := llm.ToolCallBlock{ID: "cb", Name: "grep", Input: json.RawMessage(`{}`)}
-	entries := []Entry{
-		sessionOnly("root"),
-		pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
-		pickMsg("a2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}),
-		pickMsg("r3", "a2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
-			llm.ToolResultBlock{CallID: "ca", Content: llm.BlockList{llm.TextBlock{Text: "A"}}},
-		}}),
-		pickMsg("r4", "r3", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
-			llm.ToolResultBlock{CallID: "cb", Content: llm.BlockList{llm.TextBlock{Text: "B"}}},
-		}}),
-	}
+	t.Run("split_results_two_messages", func(t *testing.T) {
+		callA := llm.ToolCallBlock{ID: "ca", Name: "read", Input: json.RawMessage(`{"path":"a"}`)}
+		callB := llm.ToolCallBlock{ID: "cb", Name: "grep", Input: json.RawMessage(`{}`)}
+		split := []Entry{
+			sessionOnly("root"),
+			pickMsg("u1", "root", llm.Text(llm.RoleUser, "go")),
+			pickMsg("a2", "u1", llm.Message{Role: llm.RoleAssistant, Content: llm.BlockList{callA, callB}}),
+			pickMsg("r3", "a2", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.ToolResultBlock{CallID: "ca", Content: llm.BlockList{llm.TextBlock{Text: "A"}}},
+			}}),
+			pickMsg("r4", "r3", llm.Message{Role: llm.RoleUser, Content: llm.BlockList{
+				llm.ToolResultBlock{CallID: "cb", Content: llm.BlockList{llm.TextBlock{Text: "B"}}},
+			}}),
+		}
 
-	got := CopyTexts(entries, []string{"a2"})
-	require.Len(t, got, 1)
-	want := `{"name":"read","input":{"path":"a"}}` + "\n" +
-		`{"callId":"ca","content":[{"text":"A"}]}` + "\n" +
-		`{"name":"grep","input":{}}` + "\n" +
-		`{"callId":"cb","content":[{"text":"B"}]}`
-	assert.Equal(t, want, got[0])
+		got := CopyTexts(split, []string{"a2"})
+		require.Len(t, got, 1)
+		want := `{"name":"read","input":{"path":"a"}}` + "\n" +
+			`{"callId":"ca","content":[{"text":"A"}]}` + "\n" +
+			`{"name":"grep","input":{}}` + "\n" +
+			`{"callId":"cb","content":[{"text":"B"}]}`
+		assert.Equal(t, want, got[0])
+	})
 }
 
 func TestTurnMessages(t *testing.T) {

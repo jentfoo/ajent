@@ -16,10 +16,6 @@ import (
 	"github.com/jentfoo/ajent/pkg/tools"
 )
 
-// TestSteerNormalizesThroughRefs wires the driver's real seam: an agent whose
-// NormalizeInput runs refs.Normalize, then a direct Steer (no pump) carrying an
-// @ reference. The steered message must reach the model with the read pair
-// behind it, exactly as a freshly submitted prompt would.
 func TestSteerNormalizesThroughRefs(t *testing.T) {
 	t.Parallel()
 

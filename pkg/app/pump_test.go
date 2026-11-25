@@ -101,6 +101,8 @@ func TestDrainWaiterWait(t *testing.T) {
 }
 
 func TestRunPump(t *testing.T) {
+	t.Parallel()
+
 	t.Run("dispatch_and_exit", func(t *testing.T) {
 		t.Run("serves_then_exits_on_cancel", func(t *testing.T) {
 			ui := newPumpTestUI(t)
@@ -524,6 +526,8 @@ func TestRunCommandRecoversPanickingHandler(t *testing.T) {
 }
 
 func TestStartDrain(t *testing.T) {
+	t.Parallel()
+
 	t.Run("parked_gate", func(t *testing.T) {
 		t.Run("parked_queue_holds", func(t *testing.T) {
 			ui := newPumpTestUI(t)

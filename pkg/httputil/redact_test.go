@@ -11,8 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// pinnedCredentialHeaders is the canonical header list providers-design.md
-// documents; the matcher must never regress on these spellings.
+// canonical spellings pinned by providers-design.md
 var pinnedCredentialHeaders = []string{
 	"Authorization", "X-Api-Key", "Api-Key", "Proxy-Authorization",
 	"Cookie", "Set-Cookie", "X-Goog-Api-Key", "Openai-Organization",
@@ -110,43 +109,18 @@ func TestRedactURL(t *testing.T) {
 		{"compound_refresh_param", "https://x.test/v1?refresh_token=" + testAPIKey, redactedQuery},
 		{"unrelated_param_kept", "https://x.test/v1?model=opus", "model=opus"},
 		{"no_query", "https://x.test/v1", "https://x.test/v1"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			u, err := url.Parse(tc.raw)
-			require.NoError(t, err)
-
-			got := redactURL(u)
-			assert.Contains(t, got, tc.contains)
-			assert.NotContains(t, got, testAPIKey)
-		})
-	}
-}
-
-func TestRedactURLVariants(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		raw      string
-		contains string
-	}{
-		{"upper_case", "https://x.test/v1?API_KEY=" + testAPIKey, "API_KEY=redacted"},
-		{"mixed_case", "https://x.test/v1?ApiKey=" + testAPIKey, "ApiKey=redacted"},
+		{"upper_case_name", "https://x.test/v1?API_KEY=" + testAPIKey, "API_KEY=redacted"},
+		{"mixed_case_name", "https://x.test/v1?ApiKey=" + testAPIKey, "ApiKey=redacted"},
 		{"no_separator", "https://x.test/v1?apikey=" + testAPIKey, "apikey=redacted"},
 		{"dash_separator", "https://x.test/v1?api-key=" + testAPIKey, "api-key=redacted"},
 		{"token_param", "https://x.test/v1?token=" + testAPIKey, "token=redacted"},
 		{"auth_param", "https://x.test/v1?auth=" + testAPIKey, "auth=redacted"},
 		{"secret_param", "https://x.test/v1?secret=" + testAPIKey, "secret=redacted"},
 		{"userinfo_masked", "https://user:pw@" + "x.test/v1", "x.test/v1"},
-		{"unrelated_param_kept", "https://x.test/v1?model=opus", "model=opus"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			u, err := url.Parse(tc.raw)
-			require.NoError(t, err)
-
-			got := redactURL(u)
+			got := redactURL(parseTestURL(t, tc.raw))
 			assert.Contains(t, got, tc.contains)
 			assert.NotContains(t, got, testAPIKey)
 			assert.NotContains(t, got, "user:pw")

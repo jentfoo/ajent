@@ -398,16 +398,32 @@ func TestUIConsoleSetSessionSettingAppliesCompactThreshold(t *testing.T) {
 	assert.Equal(t, used, tk.Context().Used)
 }
 
-func TestUIConsoleImagesBlockLiveFlip(t *testing.T) {
-	set := loadTestConfig(t)
-	tools.SetImagesEnabled(false)
-	t.Cleanup(func() { tools.SetImagesEnabled(true) })
+func TestUIConsoleImagesBlock(t *testing.T) {
+	// not parallel: every case pins the process-wide images flag
 
-	c := &uiConsole{set: set}
-	require.NoError(t, c.SetSessionSetting("images.block", false))
-	assert.True(t, tools.ImagesEnabled())
-	require.NoError(t, c.SetSessionSetting("images.block", true))
-	assert.False(t, tools.ImagesEnabled())
+	t.Run("live_flip_without_reset", func(t *testing.T) {
+		set := loadTestConfig(t)
+		tools.SetImagesEnabled(false)
+		t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
+		c := &uiConsole{set: set}
+		require.NoError(t, c.SetSessionSetting("images.block", false))
+		assert.True(t, tools.ImagesEnabled())
+		require.NoError(t, c.SetSessionSetting("images.block", true))
+		assert.False(t, tools.ImagesEnabled())
+	})
+
+	t.Run("reset_returns_to_config", func(t *testing.T) {
+		set := loadTestConfig(t)
+		tools.SetImagesEnabled(false)
+		t.Cleanup(func() { tools.SetImagesEnabled(true) })
+
+		c := &uiConsole{set: set}
+		require.NoError(t, c.SetSessionSetting("images.block", true))
+		assert.False(t, tools.ImagesEnabled())
+		require.NoError(t, c.ResetSessionSetting("images.block"))
+		assert.True(t, tools.ImagesEnabled()) // the config default (block off) applies again
+	})
 }
 
 func TestUIConsolePermissionModeAppliesButNotRecorded(t *testing.T) {
@@ -494,18 +510,6 @@ func TestUIConsoleResetSessionSettingReappliesLive(t *testing.T) {
 		require.NoError(t, c.ResetSessionSetting("permissions.mode"))
 		assert.Equal(t, "allow-read", barrier.Mode().String()) // the configured default
 	})
-}
-
-func TestUIConsoleResetImagesBlockBackToConfig(t *testing.T) {
-	set := loadTestConfig(t)
-	tools.SetImagesEnabled(false)
-	t.Cleanup(func() { tools.SetImagesEnabled(true) })
-
-	c := &uiConsole{set: set}
-	require.NoError(t, c.SetSessionSetting("images.block", true))
-	assert.False(t, tools.ImagesEnabled())
-	require.NoError(t, c.ResetSessionSetting("images.block"))
-	assert.True(t, tools.ImagesEnabled()) // the config default (block off) applies again
 }
 
 func TestUIConsoleResetModelSwitchesBackToConfigured(t *testing.T) {

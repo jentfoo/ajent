@@ -83,8 +83,7 @@ func twoToolCalls(aID, aName, bID, bName string) []llm.Event {
 	}
 }
 
-// stubTool is a Tool that records executions and returns canned results. A non-nil block channel
-// holds Execute open until it is closed, so tests can pin the turn in flight.
+// stubTool returns canned results and records executions, block pins the turn in flight.
 type stubTool struct {
 	name     string
 	result   string

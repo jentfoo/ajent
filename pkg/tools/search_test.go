@@ -713,10 +713,8 @@ func TestRelLine(t *testing.T) {
 func TestGrepRel(t *testing.T) {
 	t.Parallel()
 
+	// hidden-file and escape handling is owned by relTo (TestRelToDotPrefixedFilename)
 	assert.Equal(t, "sub/a.txt", grepRel("/root/dir", "/root/dir/sub/a.txt"))
-	// a hidden file keeps its dot prefix and an escape stays absolute, like relTo
-	assert.Equal(t, "..hidden.go", grepRel("/a", "/a/..hidden.go"))
-	assert.Equal(t, "/a/sibling", grepRel("/a/b", "/a/sibling"))
 	// searching a single file attributes to that file's own name
 	assert.Equal(t, "a.txt", grepRel("/root/dir/a.txt", "/root/dir/a.txt"))
 }

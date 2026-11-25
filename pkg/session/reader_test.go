@@ -48,23 +48,15 @@ func TestRead(t *testing.T) {
 		assert.Equal(t, []string{"a", "b"}, ids(entries))
 	})
 
-	// a session with a newer version is rejected
+	// a session with a newer version is refused, classified as ErrNewerFormat,
+	// and keeps the parsed entries so listing can still identify the file
 	t.Run("rejects_newer_version", func(t *testing.T) {
-		p := filepath.Join(t.TempDir(), "s.jsonl")
-		writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
-
-		_, _, err := Read(p)
-		assert.ErrorContains(t, err, "newer than supported v1")
-	})
-
-	// the refusal classifies as ErrNewerFormat and keeps the parsed entries, so
-	// listing can still identify a file this build must refuse
-	t.Run("rejects_newer_version_classifiably", func(t *testing.T) {
 		p := filepath.Join(t.TempDir(), "s.jsonl")
 		writeLines(t, p, []string{`{"id":"a","type":"session","ts":1,"data":{"version":99}}`})
 
 		entries, _, err := Read(p)
 		require.ErrorIs(t, err, ErrNewerFormat)
+		require.ErrorContains(t, err, "newer than supported v1")
 		assert.Equal(t, []string{"a"}, ids(entries))
 	})
 

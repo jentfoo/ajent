@@ -12,10 +12,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fakeBackend swaps every platform seam for an in-memory one and restores them
-// at cleanup. env answers writer display-variable lookups, nil meaning every
-// variable unset. isTTY reports the stdout terminal check, nil meaning not a
-// terminal. Serial: swaps package vars.
+// fakeBackend swaps every platform seam for an in-memory one, restored at cleanup.
+// env nil answers every display-variable lookup unset.
+// Serial: swaps package vars.
 func fakeBackend(t *testing.T, list []writer, installed func(string) bool,
 	run func(_ context.Context, w writer, text string) error, isRemote bool,
 	env func(string) string, isTTY bool) {
@@ -84,18 +83,35 @@ func TestCopy(t *testing.T) {
 		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
 	})
 
-	t.Run("oversized_osc_after_native_win_still_succeeds", func(t *testing.T) {
-		fakeBackend(t,
-			[]writer{{"pbcopy", nil, nil}},
-			func(string) bool { return true },
-			ok,
-			true, nil, true)
+	// remote native win: dead OSC 52 sink still succeeds
+	t.Run("native_win_unreachable_sink_ok", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			text  string
+			tty   *bytes.Buffer
+			isTTY bool
+		}{
+			{"oversized_osc_refused", strings.Repeat("x", maxEncoded), &bytes.Buffer{}, true},
+			{"zero_options_no_sink", "hello", nil, true},
+			{"non_terminal_stdout", "hello", &bytes.Buffer{}, false},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				fakeBackend(t,
+					[]writer{{"pbcopy", nil, nil}},
+					func(string) bool { return true },
+					ok,
+					true, nil, tc.isTTY)
 
-		var tty bytes.Buffer
-
-		// the native write landed, so a refused OSC 52 must not fail the copy
-		require.NoError(t, Copy(t.Context(), strings.Repeat("x", maxEncoded), CopyOptions{TTY: &tty}))
-		assert.Empty(t, tty.String())
+				var opts CopyOptions
+				if tc.tty != nil {
+					opts.TTY = tc.tty
+				}
+				require.NoError(t, Copy(t.Context(), tc.text, opts))
+				if tc.tty != nil {
+					assert.Empty(t, tc.tty.String())
+				}
+			})
+		}
 	})
 
 	t.Run("missing_writers_skipped", func(t *testing.T) {
@@ -173,69 +189,40 @@ func TestCopy(t *testing.T) {
 		assert.Contains(t, err.Error(), "tried one, two")
 	})
 
-	t.Run("zero_options_native_win_ok", func(t *testing.T) {
-		fakeBackend(t,
-			[]writer{{"pbcopy", nil, nil}},
-			func(string) bool { return true },
-			ok,
-			true, nil, true)
+	t.Run("remote_fallback_matrix", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			sink    bool // CopyOptions.TTY nil vs a buffer
+			isTTY   bool
+			wantErr string
+		}{
+			{"nil_sink_refused", false, true, "CopyOptions.TTY"},
+			{"fallback_to_osc52", true, true, ""},
+			{"non_terminal_stdout", true, false, "stdout is not a terminal"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var tty bytes.Buffer
+				fakeBackend(t,
+					[]writer{{"xclip", nil, nil}},
+					func(string) bool { return false },
+					ok,
+					true, nil, tc.isTTY)
 
-		// zero-value options are legal input: the native write landed and the
-		// best-effort escape has nowhere to go, so nothing may panic or fail
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{}))
-	})
-
-	t.Run("zero_options_fallback_errors", func(t *testing.T) {
-		fakeBackend(t,
-			[]writer{{"xclip", nil, nil}},
-			func(string) bool { return false },
-			ok,
-			true, nil, true)
-
-		err := Copy(t.Context(), "hello", CopyOptions{})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "CopyOptions.TTY")
-	})
-
-	t.Run("remote_falls_back_to_osc52", func(t *testing.T) {
-		var tty bytes.Buffer
-		fakeBackend(t,
-			[]writer{{"xclip", nil, nil}},
-			func(string) bool { return false },
-			ok,
-			true, nil, true)
-
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
-		assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
-	})
-
-	t.Run("remote_native_win_non_tty_skips_osc52", func(t *testing.T) {
-		fakeBackend(t,
-			[]writer{{"xclip", nil, nil}},
-			func(string) bool { return true },
-			ok,
-			true, nil, false)
-
-		var tty bytes.Buffer
-
-		// native write still lands, but a non-terminal stdout can never show it
-		require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
-		assert.Empty(t, tty.String())
-	})
-
-	t.Run("remote_non_tty_fallback_errors", func(t *testing.T) {
-		fakeBackend(t,
-			[]writer{{"xclip", nil, nil}},
-			func(string) bool { return false },
-			ok,
-			true, nil, false)
-
-		var tty bytes.Buffer
-
-		err := Copy(t.Context(), "hello", CopyOptions{TTY: &tty})
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "stdout is not a terminal")
-		assert.Empty(t, tty.String())
+				var opts CopyOptions
+				if tc.sink {
+					opts.TTY = &tty
+				}
+				err := Copy(t.Context(), "hello", opts)
+				if tc.wantErr == "" {
+					require.NoError(t, err)
+					assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
+					return
+				}
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErr)
+				assert.Empty(t, tty.String())
+			})
+		}
 	})
 
 	t.Run("cancelled_context_refuses", func(t *testing.T) {
@@ -252,6 +239,8 @@ func TestCopy(t *testing.T) {
 }
 
 func TestWriteOSC52(t *testing.T) {
+	t.Parallel()
+
 	t.Run("payload_is_base64", func(t *testing.T) {
 		var out bytes.Buffer
 
@@ -275,7 +264,8 @@ func TestWriteOSC52(t *testing.T) {
 	})
 
 	t.Run("write_failure_wrapped", func(t *testing.T) {
-		require.Error(t, writeOSC52("hi", failingWriter{}))
+		err := writeOSC52("hi", failingWriter{})
+		require.ErrorContains(t, err, "closed") // the underlying cause survives
 	})
 
 	t.Run("single_write_no_tearing", func(t *testing.T) {
@@ -286,20 +276,6 @@ func TestWriteOSC52(t *testing.T) {
 		// one Write carries the whole escape, so a serializing sink cannot tear it
 		assert.Equal(t, []int{len("\x1b]52;c;") + base64.StdEncoding.EncodedLen(2) + 1}, calls)
 	})
-}
-
-// TestCopyTTYSinkReceivesEscape pins the sink routing: with opts.TTY set the
-// escape lands there and never on the stdout seam.
-func TestCopyTTYSinkReceivesEscape(t *testing.T) {
-	var tty bytes.Buffer
-	fakeBackend(t,
-		[]writer{{"xclip", nil, nil}},
-		func(string) bool { return false },
-		func(context.Context, writer, string) error { return errors.New("boom") },
-		true, nil, true)
-
-	require.NoError(t, Copy(t.Context(), "hello", CopyOptions{TTY: &tty}))
-	assert.Equal(t, "\x1b]52;c;"+base64.StdEncoding.EncodeToString([]byte("hello"))+"\x07", tty.String())
 }
 
 type countingWriter struct {

@@ -23,9 +23,7 @@ func TestBuildOptions(t *testing.T) {
 		// not be the binary its basename suggests), so no grant can cover the line
 		{"/usr/bin/ifconfig eth0", 3, ""},
 		{"./deploy.sh --dry-run", 3, ""},
-		// a quoted path-qualified head collapses to quote debris in a compound: it
-		// names nothing any grant could cover, or one approval would remember a key
-		// every other quoted-head line (a planted binary under any path) matches
+		// a quoted path-qualified head collapses to debris naming no grant
 		{"echo hi && './cat' x", 3, ""},
 		// subcommand heads narrow the grant: git status never covers git push
 		{"git status", 4, "Allow `git status` for session"},
@@ -44,8 +42,7 @@ func TestBuildOptions(t *testing.T) {
 		// three or more heads still grant per name, past three eliding into "and N more"
 		{"rm a && mkdir b && touch c", 4, "Allow `rm`, `mkdir` and `touch` for session"},
 		{"rm a && mkdir b && touch c && chmod +x d", 4, "Allow `rm`, `mkdir` and `touch` (+1 more) for session"},
-		// a resolved redirect target still names its heads: the same commands run
-		// whether output goes to a terminal or a file, the gates verifying where
+		// a resolved redirect target still names its heads; the gates verify where
 		{"echo hi > out.txt", 4, "Allow `echo` for session"},
 		// an expanding target defeats naming: no grant could cover what the shell
 		// resolves at run time
@@ -133,9 +130,8 @@ func TestAllowSessionKey(t *testing.T) {
 		// a leading redirect strips from the segment, so the key names the command
 		{"bash", `> out git status`, "bash:git status"},
 		{"bash", `> out`, "bash"}, // a bare redirect falls to the bash grant
-		// a leading env assignment is never unwrapped, so the key can't collide with a
-		// real grant: PATH/LD_PRELOAD can hijack what `cmd` executes, so such a line
-		// must re-prompt rather than match an existing bash:<name>.
+		// an env prefix never unwraps, so the key cannot collide with a real grant:
+		// PATH/LD_PRELOAD hijack what `cmd` executes and must re-prompt
 		{"bash", `PATH=/tmp/evil git status`, "bash:"},
 		{"write", `{}`, "write"}, // tool name for non-bash
 		// a quoted head keys the same way the grant was stored (sessionNames reads

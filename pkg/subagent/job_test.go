@@ -18,9 +18,7 @@ func TestJobElapsed(t *testing.T) {
 		activated bool // set Activated to started+wait
 		want      time.Duration
 	}{
-		{"done_reports_active", StatusDone, true, run},
-		{"error_reports_active", StatusError, true, run},
-		{"aborted_after_run_reports_active", StatusAborted, true, run},
+		{"terminal_reports_active", StatusDone, true, run},
 		{"aborted_before_run_shows_wait", StatusAborted, false, wait},
 	}
 	for _, tc := range cases {

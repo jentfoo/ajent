@@ -40,8 +40,7 @@ func TestAwkReadSafe(t *testing.T) {
 		{`regex hidden system`, `awk '/\"/ {system("x")}' f`, false},
 		{"regex hidden redirect", `awk '/\(/ {print $1 > "/tmp/evil"}' f`, false},
 
-		// backslash-newline continuations splice before tokens form: the physical
-		// newline must not reset the print tracker or split a keyword
+		// continuations splice before tokens form, never resetting the print tracker
 		{"continuation redirect", `awk 'BEGIN{print \
 > "/tmp/evil"}'`, false},
 		{"continuation pipe", `printf 'x\n' | awk '{print $1 \
@@ -52,12 +51,11 @@ tem("x")}'`, false},
 		{"continuation in string", `awk 'BEGIN{print "a \
 > b"}'`, true},
 
-		// unquoted continuations join in tokenizeRaw before awk sees the script,
-		// so the pipe stays attached to its print
+		// unquoted continuations join in tokenizeRaw, keeping the pipe on its print
 		{"unquoted continuation pipe", "awk BEGIN\\{print\\\n\\|\"id\"}", false},
 
-		// awk comments end at the newline and single quotes are not string
-		// delimiters, so an apostrophe or a quote inside one hides nothing
+		// comments end at the newline and single quotes never open a string,
+		// so an apostrophe or quote inside one hides nothing
 		{"comment apostrophe hides nothing", "awk \"# don't\nBEGIN{system(\\\"id\\\")}\" /dev/null", false},
 		{"comment quote hides nothing", "awk '# \" x\nBEGIN{system(\"id\")}'", false},
 		{"comment backslash no extend", "awk '# c \\\nBEGIN{system(\"id\")}'", false},
@@ -107,8 +105,7 @@ tem("x")}`, false},
 b/`, true},
 		{"spliced string literal", `BEGIN{print "a\
 b"}`, true},
-		// mawk splices an escaped backslash's continuation too, keeping the print
-		// and its redirect attached, so the splice reading is the one analysed
+		// mawk splices even an escaped backslash's continuation: the splice reading wins
 		{"escaped backslash redirect", "{print $1 \\\\\n> \"f\"}", false},
 
 		// comments end at the newline, single quotes never open a string

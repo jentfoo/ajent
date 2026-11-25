@@ -86,8 +86,7 @@ func TestCompleter(t *testing.T) {
 		assert.Empty(t, items)
 	})
 
-	// a name no bare token could survive completes in the escaped form Parse
-	// re-expands; the accepted buffer still parses and still completes
+	// a spaced name completes in the escaped form refs.Parse re-expands
 	t.Run("escaped_name_round_trip", func(t *testing.T) {
 		dir := t.TempDir()
 		require.NoError(t, os.WriteFile(filepath.Join(dir, "my notes.txt"), []byte("x"), 0o600))

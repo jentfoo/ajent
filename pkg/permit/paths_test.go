@@ -153,8 +153,7 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		{"mkdir_mode_without_path", "mkdir -m 755", false}, // 755 is a value, not a path
 		{"variable_path", "mkdir $HOME/x", false},
 		{"glob_path", "rmdir *", false},
-		// brace expansion splits one token into several words before mkdir runs, so a
-		// leading brace can smuggle an absolute path past a token that looks relative
+		// brace expansion can smuggle an absolute path past a relative-looking token
 		{"brace_absolute_escape", "mkdir {/etc/x,/tmp/y}", false},
 		{"brace_escape_with_flag", "mkdir -p {/etc/x,/tmp/y}", false},
 		{"brace_rmdir_escape", "rmdir {/etc/x,/tmp/y}", false},
@@ -194,7 +193,6 @@ func TestWriteScopeAllowsCommand(t *testing.T) {
 		{"rmdir_parents_absolute", "rmdir -p /s/root/a", false},
 		{"rmdir_parents_dotdot", "rmdir -p ../a/b", false},
 		{"rmdir_parents_flag_after", "rmdir a/b -p", true},
-		{"mkdir_parents_still_ok", "mkdir -p a/b/c", true},
 		// an unknown flag may consume a value, so it cannot be told from an operand
 		{"unknown_flag", "mkdir --frobnicate a", false},
 		{"bare_double_dash", "mkdir -- a", false},

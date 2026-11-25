@@ -71,27 +71,26 @@ func TestControllerRestore(t *testing.T) {
 	})
 
 	t.Run("unresolvable_model_abandons", func(t *testing.T) {
-		f := newFakeHost()
-		p := mid()
-		p.Planner = "p/gone"
-		f.stored = p
-		c := New(f.host())
+		for _, tc := range []struct {
+			name   string
+			setKey func(*persisted)
+			needle string
+		}{
+			{"planner_key", func(p *persisted) { p.Planner = "p/gone" }, "is unavailable"},
+			{"saved_model_key", func(p *persisted) { p.SavedModel = "p/gone" }, "saved model"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				f := newFakeHost()
+				p := mid()
+				tc.setKey(p)
+				f.stored = p
+				c := New(f.host())
 
-		assert.False(t, c.Restore())
-		assert.False(t, c.Active())
-		assert.Contains(t, f.notices[len(f.notices)-1], "is unavailable")
-	})
-
-	t.Run("unresolvable_saved_model_abandons", func(t *testing.T) {
-		f := newFakeHost()
-		p := mid()
-		p.SavedModel = "p/gone"
-		f.stored = p
-		c := New(f.host())
-
-		assert.False(t, c.Restore())
-		assert.False(t, c.Active()) // not silently rebuilt around the implementor
-		assert.Contains(t, f.notices[len(f.notices)-1], "saved model")
+				assert.False(t, c.Restore())
+				assert.False(t, c.Active()) // not silently rebuilt around the implementor
+				assert.Contains(t, f.notices[len(f.notices)-1], tc.needle)
+			})
+		}
 	})
 
 	t.Run("missing_saved_model_falls_back", func(t *testing.T) {

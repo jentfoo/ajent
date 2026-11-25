@@ -124,8 +124,7 @@ func TestGitDiff(t *testing.T) {
 		assert.Contains(t, out, `put "worktree" in to`)
 	})
 
-	// status entries are HEAD-relative, so candidate paths must also come from
-	// HEAD's tree or files committed after the base are silently omitted
+	// status entries are HEAD-relative: candidates must come from HEAD's tree
 	t.Run("worktree_since_base", func(t *testing.T) {
 		g := newGitRepo(t)
 		r, err := git.PlainOpen(g.dir)

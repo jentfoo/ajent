@@ -275,7 +275,7 @@ func TestHelpControllerAsk(t *testing.T) {
 		rig := newRig(t, hp)
 		t.Cleanup(func() { close(hp.release) })
 
-		rig.ctl.ask(context.Background(), "slow one")
+		rig.ctl.ask(t.Context(), "slow one")
 		require.Eventually(t, func() bool { return hp.seen() == 1 }, time.Second, time.Millisecond)
 
 		require.True(t, rig.ctl.abort())

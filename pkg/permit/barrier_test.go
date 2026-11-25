@@ -190,10 +190,8 @@ func newTestBarrier(p *fakePrompter) *Barrier {
 	return newTestBarrierOpts(p, Options{})
 }
 
-// newTestBarrierOpts builds a barrier with an optional dialog bundle plus o.
-// Notice, DryRun and Classifier default to inert production-shaped values (both
-// front ends install them unconditionally); when p is set the Dialogs bundle
-// rides with it, pairing its noter and preview as production wiring does.
+// newTestBarrierOpts builds a barrier with an optional prompter-backed dialogs
+// bundle; Notice, DryRun and Classifier default to inert production-shaped values.
 func newTestBarrierOpts(p *fakePrompter, o Options) *Barrier {
 	if o.Notice == nil {
 		o.Notice = func(string) {}
@@ -501,9 +499,8 @@ func TestGuardSafeCommandsCoverLauncherPrefixes(t *testing.T) {
 func TestGuardDenyMatches(t *testing.T) {
 	t.Parallel()
 
-	// head-hiding shapes still refuse in allow-all, where the deny list is
-	// the only gate; the full matcher table lives with DenyMatches in
-	// deny_test.go
+	// head-hiding shapes refuse in allow-all where the deny list is the only gate;
+	// the full matcher table lives with DenyMatches in deny_test.go
 	shapes := []struct {
 		name string
 		in   string
@@ -884,7 +881,7 @@ func TestAskerBlockAutoDenied(t *testing.T) {
 	t.Run("allow_runs_mid_hold", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // never released; the verdict must not wait on typing
-		defer release()
+		t.Cleanup(release)
 		cl := &fakeClassifier{verdict: ClassAllow}
 		n := &noticeRecorder{}
 		b := newTestBarrierOpts(p, withMode(Options{
@@ -951,43 +948,6 @@ func TestAskerBlockAutoDenied(t *testing.T) {
 		assert.Equal(t, tools.ActionDeny, d.Action)
 		assert.Zero(t, p.count())
 		assert.Zero(t, cl.calls.Load())
-	})
-
-	// a mode change while the classification runs still discards the stale verdict,
-	// inheriting unattendedAsk's rule rather than forking it
-	t.Run("mode_change_discards_stale_verdict", func(t *testing.T) {
-		for _, c := range []struct {
-			name string
-			next Mode
-			want tools.Action
-		}{
-			{"new_mode_asks", ModeAllowRead, tools.ActionDeny},
-			{"new_mode_allows", ModeAllowAll, tools.ActionAllow},
-		} {
-			t.Run(c.name, func(t *testing.T) {
-				p := newFakePrompter()
-				cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-				b := newTestBarrierOpts(p, withMode(Options{
-					BlockAutoDenied: true, Classifier: cl.Classify}, ModeAuto))
-
-				done := make(chan tools.Decision, 1)
-				go func() {
-					done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm -rf tmpbuild"}`))
-				}()
-				require.Eventually(t, func() bool { return cl.calls.Load() > 0 }, time.Second, 10*time.Millisecond)
-
-				b.SetMode(c.next) // the mode that launched the classifier no longer decides
-				close(cl.release)
-
-				select {
-				case got := <-done:
-					assert.Equal(t, c.want, got.Action)
-				case <-time.After(time.Second):
-					t.Fatal("ask never settled")
-				}
-				assert.Zero(t, p.count()) // still no dialog under either mode
-			})
-		}
 	})
 }
 
@@ -1584,8 +1544,7 @@ func TestAskerAuto(t *testing.T) {
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"stat f.txt"}`)); close(done) }()
 
-		// the write verdict must not resolve, a user keystroke still deciding
-		waitDialog(t, p).answer(int(optDeny))
+		waitDialog(t, p).answer(int(optDeny)) // a write verdict must not resolve on its own
 		<-done
 
 		assert.Equal(t, tools.ActionDeny, got.Action)
@@ -1597,8 +1556,6 @@ func TestAskerAuto(t *testing.T) {
 		cl := &fakeClassifier{verdict: ClassAllow}
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
-		// a confident write (rm) is still classified in auto mode, a readonly verdict
-		// resolving the dialog open without a keystroke.
 		var got tools.Decision
 		done := make(chan struct{})
 		go func() { got = runAsk(b, t.Context(), "bash", []byte(`{"command":"rm build"}`)); close(done) }()
@@ -1713,7 +1670,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("allow_verdict_cuts_hold_short", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // held for the whole test, the verdict must not wait it out
-		defer release()
+		t.Cleanup(release)
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: (&fakeClassifier{verdict: ClassAllow}).Classify}, ModeAuto))
 
 		done := make(chan tools.Decision, 1)
@@ -1750,7 +1707,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("prefetched_verdict_skips_dialog", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold() // held for the whole test, the cached verdict must not wait it out
-		defer release()
+		t.Cleanup(release)
 		var calls atomic.Int32
 		cl := func(context.Context, Subject) Class { calls.Add(1); return ClassAllow }
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl}, ModeAuto))
@@ -1797,7 +1754,7 @@ func TestAskerDialogHold(t *testing.T) {
 	t.Run("abort_during_hold_denies", func(t *testing.T) {
 		p := newFakePrompter()
 		release := p.beginHold()
-		defer release()
+		t.Cleanup(release)
 		b := newTestBarrier(p)
 
 		ctx, cancel := context.WithCancel(t.Context())
@@ -1939,7 +1896,7 @@ func TestSetModeResolvesOpenDialog(t *testing.T) {
 	t.Run("mode_change_during_hold_drops_verdict", func(t *testing.T) {
 		p := newFakePrompter()
 		releaseHold := p.beginHold()
-		defer releaseHold()
+		t.Cleanup(releaseHold)
 		cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
 		b := newTestBarrierOpts(p, withMode(Options{Classifier: cl.Classify}, ModeAuto))
 
@@ -2546,26 +2503,37 @@ func TestAskerStaleAskStillPromptsWhenModeAsks(t *testing.T) {
 	assert.Equal(t, tools.ActionDeny, got.Action)
 }
 
+// a mode change while the classification runs discards the stale verdict; with
+// BlockAutoDenied the delta is that a prompter rides along and must never open one
 func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 	t.Parallel()
 
 	for _, c := range []struct {
-		name string
-		next Mode
-		want tools.Action
+		name  string
+		block bool // also set BlockAutoDenied
+		next  Mode
+		want  tools.Action
 	}{
-		{"stale_verdict_discarded", ModeAllowRead, tools.ActionDeny},
-		{"live_gate_allows", ModeAllowAll, tools.ActionAllow},
+		{"stale_verdict_discarded", false, ModeAllowRead, tools.ActionDeny},
+		{"live_gate_allows", false, ModeAllowAll, tools.ActionAllow},
+		{"block_stale_denied_read", true, ModeAllowRead, tools.ActionDeny},
+		{"block_live_allow_all", true, ModeAllowAll, tools.ActionAllow},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			var p *fakePrompter
+			if c.block { // armed to catch any dialog the block path should never open
+				p = newFakePrompter()
+			}
 			cl := &gatedClassifier{release: make(chan struct{}), verdict: ClassAllow}
-			b := newTestBarrierOpts(nil, withMode(Options{Classifier: cl.Classify}, ModeAuto))
+			b := newTestBarrierOpts(p, withMode(Options{
+				BlockAutoDenied: c.block, Classifier: cl.Classify}, ModeAuto))
 
 			done := make(chan tools.Decision, 1)
 			go func() {
 				done <- runAsk(b, t.Context(), "bash", []byte(`{"command":"rm -rf tmpbuild"}`))
 			}()
 			require.Eventually(t, func() bool { return cl.calls.Load() > 0 }, time.Second, 10*time.Millisecond)
+
 			b.SetMode(c.next) // the mode that launched the classifier no longer decides
 			close(cl.release)
 
@@ -2574,6 +2542,9 @@ func TestUnattendedAskVerdictAfterModeChange(t *testing.T) {
 				assert.Equal(t, c.want, got.Action)
 			case <-time.After(time.Second):
 				t.Fatal("ask never settled")
+			}
+			if p != nil {
+				assert.Zero(t, p.count()) // still no dialog under either mode
 			}
 		})
 	}

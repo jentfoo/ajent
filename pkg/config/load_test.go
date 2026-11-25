@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// loadEnv returns an env lookup rooted at vars plus a fallback to os.Getenv.
+// loadEnv returns an env lookup rooted at vars.
 func loadEnv(vars map[string]string) func(string) string {
 	return func(k string) string { return vars[k] }
 }
@@ -68,9 +68,7 @@ func TestLoad(t *testing.T) {
 		home := t.TempDir()
 		t.Setenv("AJENT_HOME", home)
 
-		// a project layer overriding only keymap.newline must not inherit a
-		// submit list from any default layer: the two arrays would then both
-		// name enter and collide at ParseKeymap
+		// a newline-only override must not inherit any default submit list (ParseKeymap collision)
 		writeConfig(t, filepath.Join(ProjectDir(home), ConfigFileName), `{"ui":{"keymap":{"newline":["enter"]}}}`)
 
 		s, _, err := Load(Options{Workspace: home})
@@ -384,6 +382,8 @@ func TestSave(t *testing.T) {
 	})
 
 	t.Run("unknown_layer_errors", func(t *testing.T) {
+		t.Setenv("AJENT_HOME", t.TempDir())
+
 		s, _, err := Load(Options{Workspace: "."})
 		require.NoError(t, err)
 		_, err = s.Save("bogus", "model", "x")

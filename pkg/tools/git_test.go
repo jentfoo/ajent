@@ -714,13 +714,6 @@ func TestWalkSubmoduleDelta(t *testing.T) {
 	})
 }
 
-func TestCommitSubject(t *testing.T) {
-	t.Parallel()
-
-	c := &object.Commit{Message: "subject\n\nbody\n"}
-	assert.Equal(t, "subject", commitSubject(c))
-}
-
 // TestGitStatusSubmoduleCheckout covers the shapes a real on-disk checkout
 // takes, where go-git's status is only submodule-aware while .gitmodules sits
 // in the work tree.
@@ -808,6 +801,13 @@ func TestGitPathScope(t *testing.T) {
 	assert.True(t, gitPathScope("")("anything")) // empty scope matches all
 }
 
+func TestCommitSubject(t *testing.T) {
+	t.Parallel()
+
+	c := &object.Commit{Message: "subject\n\nbody\n"}
+	assert.Equal(t, "subject", commitSubject(c))
+}
+
 func TestNormalizeGitPathspec(t *testing.T) {
 	t.Parallel()
 
@@ -832,7 +832,7 @@ func TestNormalizeGitPathspec(t *testing.T) {
 func TestGitDiffOut(t *testing.T) {
 	t.Run("empty_scope_reads_as_no_changes", func(t *testing.T) {
 		d := newGitDiffOut("", ToolGitDiff)
-		defer func() { _ = d.close() }()
+		t.Cleanup(func() { _ = d.close() })
 		assert.Equal(t, "(no changes)", d.Text(""))
 	})
 
@@ -851,7 +851,7 @@ func TestGitDiffOut(t *testing.T) {
 		applyTestLimits(t, Limits{Git: Limit{Lines: 2}})
 
 		d := newGitDiffOut("", ToolGitDiff)
-		defer func() { _ = d.close() }()
+		t.Cleanup(func() { _ = d.close() })
 		for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
 			if d.Full() { // the loop's own stop: nothing past the bound is read
 				d.skipped++

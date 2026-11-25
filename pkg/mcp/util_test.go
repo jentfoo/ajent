@@ -33,8 +33,6 @@ func TestFlexDurationUnmarshal(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
 			var d FlexDuration
 			err := json.Unmarshal([]byte(tc.raw), &d)
 			if tc.wantErr {
@@ -81,8 +79,6 @@ func TestFlexStringsUnmarshal(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
 			var f FlexStrings
 			err := json.Unmarshal([]byte(tc.raw), &f)
 			if tc.wantErr {

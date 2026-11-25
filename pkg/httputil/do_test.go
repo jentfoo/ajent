@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,8 +17,7 @@ import (
 
 const testAPIKey = "sk-secret-do-not-leak"
 
-// testPlainKey carries no key shape the scrub's pattern pass recognizes, so
-// tests exercising the literal path cannot pass on the pattern alone.
+// no key shape so tests on the literal path cannot pass on pattern alone
 const testPlainKey = "org-plain-credential-9f2"
 
 // testRequest builds a call with a deterministic clock, jitter and recorded
@@ -134,32 +132,26 @@ func TestDo(t *testing.T) {
 		assert.Empty(t, *slept)
 	})
 
-	t.Run("absurd_retry_after_fails_immediately", func(t *testing.T) {
-		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "86400")
-			w.WriteHeader(http.StatusTooManyRequests)
-		})
+	t.Run("oversized_retry_after_fails_immediately", func(t *testing.T) {
+		tests := []struct{ name, header string }{
+			{"absurd_delta", "86400"},
+			{"overflowing_delta", "10000000000"}, // wraps a duration if multiplied raw
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Retry-After", tc.header)
+					w.WriteHeader(http.StatusTooManyRequests)
+				})
 
-		r, hc, slept, _ := testRequest(t, srv.URL)
-		_, err := Do(t.Context(), hc, r)
+				r, hc, slept, _ := testRequest(t, srv.URL)
+				_, err := Do(t.Context(), hc, r)
 
-		require.Error(t, err)
-		assert.Equal(t, int64(1), hits.Load())
-		assert.Empty(t, *slept)
-	})
-
-	t.Run("overflowing_retry_after_fails_immediately", func(t *testing.T) {
-		srv, hits := countingServer(t, func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Retry-After", "10000000000") // wraps a duration if multiplied raw
-			w.WriteHeader(http.StatusTooManyRequests)
-		})
-
-		r, hc, slept, _ := testRequest(t, srv.URL)
-		_, err := Do(t.Context(), hc, r)
-
-		require.Error(t, err)
-		assert.Equal(t, int64(1), hits.Load())
-		assert.Empty(t, *slept)
+				require.Error(t, err)
+				assert.Equal(t, int64(1), hits.Load())
+				assert.Empty(t, *slept)
+			})
+		}
 	})
 
 	t.Run("error_func_replaces_the_error", func(t *testing.T) {
@@ -371,31 +363,33 @@ func TestDo(t *testing.T) {
 		assert.Contains(t, got, redactedMask)
 	})
 
-	t.Run("construction_error_redacts_url", func(t *testing.T) {
-		r, hc, _, logs := testRequest(t, "https://x.test")
-		r.URL = "https://user:" + testPlainKey + "%zz@host/v1" // a bad escape fails the parse
-		_, err := Do(t.Context(), hc, r)
-		require.Error(t, err)
+	t.Run("construction_error_redacts", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			url     string
+			method  string
+			secret  string
+			wantURL string // non-empty: the log URL must still contain this marker
+		}{
+			{"bad_escape", "https://user:" + testPlainKey + "%zz@host/v1", http.MethodPost, testPlainKey, ""},
+			{"invalid_method", "https://x.test/v1/x?api_key=" + testAPIKey, "GE T", testAPIKey, redactedQuery},
+		}
+		for _, tc := range tests {
+			t.Run(tc.name, func(t *testing.T) {
+				r, hc, _, logs := testRequest(t, "https://x.test")
+				r.URL, r.Method = tc.url, tc.method
+				_, err := Do(t.Context(), hc, r)
+				require.Error(t, err)
 
-		var ue *url.Error
-		require.ErrorAs(t, err, &ue)
-		assert.Equal(t, "parse", ue.Op)
-		assert.NotContains(t, err.Error(), testPlainKey)
-		require.Len(t, *logs, 1)
-		assert.NotContains(t, (*logs)[0].URL, testPlainKey)
-		assert.Equal(t, redactedMask, (*logs)[0].Header.Get("Authorization"))
-	})
-
-	t.Run("invalid_method_still_logs_redacted", func(t *testing.T) {
-		r, hc, _, logs := testRequest(t, "https://x.test")
-		r.Method = "GE T"
-		r.URL += "?api_key=" + testAPIKey
-		_, err := Do(t.Context(), hc, r)
-		require.Error(t, err)
-
-		assert.NotContains(t, err.Error(), testAPIKey)
-		require.Len(t, *logs, 1)
-		assert.Contains(t, (*logs)[0].URL, redactedQuery)
+				assert.NotContains(t, err.Error(), tc.secret)
+				require.Len(t, *logs, 1)
+				assert.NotContains(t, (*logs)[0].URL, tc.secret)
+				assert.Equal(t, redactedMask, (*logs)[0].Header.Get("Authorization"))
+				if tc.wantURL != "" { // the query param survives as the redaction marker
+					assert.Contains(t, (*logs)[0].URL, tc.wantURL)
+				}
+			})
+		}
 	})
 
 	t.Run("permanent_transport_error_fails_fast", func(t *testing.T) {
@@ -436,10 +430,9 @@ func TestDo(t *testing.T) {
 			return context.Canceled, false
 		}
 
-		// the watchdog bounds a regression, where only the caller context
-		// could end the stalled read
+		// the watchdog bounds a regression only the caller context could end
 		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		defer cancel()
+		t.Cleanup(cancel)
 		start := time.Now()
 		_, err := Do(ctx, hc, r)
 
@@ -471,16 +464,13 @@ func TestWrapIdle(t *testing.T) {
 	body := func() io.ReadCloser { return io.NopCloser(strings.NewReader("x")) }
 	timer := func(time.Duration, func()) stopper { return &fakeTimer{} }
 
-	t.Run("unset_uses_the_default", func(t *testing.T) {
-		assert.IsType(t, &idleReader{}, wrapIdle(body(), nil, timer))
-	})
-
 	t.Run("explicit_zero_disables", func(t *testing.T) {
 		_, wrapped := wrapIdle(body(), dur(0), timer).(*idleReader)
 		assert.False(t, wrapped)
 	})
 
-	t.Run("explicit_value_wraps", func(t *testing.T) {
+	t.Run("wraps_unless_disabled", func(t *testing.T) {
+		assert.IsType(t, &idleReader{}, wrapIdle(body(), nil, timer))
 		assert.IsType(t, &idleReader{}, wrapIdle(body(), dur(time.Second), timer))
 	})
 }

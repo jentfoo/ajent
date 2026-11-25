@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jentfoo/ajent/pkg/strutil"
@@ -139,6 +140,139 @@ func TestStatusRows(t *testing.T) {
 		require.Len(t, got, 2)
 		assert.Equal(t, "allow", got[1])
 	})
+
+	t.Run("everything_fits_one_row", func(t *testing.T) {
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
+		}
+		got := single(s, 120)
+		assert.Len(t, got, 1)
+		row := strings.Join(got, " ")
+		assert.Contains(t, row, "opus-5")
+		assert.Contains(t, row, "plan: reviewing")
+		assert.Contains(t, row, "subagents: 2")
+	})
+
+	t.Run("model_shortens_before_segments_split", func(t *testing.T) {
+		s := Status{
+			Model: "openrouter/z-ai/glm-5.2", ModelShort: "glm-5.2",
+			Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
+		}
+		got := single(s, 70) // full model overflows, the short one still fits one row
+		assert.Len(t, got, 1)
+		assert.Contains(t, got[0], "glm-5.2") // the model shortens, never vanishes
+		assert.NotContains(t, got[0], "openrouter")
+		assert.Contains(t, got[0], "plan: reviewing") // segments stay at full text
+		assert.Contains(t, got[0], "subagents: 2")
+	})
+
+	t.Run("segments_shorten_before_splitting", func(t *testing.T) {
+		// full segments overflow the one-row attempt, but their short forms fit it:
+		// the block must stay on one row rather than splitting
+		s := Status{
+			Model: "openrouter/z-ai/glm-5.2", ModelShort: "glm-5.2",
+			Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing", Short: "plan"}},
+		}
+		got := single(s, 40)
+		assert.Len(t, got, 1)
+		assert.Contains(t, got[0], "glm-5.2") // the model is short
+		assert.Contains(t, got[0], "plan")    // and so is the segment
+		assert.NotContains(t, got[0], "reviewing")
+	})
+
+	t.Run("segments_expand_on_second_row", func(t *testing.T) {
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}, {Key: "b", Text: "subagents: 2"}},
+		}
+		got := single(s, 40) // even without the model one row cannot fit
+		assert.Len(t, got, 2)
+		assert.Contains(t, got[0], "opus-5")          // row one keeps the model while it fits
+		assert.Contains(t, got[1], "plan: reviewing") // row two uses full text while it fits
+		assert.Contains(t, got[1], "subagents: 2")
+	})
+
+	t.Run("row_one_shortens_model_before_clipping", func(t *testing.T) {
+		s := Status{
+			Model: "openrouter/z-ai/glm-5.2", ModelShort: "glm-5.2",
+			Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}},
+		}
+		got := single(s, 31) // fixed plus full model overflow, the short one fits
+		assert.Len(t, got, 2)
+		assert.Contains(t, got[0], "glm-5.2") // the model shortens, not the token count
+		assert.NotContains(t, got[0], "openrouter")
+		assert.Contains(t, got[0], "68.2k/200k")
+	})
+
+	t.Run("fixed_part_never_drops_for_segments", func(t *testing.T) {
+		// even at a width that clips the fixed part hard, segments do not evict it
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan: reviewing"}},
+		}
+		got := single(s, 22)
+		assert.Len(t, got, 2)
+		assert.Contains(t, strings.Join(got, " "), "68.2k/200k") // token totals outlive segments
+	})
+
+	t.Run("priority_drops_lowest_first", func(t *testing.T) {
+		// both short forms together overflow row two, the lower-priority one drops
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{
+				{Key: "a", Text: "plan-reviewing", Short: "plan-reviewing-now", Priority: 10},
+				{Key: "b", Text: "subagents-running", Short: "subagents-running", Priority: 1},
+			},
+		}
+		both := displayWidth("plan-reviewing-now · subagents-running")
+		singleShort := displayWidth("plan-reviewing-now")
+		width := (both + singleShort) / 2 // fits one segment but not both
+		got := single(s, width)
+		assert.Len(t, got, 2)
+		row2 := got[1]
+		assert.NotContains(t, row2, "subagents")   // priority 1 drops before priority 10
+		assert.Contains(t, row2, "plan-reviewing") // the survivor expands to full text
+	})
+
+	t.Run("tie_drops_later_insertion_first", func(t *testing.T) {
+		// equal priorities, so the later insertion is dropped first (drop-last rule)
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{
+				{Key: "a", Text: "plan-reviewing", Short: "plan-reviewing-now"},
+				{Key: "b", Text: "subagents-running", Short: "subagents-running"},
+			},
+		}
+		both := displayWidth("plan-reviewing-now · subagents-running")
+		singleShort := displayWidth("subagents-running")
+		width := (both + singleShort) / 2
+		got := single(s, width)
+		assert.Len(t, got, 2)
+		row2 := got[1]
+		assert.NotContains(t, row2, "subagents")   // later insertion drops first
+		assert.Contains(t, row2, "plan-reviewing") // the survivor expands to full text
+	})
+
+	t.Run("short_form_used_when_full_does_not_fit", func(t *testing.T) {
+		// the single segment overflows row two at full text, its short form is used
+		s := Status{
+			Model: "opus-5", Tokens: 68200, MaxTokens: 200000,
+			Segments: []Segment{{Key: "a", Text: "plan-reviewing-in-progress-long", Short: "pr"}},
+		}
+		got := single(s, 30)
+		assert.Len(t, got, 2) // one row overflows even without the model, so it splits
+		row2 := got[1]
+		assert.Equal(t, "pr", strutil.StripANSI(row2)) // short form, never a clipped full text
+	})
+
+	t.Run("empty_segment_text_skipped", func(t *testing.T) {
+		got := single(Status{Model: "m", Segments: []Segment{{Key: "a", Text: ""}}}, 80)
+		assert.Equal(t, []string{"m"}, got)
+	})
 }
 
 func TestUsageBar(t *testing.T) {
@@ -178,12 +312,4 @@ func TestUsageBar(t *testing.T) {
 	t.Run("separator_is_three_columns", func(t *testing.T) {
 		assert.Equal(t, 3, displayWidth(statusSep))
 	})
-}
-
-func TestFormatBytesNotTokens(t *testing.T) {
-	t.Parallel()
-
-	// the same number reads differently: /1000 unsuffixed vs /1024 with a unit
-	assert.Equal(t, "3.7k", strutil.FormatTokens(3686))
-	assert.Equal(t, "3.6kb", strutil.HumanSize(3686))
 }

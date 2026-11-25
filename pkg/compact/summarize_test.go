@@ -309,9 +309,7 @@ func TestFitPrompt(t *testing.T) {
 	})
 
 	t.Run("empty_transcript_is_never_returned", func(t *testing.T) {
-		// a mid-size window: the fixed instruction text would fit an empty transcript,
-		// but one un-clippable entry never drops. The drop loop must not hand the
-		// summariser an empty <conversation> and call it compaction.
+		// the drop loop must never hand the summariser an empty transcript
 		huge := []session.Entry{userText("big", strings.Repeat("paste ", 5000))}
 		model := llm.Model{Provider: "test", ID: "m", ContextWindow: 4000, MaxOutput: 256}
 		maxOut := maxOutOf(model)
@@ -333,9 +331,7 @@ func maxOutOf(m llm.Model) int {
 func TestSummariseDroppedRegion(t *testing.T) {
 	t.Parallel()
 
-	// a window small enough that even the tightest clip busts: the drop path
-	// fires, and the dropped oldest region must reach the checkpoint by a second
-	// chained call instead of being cut from context unsummarised.
+	// even the tightest clip busts, so the oldest dropped region is folded in by a chained call
 	branch := toolBranch(t, 12, 400)
 	model := llm.Model{Provider: "test", ID: "m", ContextWindow: 2500, MaxOutput: 512}
 

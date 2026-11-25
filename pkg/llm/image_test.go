@@ -24,12 +24,12 @@ func TestImageDims(t *testing.T) {
 		assert.Equal(t, 480, h)
 	})
 
-	t.Run("truncated header fails", func(t *testing.T) {
+	t.Run("truncated_header_fails", func(t *testing.T) {
 		_, _, ok := ImageDims(b.Bytes()[:20])
 		assert.False(t, ok)
 	})
 
-	t.Run("not an image", func(t *testing.T) {
+	t.Run("non_image_input", func(t *testing.T) {
 		_, _, ok := ImageDims([]byte("plainly not an image at all"))
 		assert.False(t, ok)
 	})

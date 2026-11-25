@@ -17,24 +17,11 @@ func TestChildContractVerbatim(t *testing.T) {
 	}
 	assert.Contains(t, childContract(true), "FINAL assistant message must be a single, self-contained summary")
 	assert.Contains(t, childContract(false), "Do not emit tool calls in that final message")
-}
 
-func TestContinueNudgeVerbatim(t *testing.T) {
-	t.Parallel()
-
-	assert.Contains(t, continueNudge, "no summary text")
-	assert.Contains(t, continueNudge, "no tool calls")
-}
-
-func TestTaskPromptFramesInstructionsAndTask(t *testing.T) {
-	t.Parallel()
-
-	p := taskPrompt("find it", "")
-	assert.Equal(t, "Task:\nfind it", p)
-
-	q := taskPrompt("  find \n it ", "\nbe concise\n")
-	assert.Contains(t, q, "Extra instructions:\nbe concise")
-	assert.Contains(t, q, "Task:\nfind \n it") // inner whitespace preserved
+	t.Run("continue_nudge_verbatim", func(t *testing.T) {
+		assert.Contains(t, continueNudge, "no summary text")
+		assert.Contains(t, continueNudge, "no tool calls")
+	})
 }
 
 func TestTaskPrompt(t *testing.T) {

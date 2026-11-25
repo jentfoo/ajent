@@ -114,8 +114,7 @@ func TestBashTimeoutKillsWholeProcessGroup(t *testing.T) {
 	}
 	t.Parallel()
 
-	// a subshell starts a grandchild that sleeps. On timeout the whole group
-	// (including the grandchild) must be killed.
+	// a sleeping grandchild: the timeout must kill the whole process group
 	r := newBash(t, `{"command":"sleep 300 & echo $! > pid.txt; wait","timeout":1}`)
 	assert.False(t, r.res.IsError)
 	out := textOf(r.res)
@@ -137,8 +136,7 @@ func TestBashMidRunCancelKillsGroupAndRecordsPartial(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	dir := t.TempDir()
-	// a TERM-trapping child proves a leader-only SIGTERM would leak it. The group
-	// SIGKILL must take it down with the parent.
+	// a TERM-trapping child: only a group kill takes it down with the parent
 	cmd := fmt.Sprintf(`echo started; echo $$ > %s/pid.txt; sh -c 'trap "" TERM; sleep 30'; echo finished`, dir)
 	env := toolEnv{cwd: dir, tracker: NewTracker(), policy: PathPolicy{Cwd: dir}}
 	out := captureOutput{}

@@ -20,90 +20,83 @@ func (f fakeCompleter) Complete(_ string, _ int) (int, []Completion) {
 	return f.start, f.items
 }
 
-func TestCompletionTabIsTheOnlyTrigger(t *testing.T) {
-	t.Parallel()
+// newCompletingUI wires an inline UI to an input pipe driven by press, offering
+// the given candidates from buffer start.
+func newCompletingUI(t *testing.T, items ...Completion) (*UI, *vt, *io.PipeWriter) {
+	t.Helper()
 
 	v := newVT(80, 12)
 	pr, pw := io.Pipe()
 	t.Cleanup(func() { _ = pw.Close() })
 	u := newTestUI(t, v, pr)
-	u.SetCompleter(fakeCompleter{start: 0, items: []Completion{
-		{Text: "/model", Label: "/model"},
-		{Text: "/memory", Label: "/memory"},
-	}})
-
-	// typing offers nothing: no list is raised until Tab asks for one
-	press(t, pw, "/m")
-	assert.Never(t, func() bool { return strings.Contains(u.snapshot(v), "/memory") }, 100*testPoll, testPoll)
-
-	press(t, pw, "\t") // the candidates agree on "/m" only, so they are listed
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "/memory") }, time.Second, testPoll)
-	assert.Contains(t, u.snapshot(v), "/model")
-	assert.Equal(t, "/m", u.editorValue())
-
-	press(t, pw, "o") // any key spends the listing
-	require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "/memory") }, time.Second, testPoll)
+	u.SetCompleter(fakeCompleter{start: 0, items: items})
+	return u, v, pw
 }
 
-func TestCompletionTabCompletesCommonPrefix(t *testing.T) {
+func TestCompletionTab(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(80, 12)
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	u := newTestUI(t, v, pr)
-	u.SetCompleter(fakeCompleter{start: 0, items: []Completion{
-		{Text: "docs/", Label: "docs/"},
-		{Text: "docs2/", Label: "docs2/"},
-	}})
+	t.Run("tab_is_the_only_trigger", func(t *testing.T) {
+		u, v, pw := newCompletingUI(t,
+			Completion{Text: "/model", Label: "/model"},
+			Completion{Text: "/memory", Label: "/memory"},
+		)
 
-	press(t, pw, "doc")
-	press(t, pw, "\t") // only the unambiguous portion is filled in
-	require.Eventually(t, func() bool { return u.editorValue() == "docs" }, time.Second, testPoll)
+		// typing offers nothing: no list is raised until Tab asks for one
+		press(t, pw, "/m")
+		assert.Never(t, func() bool { return strings.Contains(u.snapshot(v), "/memory") }, 100*testPoll, testPoll)
 
-	press(t, pw, "\t") // a second Tab lists rather than guessing
-	require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "docs2/") }, time.Second, testPoll)
-	assert.Equal(t, "docs", u.editorValue())
-}
+		press(t, pw, "\t") // the candidates agree on "/m" only, so they are listed
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "/memory") }, time.Second, testPoll)
+		assert.Contains(t, u.snapshot(v), "/model")
+		assert.Equal(t, "/m", u.editorValue())
 
-func TestCompletionTabAcceptsSingleCandidate(t *testing.T) {
-	t.Parallel()
+		press(t, pw, "o") // any key spends the listing
+		require.Eventually(t, func() bool { return !strings.Contains(u.snapshot(v), "/memory") }, time.Second, testPoll)
+	})
 
-	v := newVT(80, 12)
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	u := newTestUI(t, v, pr)
-	u.SetCompleter(fakeCompleter{start: 0, items: []Completion{{Text: "/model", Label: "/model"}}})
+	t.Run("completes_common_prefix", func(t *testing.T) {
+		u, v, pw := newCompletingUI(t,
+			Completion{Text: "docs/", Label: "docs/"},
+			Completion{Text: "docs2/", Label: "docs2/"},
+		)
 
-	press(t, pw, "/mo")
-	press(t, pw, "\t")
-	require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll)
+		press(t, pw, "doc")
+		press(t, pw, "\t") // only the unambiguous portion is filled in
+		require.Eventually(t, func() bool { return u.editorValue() == "docs" }, time.Second, testPoll)
 
-	// Enter after a completion submits rather than re-applying
-	press(t, pw, "\r")
-	select {
-	case msg := <-u.Messages():
-		assert.Equal(t, "/model", msg)
-	case <-time.After(time.Second):
-		t.Fatal("Enter after Tab must submit the completed command")
-	}
-}
+		press(t, pw, "\t") // a second Tab lists rather than guessing
+		require.Eventually(t, func() bool { return strings.Contains(u.snapshot(v), "docs2/") }, time.Second, testPoll)
+		assert.Equal(t, "docs", u.editorValue())
+	})
 
-func TestCompletionTabTakesTopCandidate(t *testing.T) {
-	t.Parallel()
+	t.Run("accepts_single_candidate", func(t *testing.T) {
+		u, _, pw := newCompletingUI(t, Completion{Text: "/model", Label: "/model"})
 
-	v := newVT(80, 12)
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	u := newTestUI(t, v, pr)
-	u.SetCompleter(fakeCompleter{start: 0, items: []Completion{
-		{Text: "model", Label: "model"},
-		{Text: "memory", Label: "memory"},
-	}})
+		press(t, pw, "/mo")
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return u.editorValue() == "/model" }, time.Second, testPoll)
 
-	press(t, pw, "/")
-	press(t, pw, "\t")
-	require.Eventually(t, func() bool { return u.editorValue() == "model" }, time.Second, testPoll)
+		// Enter after a completion submits rather than re-applying
+		press(t, pw, "\r")
+		select {
+		case msg := <-u.Messages():
+			assert.Equal(t, "/model", msg)
+		case <-time.After(time.Second):
+			t.Fatal("Enter after Tab must submit the completed command")
+		}
+	})
+
+	t.Run("takes_top_candidate", func(t *testing.T) {
+		u, _, pw := newCompletingUI(t,
+			Completion{Text: "model", Label: "model"},
+			Completion{Text: "memory", Label: "memory"},
+		)
+
+		press(t, pw, "/")
+		press(t, pw, "\t")
+		require.Eventually(t, func() bool { return u.editorValue() == "model" }, time.Second, testPoll)
+	})
 }
 
 // fakeMenuCompleter is a fixed list presented as a live menu, like a /command.

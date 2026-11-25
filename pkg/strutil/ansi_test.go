@@ -64,7 +64,7 @@ func TestANSIFilter(t *testing.T) {
 		})
 	}
 
-	// any chunk boundary gives the same text as stripping the whole stream once
+	// chunked strip must equal one whole-stream StripANSI pass
 	t.Run("splits_match_whole_strip", func(t *testing.T) {
 		stream := "a\x1b[31mred\x1b[0m b\x1b]0;title\x07c\x1bM d\x1b[K\n" +
 			"\x1bPtmux;\x1b\x1b[32mpassthrough\x1b\\end"
