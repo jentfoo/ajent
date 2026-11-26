@@ -1068,7 +1068,7 @@ func TestUIReadLines(t *testing.T) {
 func TestUISearchOverlay(t *testing.T) {
 	t.Parallel()
 
-	v := newVT(100, 10)
+	v := newVT(60, 10)
 	pr, _ := io.Pipe() // stays open so the key loop never emits a spurious EOF
 	u := newTestUI(t, v, pr)
 	u.SetHistorySearch(func() []SearchItem {
@@ -1086,10 +1086,9 @@ func TestUISearchOverlay(t *testing.T) {
 
 	t.Run("typing_narrows", func(t *testing.T) {
 		searchPress(u, key{typ: keyRune, text: "retry"})
-		// the match rides the echo row inline, with the detail trailing
-		assert.Contains(t, strutil.StripANSI(v.Line(1)),
-			"(reverse-i-search)`retry': fix the retry loop  2026-01-02 03:04 UTC")
-		assert.NotContains(t, strutil.StripANSI(v.Line(2)), "fix the retry loop") // no result rows below
+		// the header shows the query and detail, the full match renders below it
+		assert.Contains(t, strutil.StripANSI(v.Line(1)), "(reverse-i-search)`retry':  2026-01-02 03:04 UTC")
+		assert.Contains(t, v.Line(2), "fix the retry loop")
 	})
 
 	t.Run("enter_fills_editor_without_submitting", func(t *testing.T) {

@@ -1313,20 +1313,11 @@ motion in that same press, so editing starts immediately. With no current match 
 the overlay and reach the editor as usual.
 
 **Accepting places the caret on the match**, not at the end of the recalled
-line, whichever key accepts. The offset is the query's first occurrence in the
-match, so accepting lands the caret on what was found; an occurrence beyond the
-displayed first line still steers the caret though it cannot be emphasized.
-When it
+line, whichever key accepts. The offset is the first occurrence the overlay
+highlights, so caret and emphasis agree on which one "the match" is. When it
 cannot be located (`matchSpans` refuses byte offsets that lowering would shift)
 the caret falls back to the end of the text, the same degradation the highlight
 already takes. A horizontal caret key moves from that offset.
-
-**The overlay draws one echo row**: the query echo with the current match,
-emphasis, hidden-line count and detail inline, truncated to width. A fixed
-height is the point — the live block never grows or shrinks with the match, so
-stepping through results cannot reflow the block and slide the transcript above
-it, which a taller per-match render did on every press between prompts of
-different line counts.
 
 Plain ↑/↓ are **cursor-first** for multi-line prompts rather than always
 recalling history: they move the caret across visual rows keeping roughly the

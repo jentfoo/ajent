@@ -108,67 +108,49 @@ func TestSearchOverlayRows(t *testing.T) {
 	t.Run("header_echoes_query", func(t *testing.T) {
 		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the loop"}}}
 		s.refilter()
-		assert.Contains(t, s.rows(theme, 80)[0], "(reverse-i-search)`fix':")
+		assert.Contains(t, s.rows(theme, 80, 8)[0], "(reverse-i-search)`fix':")
 	})
 
 	t.Run("empty_query_stays_blank", func(t *testing.T) {
 		s := &searchOverlay{items: []SearchItem{{Text: "line one\nline two"}}}
 		s.refilter()
-		rows := s.rows(theme, 80)
+		rows := s.rows(theme, 80, 8)
 		assert.Len(t, rows, 1)
 	})
 
-	t.Run("match_inline_after_echo", func(t *testing.T) {
+	t.Run("shows_full_multiline_prompt", func(t *testing.T) {
 		s := &searchOverlay{query: "line", items: []SearchItem{{Text: "line one\nline two\nline three"}}}
 		s.refilter()
-		rows := s.rows(theme, 80)
-		require.Len(t, rows, 1)
-		plain := strutil.StripANSI(rows[0])
-		assert.Contains(t, plain, "(reverse-i-search)`line': line one")
-		assert.Contains(t, plain, moreLinesLabel(2)) // the hidden lines stay counted
-		assert.NotContains(t, plain, "line two")
+		rows := s.rows(theme, 80, 8)
+		assert.Contains(t, rows[1], "line one")
+		assert.Contains(t, rows[2], "line two")
+		assert.Contains(t, rows[3], "line three")
 	})
 
-	t.Run("no_match_inline", func(t *testing.T) {
+	t.Run("no_match_under_header", func(t *testing.T) {
 		s := &searchOverlay{query: "zzz"}
 		s.refilter()
-		rows := s.rows(theme, 80)
-		assert.Len(t, rows, 1)
-		assert.Contains(t, strutil.StripANSI(rows[0]), "no match")
+		rows := s.rows(theme, 80, 8)
+		assert.Equal(t, selectIndent+"no match", strutil.StripANSI(rows[1]))
 	})
 
 	t.Run("searching_while_pending", func(t *testing.T) {
 		s := &searchOverlay{pending: true}
-		rows := s.rows(theme, 80)
-		assert.Len(t, rows, 1)
-		assert.Contains(t, strutil.StripANSI(rows[0]), "searching…")
+		rows := s.rows(theme, 80, 8)
+		assert.Equal(t, selectIndent+"searching…", strutil.StripANSI(rows[1]))
 	})
 
 	t.Run("detail_in_header", func(t *testing.T) {
 		s := &searchOverlay{query: "h", items: []SearchItem{{Text: "hi", Detail: "2026-01-02 03:04 UTC"}}}
 		s.refilter()
-		assert.Contains(t, s.rows(theme, 80)[0], "2026-01-02 03:04 UTC")
+		assert.Contains(t, s.rows(theme, 80, 8)[0], "2026-01-02 03:04 UTC")
 	})
 
-	t.Run("height_constant_while_stepping", func(t *testing.T) {
-		s := &searchOverlay{query: "e", items: []SearchItem{
-			{Text: "one line here"},
-			{Text: "several\nlines\nof body text\nand one more"},
-			{Text: "two\nlines only"},
-		}}
+	t.Run("long_prompt_collapses_to_more", func(t *testing.T) {
+		s := &searchOverlay{query: "a", items: []SearchItem{{Text: strings.Join([]string{"a", "b", "c", "d", "e"}, "\n")}}}
 		s.refilter()
-		for i := 0; i <= len(s.matches); i++ {
-			assert.Len(t, s.rows(theme, 80), 1) // the block height never moves
-			s.key(key{typ: keyReverseSearch})
-		}
-	})
-
-	t.Run("long_row_truncated_to_width", func(t *testing.T) {
-		s := &searchOverlay{query: "x", items: []SearchItem{{Text: strings.Repeat("x", 200)}}}
-		s.refilter()
-		rows := s.rows(theme, 30)
-		require.Len(t, rows, 1)
-		assert.LessOrEqual(t, displayWidth(rows[0]), 30)
+		rows := s.rows(theme, 80, 3)
+		assert.Contains(t, strutil.StripANSI(rows[4]), moreLabel(2)) // 5 lines, budget 3 -> 2 hidden
 	})
 }
 
@@ -231,26 +213,22 @@ func TestSearchOverlayRowsHighlightsMatch(t *testing.T) {
 	t.Run("single_line_match", func(t *testing.T) {
 		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
 		s.refilter()
-		rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80)
-		require.Len(t, rows, 1)
-		assert.Contains(t, rows[0], accent+"Fix"+sgrReset)
+		rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80, 8)
+		assert.Contains(t, rows[1], accent+"Fix"+sgrReset)
 	})
 
-	t.Run("query_on_hidden_line_not_shown", func(t *testing.T) {
-		// the echo shows the first line only; a match living deeper stays hidden
-		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "plan the work\nthen fix again"}}}
+	t.Run("across_wrapped_lines", func(t *testing.T) {
+		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the loop\nthen fix again"}}}
 		s.refilter()
-		rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80)
-		require.Len(t, rows, 1)
-		plain := strutil.StripANSI(rows[0])
-		assert.NotContains(t, plain, "then fix again")
-		assert.Contains(t, plain, moreLinesLabel(1))
+		rows := s.rows(NewTheme(ColorBasic, DefaultPalette()), 80, 8)
+		assert.Contains(t, rows[1], accent+"Fix"+sgrReset) // first occurrence on its line
+		assert.Contains(t, rows[2], accent+"fix"+sgrReset) // second occurrence wraps to next row
 	})
 
 	t.Run("plain_terminal_no_escapes", func(t *testing.T) {
 		s := &searchOverlay{query: "fix", items: []SearchItem{{Text: "Fix the retry loop"}}}
 		s.refilter()
-		rows := s.rows(NewTheme(ColorNone, DefaultPalette()), 80)
+		rows := s.rows(NewTheme(ColorNone, DefaultPalette()), 80, 8)
 		assert.NotContains(t, strings.Join(rows, "\n"), sgrReset) // no emphasis escapes
 	})
 }
