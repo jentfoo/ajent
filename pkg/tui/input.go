@@ -38,7 +38,6 @@ const (
 	keyPageUp
 	keyPageDown
 	keyCursorReport
-	keyCellSize     // CSI 16 t reply: the terminal's cell size in pixels
 	keyStatusReport // DSR reply (CSI 0 n): the terminal has caught up
 	keyColorReport  // OSC 11 reply: the terminal's default background color
 	keyDeviceAttrs  // DA1 reply (CSI ... c), used only to fence an earlier query
@@ -57,8 +56,7 @@ const (
 type key struct {
 	typ     keyType
 	text    string // literal text for keyRune and keyPaste, payload for keyColorReport
-	row     int    // reported cursor row for keyCursorReport, cell height for keyCellSize
-	col     int    // cell width for keyCellSize
+	row     int    // reported cursor row for keyCursorReport
 	partial bool   // keyPaste delivered at maxPasteLen, its tail is still arriving
 	phys    string // canonical physical key name for a configurable line-ending key, else ""
 }
@@ -232,19 +230,6 @@ func decodeCSI(b []byte, pasteFrom int) (key, int, bool) {
 			return key{typ: keyIgnore}, n, true
 		}
 		return key{typ: keyCursorReport, row: v}, n, true
-	case 't':
-		// window-manipulation reports. Only the cell-size answer (CSI 6;h;w t)
-		// is consumed. Fields are height then width per the report format.
-		f := strings.Split(params, ";")
-		if len(f) != 3 || f[0] != "6" {
-			return key{typ: keyIgnore}, n, true
-		}
-		h, err1 := strconv.Atoi(f[1])
-		w, err2 := strconv.Atoi(f[2])
-		if err1 != nil || err2 != nil {
-			return key{typ: keyIgnore}, n, true
-		}
-		return key{typ: keyCellSize, row: h, col: w}, n, true
 	case 'c':
 		return key{typ: keyDeviceAttrs}, n, true
 	case 'n':
@@ -295,8 +280,8 @@ func oscKey(payload string) key {
 }
 
 // decodeAPC consumes an application-programming-command (ESC _ ... ST) whole.
-// Kitty graphics replies take this form, and nothing inside one is editor
-// input, so an unhandled reply must never decode as runes.
+// Nothing inside one is editor input, so an unhandled sequence must never
+// decode as runes.
 func decodeAPC(b []byte) (key, int, bool) { return consumeToST(b) }
 
 // consumeToST scans a string sequence opened at b[1] for its ST terminator and
@@ -439,7 +424,6 @@ type inputReader struct {
 	status  chan struct{} // DSR replies answering the resize barrier probe
 	colors  chan string   // OSC 11 background answers
 	attrs   chan struct{} // DA1 replies, the fence behind an OSC 11 query
-	cells   chan [2]int   // CSI 16 t cell-size replies, width then height
 }
 
 func newInputReader(src io.Reader) *inputReader {
@@ -450,7 +434,6 @@ func newInputReader(src io.Reader) *inputReader {
 		status:  make(chan struct{}, 4),
 		colors:  make(chan string, 1),
 		attrs:   make(chan struct{}, 1),
-		cells:   make(chan [2]int, 1),
 	}
 }
 
@@ -494,7 +477,6 @@ func (r *inputReader) run() {
 	defer close(r.status)
 	defer close(r.colors)
 	defer close(r.attrs)
-	defer close(r.cells)
 
 	reads := make(chan readResult, 1)
 	go func() {
@@ -655,11 +637,6 @@ func (r *inputReader) emit(k key) {
 		select {
 		case r.attrs <- struct{}{}:
 		default:
-		}
-	case keyCellSize:
-		select {
-		case r.cells <- [2]int{k.col, k.row}:
-		default: // an undelivered report supersedes this one
 		}
 	case keyIgnore:
 	default:

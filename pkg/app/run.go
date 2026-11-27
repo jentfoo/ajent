@@ -63,11 +63,6 @@ func Run(o RunOptions) int {
 		pal = tui.DefaultPalette()
 		warnings = append(warnings, fmt.Sprintf("unknown ui.theme %q, using %q", themeName, pal.Name))
 	}
-	imagesName := set.Settings().UI.Images
-	if _, _, known := tui.ResolveImageProtocol(imagesName); !known {
-		warnings = append(warnings, fmt.Sprintf("unknown ui.images %q, detecting instead", imagesName))
-		imagesName = ""
-	}
 	keymap, err := tui.ParseKeymap(set.Settings().UI.Keymap.Submit, set.Settings().UI.Keymap.Newline)
 	if err != nil {
 		warnings = append(warnings, err.Error()+", using defaults")
@@ -82,7 +77,7 @@ func Run(o RunOptions) int {
 	if o.AttachGiven {
 		return RunAttach(AttachOptions{
 			Socket: o.Attach, Mode: mode, Color: color,
-			Palette: pal, Images: imagesName, Keymap: keymap, Warnings: warnings,
+			Palette: pal, Keymap: keymap, Warnings: warnings,
 			Force: o.Force,
 		})
 	}
@@ -156,7 +151,6 @@ func Run(o RunOptions) int {
 		Mode:       mode,
 		Color:      color,
 		Palette:    pal,
-		Images:     imagesName,
 		Model:      label,
 		ModelShort: short,
 		MaxTokens:  active.ContextWindow,

@@ -197,7 +197,6 @@ Behavior and job lifecycle live in `agents.md`.
 | `ui.render` | `auto` | `AJENT_UI_RENDER` |
 | `ui.color` | `auto` | `AJENT_UI_COLOR` |
 | `ui.theme` | `dark` | `AJENT_UI_THEME` |
-| `ui.images` | unset, detect | `AJENT_UI_IMAGES` |
 | `ui.keymap.submit` | `["enter"]` | none (slice) |
 | `ui.keymap.newline` | `["ctrl+j", "alt+enter"]` | none (slice) |
 
@@ -216,11 +215,6 @@ detection.
 `dark-muted`, `light`, `light-cool`, `light-warm`, `light-muted`. The theme
 picker on first run writes your choice here, and `/settings → Theme` recolors
 the live UI. An unknown name warns and uses the default.
-
-`images` forces a terminal image protocol (`kitty`, `iterm2`) or turns rendering
-off (`none`). Unset means detection from the terminal's reported capabilities,
-which reports none inside multiplexers like tmux and screen (placeholders are
-shown instead). Rendering details in `tui.md`.
 
 The keymap lists are overrides over hard-coded defaults, so an unlisted key
 keeps its default. To make Enter insert a newline and Alt+Enter send:
@@ -273,7 +267,7 @@ apply again.
 
 Some keys are copied into objects built during startup and cannot be re-applied
 to a running session: everything in the agent turn loop and sub-agent manager,
-UI render/color/images/keymap setup, `tools.shellCommands`, `tools.diffEcho`,
+UI render/color/keymap setup, `tools.shellCommands`, `tools.diffEcho`,
 the barrier's safe/denied lists, `control.enabled` and `disableUpdateCheck`.
 A `/reload` (which re-reads all three files plus env) names any of these that
 changed instead of applying them. It adopts everything else live: model,

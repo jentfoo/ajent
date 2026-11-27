@@ -43,7 +43,6 @@ func (s *projectStore) set(p []agent.ProjectInstruction) {
 type startupKeys struct {
 	render        string
 	color         string
-	images        string
 	keySubmit     []string
 	keyNewline    []string
 	maxSteps      int
@@ -64,7 +63,6 @@ func startupKeysOf(s config.Settings) startupKeys {
 	return startupKeys{
 		render:        s.UI.Render,
 		color:         s.UI.Color,
-		images:        s.UI.Images,
 		keySubmit:     s.UI.Keymap.Submit,
 		keyNewline:    s.UI.Keymap.Newline,
 		maxSteps:      s.Agent.MaxSteps,
@@ -95,9 +93,6 @@ func (k startupKeys) changed(now startupKeys) []string {
 	}
 	if !slices.Equal(k.keyNewline, now.keyNewline) {
 		out = append(out, "ui.keymap.newline")
-	}
-	if k.images != now.images {
-		out = append(out, "ui.images")
 	}
 	if k.maxSteps != now.maxSteps {
 		out = append(out, "agent.maxSteps")

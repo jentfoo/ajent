@@ -158,20 +158,6 @@ func Prepare(data []byte) (Result, error) {
 	}, nil
 }
 
-// ToPNG converts data to png bytes, ok false when decoding or encoding fails.
-// EXIF orientation is applied.
-func ToPNG(data []byte) ([]byte, bool) {
-	src, err := decode(data)
-	if err != nil {
-		return nil, false
-	}
-	b, err := encodePNG(src)
-	if err != nil {
-		return nil, false
-	}
-	return b, true
-}
-
 // decode reads one frame from data, applying the JPEG EXIF orientation tag so
 // a camera shot that needed fitting comes out upright.
 func decode(data []byte) (image.Image, error) {

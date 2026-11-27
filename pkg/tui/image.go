@@ -1,108 +1,15 @@
 package tui
 
 import (
-	"math/rand"
-	"strconv"
-
-	"github.com/jentfoo/ajent/pkg/img"
 	"github.com/jentfoo/ajent/pkg/llm"
 )
 
 // Image is one image a caller wants committed to history.
 type Image struct {
-	Data      []byte // encoded image bytes
-	MediaType string // image/png, image/jpeg, ...
-	Label     string // short origin label for the placeholder, e.g. a path
-	W, H      int    // pixel dimensions from the header, 0 when unknown
+	Data  []byte // encoded image bytes
+	Label string // short origin label for the placeholder, e.g. a path
 }
 
 // String returns the text stand-in naming this image, the single placeholder
 // form shared by transcript replay and MCP display.
 func (im Image) String() string { return llm.ImagePlaceholder(im.Data, im.Label) }
-
-// imageLine builds one committed image line. Where the mode can draw (inline
-// with a protocol) the source payload rides the line and fitImageLocked bakes
-// its geometry at commit, so an image held back through a resize burst lands at
-// the settled size rather than a mid-burst intermediate. Everywhere else the
-// line is placeholder-only from the start. Caller holds the lock.
-func (u *UI) imageLine(im Image) histLine {
-	if u.images == ImageNone || u.mode != ModeInline {
-		return histLine{image: &histImage{rows: 1, text: im.String()}}
-	}
-	return histLine{image: &histImage{src: im, text: im.String()}}
-}
-
-// fitImageLocked bakes the protocol sequence and spacer height at the terminal's
-// current size. A placeholder-only line (nothing drawable, no payload) stays as
-// it is. Caller holds the lock.
-func (u *UI) fitImageLocked(im *histImage) {
-	if u.images == ImageNone || u.mode != ModeInline || im.src.Data == nil {
-		return
-	}
-	tw, th := u.render.size()
-	cols, rows := fitCells(u.imageColsFor(im.src.W), u.imageRowsFor(im.src.H), tw, th)
-	switch u.images {
-	case ImageKitty:
-		// f=100 names PNG: JPEG payloads ride only where the terminal sniffs
-		// them (kitty, WezTerm), so convert anything else rather than risk a
-		// silent rejection on Ghostty or Konsole
-		data := im.src.Data
-		if im.src.MediaType != "image/png" {
-			if b, ok := img.ToPNG(im.src.Data); ok {
-				data = b
-			}
-		}
-		id := u.nextImageID()
-		u.imgIDs[id] = rows
-		im.seq = kittyTransmit(id, data, cols, rows)
-	case ImageITerm2:
-		im.seq = iterm2Sequence(im.src.Data, cols, rows)
-	}
-	im.rows = rows
-}
-
-// nextImageID mints a fresh kitty image id, random first value then
-// increasing, so ids never collide with ones a terminal still holds.
-func (u *UI) nextImageID() uint32 {
-	if u.imgSeq == 0 {
-		u.imgSeq = rand.Uint32()
-		if u.imgSeq == 0 {
-			u.imgSeq = 1
-		}
-	}
-	u.imgSeq++
-	if len(u.imgIDs) >= maxTrackedImages {
-		u.releaseOldestImage()
-	}
-	return u.imgSeq
-}
-
-// maxTrackedImages bounds the placement registry. Dropping the oldest frees
-// its terminal-side data through the deletion sequence.
-const maxTrackedImages = 32
-
-// releaseOldestImage forgets and deletes the oldest tracked kitty image.
-// Caller holds the lock.
-func (u *UI) releaseOldestImage() {
-	var oldest uint32
-	for id := range u.imgIDs {
-		if oldest == 0 || id < oldest {
-			oldest = id
-		}
-	}
-	if oldest == 0 {
-		return
-	}
-	delete(u.imgIDs, oldest)
-	// q=2 for the same reason as the transmit; d=I frees placements and data
-	u.render.query(esc + "_Ga=d,q=2,d=I,i=" + strconv.FormatUint(uint64(oldest), 10) + esc + "\\")
-}
-
-// watchCells consumes cell-size replies until the input closes.
-func (u *UI) watchCells() {
-	for c := range u.reader.cells {
-		u.mu.Lock()
-		u.setCellSize(c[0], c[1])
-		u.mu.Unlock()
-	}
-}

@@ -165,7 +165,6 @@ type AttachOptions struct {
 	Mode     tui.Mode
 	Color    tui.ColorProfile
 	Palette  tui.Palette
-	Images   string
 	Keymap   tui.Keymap
 	Warnings []string
 	Force    bool // --force: take the control seat from its live holder

@@ -22,26 +22,24 @@ import (
 type Sink struct {
 	ui    *tui.UI
 	busy  func() // clears the working spinner, nil while idle
-	image bool   // image blocks draw via the terminal protocol, not during replay
+	image bool   // image blocks commit as placeholder lines, off during replay
 	inj   int    // synthetic call ids for injected-context blocks
 }
 
 // New returns a sink that drives ui.
 func New(ui *tui.UI) *Sink { return &Sink{ui: ui, image: true} }
 
-// SetImages toggles whether image blocks in tool results draw through the
-// terminal protocol. Replay turns drawing off: the drawings already sit in
-// scrollback, and re-emitting them would stack copies.
+// SetImages toggles whether image blocks in tool results commit as placeholder
+// lines. Replay turns them off: the placeholders already sit in scrollback,
+// and re-emitting them would stack copies.
 func (s *Sink) SetImages(on bool) { s.image = on }
 
-// Images adapts image blocks onto the TUI's image type, reading pixel
-// dimensions from each header.
+// Images adapts image blocks onto the TUI's image type.
 func Images(blocks llm.BlockList) []tui.Image {
 	ibs := llm.ImageBlocks(blocks)
 	imgs := make([]tui.Image, len(ibs))
 	for i, ib := range ibs {
-		w, h, _ := llm.ImageDims(ib.Data)
-		imgs[i] = tui.Image{Data: ib.Data, MediaType: ib.MediaType, W: w, H: h}
+		imgs[i] = tui.Image{Data: ib.Data}
 	}
 	return imgs
 }
@@ -104,7 +102,8 @@ func (s *Sink) ToolStart(call agent.ToolCall, label string, full bool) func(agen
 	}
 }
 
-// commitImages draws every image block in a tool result, below its output.
+// commitImages commits every image block in a tool result as its placeholder
+// line, below the output.
 func (s *Sink) commitImages(label string, blocks llm.BlockList) {
 	if !s.image {
 		return

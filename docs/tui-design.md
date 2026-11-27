@@ -639,42 +639,6 @@ The model still receives the full unmodified `Content`, and only history is elid
 
 ## Content rendering
 
-### Terminal images
-
-Image display is detected and conservative by default: `DetectImageProtocol`
-names kitty graphics or the iTerm2 inline protocol from the environment, an
-explicit `ui.images` value wins outright, and unknown terminals, non-ttys and
-multiplexers report none (the same default the colour profile takes).
-
-Images commit into inline history only. Inline is the one mode that never
-repaints committed rows, so a drawn image is emitted exactly once and can never
-stack copies. Alt and plain modes draw the placeholder instead. Kitty placements
-carry a fresh id in a bounded registry whose overflow deletes the oldest, freeing
-terminal-side memory. iTerm2 has no deletion at all, which inline tolerates and
-repainting would not.
-
-Both protocols transmit quietly and cursor-neutral: a rejected draw cannot echo
-its error into the input stream, and one row count drives the spacer model for
-each. The input decoder consumes any stray sequence whole so protocol chatter
-cannot type into the editor. Placements are clamped by `fitCells`, width to the
-terminal's column count and height to half the screen, both axes scaled together
-so the aspect survives. The fit runs at commit rather than arrival, so a commit
-held back through a resize burst lands at the settled size instead of one
-clamped mid-burst. Terminals clip an oversized draw while its committed spacer
-rows remain, and blank gaps in scrollback are how that looks broken.
-
-An image line carries its own row count, sized from the cell geometry queried
-once at startup, so every renderer's row accounting agrees. Lines carrying image
-sequences are exempt from wrapping, padding and SGR repair: mangling a control
-sequence renders garbage. Where nothing renders, the placeholder is honest:
-`[image <label> WxH, size]`. Resume replay uses that placeholder too. The replay
-is a fresh rendering below whatever the terminal holds, a new terminal holds
-nothing at all, and its sink suppresses protocol drawing so a replay never
-re-emits base64 into a tty that cannot already show it.
-Recorded prompts keep their `[image #N]` tokens, so history recall restores the
-line an image rode in on. A token whose slot is gone drops at submit with a
-notice rather than vanishing silently.
-
 ### Markdown
 
 `goldmark` parses (with the GFM extension), and we walk the AST ourselves in

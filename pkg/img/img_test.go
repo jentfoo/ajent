@@ -435,16 +435,6 @@ func TestPrepare(t *testing.T) {
 			assert.Equal(t, 2600, res.SrcWidth)
 			assert.Equal(t, 45, res.SrcHeight)
 		})
-
-		t.Run("malformed_exif_to_png", func(t *testing.T) {
-			src := app1Jpeg(jpegBytes(t, solid(8, 6), 80), overrunPayload(10))
-			b, ok := ToPNG(src)
-			require.True(t, ok)
-			m, err := png.Decode(bytes.NewReader(b))
-			require.NoError(t, err)
-			assert.Equal(t, 8, m.Bounds().Dx())
-			assert.Equal(t, 6, m.Bounds().Dy())
-		})
 	})
 }
 

@@ -100,7 +100,6 @@ type UI struct {
 	Render string `json:"render,omitempty"` // tui.Mode name
 	Color  string `json:"color,omitempty"`  // tui.ColorProfile name
 	Theme  string `json:"theme,omitempty"`  // tui.Palette name
-	Images string `json:"images,omitempty"` // tui.ImageProtocol name: auto, kitty, iterm2, none
 	Keymap Keymap `json:"keymap,omitzero"`  // editor submit/newline key bindings
 }
 
@@ -113,7 +112,7 @@ type Keymap struct {
 	Newline []string `json:"newline,omitempty"`
 }
 
-// Images configures how image blocks flow to providers and the terminal.
+// Images configures how image blocks flow to providers.
 type Images struct {
 	// Block, default off, prevents any image block from reaching providers:
 	// every image becomes an "Image reading is disabled." text placeholder.

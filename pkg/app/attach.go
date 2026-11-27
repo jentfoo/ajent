@@ -83,7 +83,7 @@ func RunAttach(o AttachOptions) int {
 	}
 
 	ui, err := tui.New(tui.Options{Mode: o.Mode, Color: o.Color,
-		Palette: o.Palette, Images: o.Images, Keymap: o.Keymap})
+		Palette: o.Palette, Keymap: o.Keymap})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ajent: %v\n", err)
 		return ExitUsage

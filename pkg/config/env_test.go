@@ -24,7 +24,7 @@ func TestEnvLayer(t *testing.T) {
 			{"bool", "AJENT_COMPACTION_AUTO", "true", true, func(s Settings) any { return s.Compaction.Auto }},
 			{"float", "AJENT_COMPACTION_THRESHOLD", "0.5", float64(0.5), func(s Settings) any { return s.Compaction.Threshold }},
 			{"int", "AJENT_SUBAGENT_MAXCONCURRENT", "2", 2, func(s Settings) any { return s.Subagent.MaxConcurrent }},
-			{"nested_string", "AJENT_UI_IMAGES", "kitty", "kitty", func(s Settings) any { return s.UI.Images }},
+			{"nested_string", "AJENT_UI_THEME", "dark-cool", "dark-cool", func(s Settings) any { return s.UI.Theme }},
 			{"verbatim_fraction", "AJENT_COMPACTION_VERBATIMFRACTION", "0.2", float64(0.2), func(s Settings) any { return s.Compaction.VerbatimFraction }},
 			{"disable_update_check", "AJENT_DISABLEUPDATECHECK", "true", true, func(s Settings) any { return s.DisableUpdateCheck }},
 			{"images_block", "AJENT_IMAGES_BLOCK", "true", true, func(s Settings) any { return s.Images.Block }},

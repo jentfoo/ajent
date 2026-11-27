@@ -3,7 +3,7 @@
 The interactive terminal surface: paint modes, what stays permanent versus
 what redraws, every key combination on every surface (prompt, overlays,
 dialogs, rewind picker, attach), the status line, markdown rendering and
-terminal images. The design philosophy behind it (README's *Design Philosophy*
+image placeholders. The design philosophy behind it (README's *Design Philosophy*
 section) is copy-and-paste-friendly output over chrome: a permanent transcript
 above the prompt bar, a minimal dynamic lower section. The input-line grammar
 (`/command`, `!shell`, `!!`, `@path`) lives in `commands.md`, permission modes
@@ -152,17 +152,11 @@ Nested styles stack correctly.
 
 ## Images
 
-Display is detected conservatively from the environment: kitty graphics for
-kitty, Ghostty and Konsole, the iTerm2 inline protocol for iTerm, WezTerm and
-mintty. Multiplexers, non-terminals and unknown `TERM`s report none. An
-explicit `ui.images` (`kitty`, `iterm2`, `none`) overrides detection outright.
+Images never render on the terminal. Every committed image (pasted with
+Ctrl+V, referenced with `@file.png`, or returned by a tool) shows as one
+honest placeholder line naming its origin, dimensions and size:
+`[image shot.png 640x480, 12kb]`.
 
-- Images draw into inline history only, committed exactly once so they can
-  never stack copies on a repaint. Alt and plain render the placeholder.
-- A drawn image is clamped to the terminal width and half its height, both
-  axes scaled together so the aspect survives.
-- Where nothing draws (or on replay after resume) the honest placeholder reads
-  `[image shot.png 640x480, 12kb]`.
 - An image submitted with a prompt keeps an `[image #N]` token in the editor,
   so recalling that line restores the reference. A token whose slot is gone
   drops at submit with a notice rather than vanishing silently.
@@ -344,7 +338,6 @@ Every key here has its layer and `AJENT_*` binding in `config.md`.
 - `ui.theme`: palette, chosen by the first-run picker (`cli.md`) and
   switchable later from `/settings → Theme`. Restyling is forward-only:
   history already on screen keeps the colors it was written with.
-- `ui.images`: force an image protocol or `none`.
 - `ui.keymap`: which keys submit and which insert a newline.
 
 ## See also

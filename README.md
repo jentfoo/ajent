@@ -83,8 +83,6 @@ MCP and other tools are loaded on the first message (using `/tools`). Once a too
 
 On a vision-capable model you can bring pictures into the conversation three ways: paste one with `Ctrl+V` (a `[image #N]` token is inserted into your prompt), reference one with `@file.png`, or have the model read one with the `read` tool. Oversized images are downscaled to at most 2000×2000 pixels and ~4.5 MB, with a note telling the model how to map coordinates back to the original. BMP, TIFF and other foreign formats are converted to PNG automatically.
 
-Images render in the terminal when a supported protocol is detected (kitty graphics on kitty, Ghostty or Konsole, or iTerm2 inline on iTerm2, WezTerm and mintty). Everywhere else, multiplexers like tmux and screen included, an honest placeholder naming the file, dimensions and size is shown instead. `ui.images` in config.json can force a protocol or turn the feature off.
-
 ## Configuration
 
 ### Providers
@@ -224,7 +222,6 @@ The top-level blocks:
   * `compaction.auto` / `threshold` - whether automatic context reduction is on, and the fraction of the window (or an absolute token count) at which it fires, default 0.8. `auto: false` stops the automatic trigger only: `/compact` still works, and an overflow still recovers. A model that sets its own `compactThreshold` in `models.json` keeps it, and `threshold` is the default for the ones that do not.
   * `compaction.minSteps` / `verbatimFraction` - how much recent work a compaction keeps byte-exact. A *step* is one assistant message plus the tool results it produced. At least `minSteps` of them survive whatever they weigh (default 2), extended with older steps while the kept region stays within `verbatimFraction` of the compaction point (default 0.1). Nothing in that region is ever stubbed, elided or thinning-stripped, and everything older is replaced by a single structured summary. Every trigger keeps the same band.
   * `subagent.model` / `maxConcurrent` / `maxPollWait` / `maxSteps` - subagent specific configuration allows you to set a different model, as well as control concurrency and expected speed for running on local hardware.
-  * `ui.images` - terminal image protocol: `auto` (default), `kitty`, `iterm2` or `none`. `auto` detects from `TERM`, `TERM_PROGRAM` and friends, and reports none inside multiplexers, while an explicit value forces the capability the same way `ui.color` can. `AJENT_UI_IMAGES=kitty` sets it for a single run.
   * `images.block` - when true, no image block reaches the model: pastes, `@file.png` references and tool images all become an `Image reading is disabled.` text note. Off by default, and `/settings` can flip it for the session, while `AJENT_IMAGES_BLOCK=true` sets it for a single run.
   * `control.enabled` - turn on the local control socket (see Control socket below). Off by default, restart to change it.
   * `ui.render`, `ui.theme` - paint mode (`auto`, `inline`, `alt`, `plain`) and palette.

@@ -82,15 +82,11 @@ type Options struct {
 	// changes, so a host can feed token accounting while the user composes. It runs
 	// on an internal goroutine, never under the UI lock.
 	OnEdit func(text string)
-	// Images forces the terminal image protocol: "kitty", "iterm2", "none", or
-	// "" to detect from the environment. Detection is conservative: multiplexers
-	// and unknown terminals report none and every image renders as a placeholder.
-	Images string
 	// Keymap configures which keys submit the prompt and which insert a newline.
 	// The zero value uses the defaults (Enter submits, Ctrl+J/Alt+Enter newline).
 	Keymap Keymap
 	// Env overrides the environment lookup behind startup detection (mode, color
-	// profile, image protocol, tone); the zero value reads the process environment.
+	// profile, tone); the zero value reads the process environment.
 	Env func(string) string
 }
 
@@ -114,15 +110,7 @@ type UI struct {
 	done     chan struct{}
 
 	env    func(string) string // env lookup for startup detection, osEnv by default
-	images ImageProtocol       // resolved image protocol, ImageNone hides them
-	// kitty image ids to occupied rows, bounded. Deliberately survives Reset:
-	// inline scrollback keeps the drawings visible, and these ids are the only
-	// handle for freeing their terminal-side data.
-	imgIDs map[uint32]int
-	imgSeq uint32 // source of fresh kitty image ids
-	// terminal cell pixel size from the CSI 16 t reply, consulted by commit
-	cellW, cellH int
-	closed       bool
+	closed bool
 
 	thinkBuf  lineBuffer
 	thinking  bool
@@ -269,8 +257,6 @@ func New(opts Options) (*UI, error) {
 		msgs:     make(chan string),
 		controls: make(chan Control, 4),
 		done:     make(chan struct{}),
-		imgIDs:   make(map[uint32]int, maxTrackedImages),
-		images:   DetectImageProtocol(opts.Images, env, isTTY),
 		env:      env,
 	}
 	if opts.OnEdit != nil {
@@ -301,8 +287,7 @@ func New(opts Options) (*UI, error) {
 	u.reader = newInputReader(in)
 	// Type-ahead decodes and handles as soon as these start, so from here New
 	// holds the lock like every public method (invariant 4): the startup frame
-	// must not compose against a key-loop repaint, and the cell-size query
-	// below must not interleave with one.
+	// must not compose against a key-loop repaint.
 	u.mu.Lock()
 	defer u.mu.Unlock()
 
@@ -310,11 +295,6 @@ func New(opts Options) (*UI, error) {
 	u.safeGo(u.readKeys)
 	u.safeGo(u.watchSignals)
 	u.safeGo(u.watchStatus)
-	if u.images != ImageNone {
-		u.safeGo(u.watchCells)
-		// ask once, and the answer sizes every image this session draws
-		u.render.query(cellSizeQuery)
-	}
 	if opts.OnEdit != nil {
 		u.editCh = make(chan string, 1)
 		u.safeGo(u.drainEdits) // runs OnEdit outside the UI lock
@@ -458,7 +438,7 @@ func (u *UI) Close() {
 	close(u.done)
 	if len(u.deferred) > 0 {
 		// a burst overlapping the end of a turn must not swallow committed output
-		u.commitNowLocked(u.deferred)
+		u.render.commit(u.deferred)
 		u.deferred = nil
 	}
 	u.render.close(u.inFd)
@@ -623,8 +603,8 @@ func (u *UI) UserEcho(text string) {
 	u.commit(indentLines(u.theme.User.Wrap(text), u.theme.User.Wrap(userMarker), userContinue), flowReflow)
 }
 
-// UserImages commits the images submitted with a prompt, each drawn by the
-// detected terminal protocol or named by its placeholder, below the echo.
+// UserImages commits the images submitted with a prompt, each named by its
+// placeholder, below the echo.
 func (u *UI) UserImages(ims []Image) {
 	if len(ims) == 0 {
 		return
@@ -636,16 +616,13 @@ func (u *UI) UserImages(ims []Image) {
 		return
 	}
 	u.gap()
-	lines := make([]histLine, len(ims))
-	for i, im := range ims {
-		lines[i] = u.imageLine(im)
+	for _, im := range ims {
+		u.commit(im.String(), flowReflow)
 	}
-	u.commitHist(lines)
 }
 
-// Image commits one image to history, drawn via the detected terminal image
-// protocol or named honestly by a placeholder line. Sinks call it when a tool
-// result or other event carries an image block.
+// Image commits one image to history, named honestly by its placeholder line.
+// Sinks call it when a tool result or other event carries an image block.
 func (u *UI) Image(im Image) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -653,7 +630,7 @@ func (u *UI) Image(im Image) {
 	if u.closed {
 		return
 	}
-	u.commitHist([]histLine{u.imageLine(im)})
+	u.commit(im.String(), flowReflow)
 }
 
 // streamDelta runs one buffered delta through a commit: completed units drop from
@@ -1051,17 +1028,6 @@ func (u *UI) commitHist(lines []histLine) {
 		// repaints. Resize flushes these in order once the size settles.
 		u.deferred = append(u.deferred, lines...)
 		return
-	}
-	u.commitNowLocked(lines)
-}
-
-// commitNowLocked fits image geometry at the size in force right now, then
-// commits, so burst-deferred images land at the settled size. Caller holds the lock.
-func (u *UI) commitNowLocked(lines []histLine) {
-	for _, l := range lines {
-		if l.image != nil {
-			u.fitImageLocked(l.image)
-		}
 	}
 	u.render.commit(lines)
 }
@@ -2136,7 +2102,7 @@ func (u *UI) settleResizeLocked() {
 	if len(u.deferred) > 0 {
 		lines := u.deferred
 		u.deferred = nil
-		u.commitNowLocked(lines)
+		u.render.commit(lines)
 	}
 	// A resize landing mid-settle delivers its own SIGWINCH, and the settle
 	// that follows redraws at the final size.

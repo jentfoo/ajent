@@ -272,11 +272,6 @@ override before the transcript replays (see tui-design.md, "Semantic styling").
 A first run with nothing configured then continues into the setup wizard (see
 providers-design.md, "First-run setup").
 
-`ui.images` names a terminal image protocol (`kitty`, `iterm2`, `none`) and
-defaults to detection, forcing the capability the way `ui.color` forces depth.
-An unknown name falls back
-to detection (see tui-design.md, "Terminal images").
-
 `ui.keymap` names the keys that submit a prompt (`submit`) and those that insert
 a newline (`newline`). The lists are overrides over hard-coded defaults
 (`enter` submits, `ctrl+j` and `alt+enter` insert a newline), so an unlisted key

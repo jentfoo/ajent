@@ -192,11 +192,11 @@ func TestStartupKeysChanged(t *testing.T) {
 	base := startupKeys{render: "auto", color: "auto", maxSteps: 10, maxConcurrent: 4}
 	assert.Empty(t, base.changed(base))
 
-	moved := startupKeys{render: "alt", color: "none", images: "kitty",
+	moved := startupKeys{render: "alt", color: "none",
 		keyNewline: []string{"ctrl+j"}, maxSteps: 20, turnRetries: 2,
 		systemPrompt: "be brief", shellCommands: []string{"rg"}, diffEcho: "never",
 		maxConcurrent: 8, subMaxSteps: 50, subPollWait: "10m", control: true}
-	assert.Equal(t, []string{"ui.render", "ui.color", "ui.keymap.newline", "ui.images",
+	assert.Equal(t, []string{"ui.render", "ui.color", "ui.keymap.newline",
 		"agent.maxSteps", "agent.turnRetries", "agent.systemPrompt",
 		"tools.shellCommands", "tools.diffEcho", "subagent.maxConcurrent",
 		"subagent.maxSteps", "subagent.maxPollWait", "control.enabled"},
